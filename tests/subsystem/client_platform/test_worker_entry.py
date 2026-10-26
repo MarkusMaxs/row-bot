@@ -104,38 +104,6 @@ def test_child_entry_rejection_cleans_actual_domain_without_dispatch(tmp_path, m
     assert runs.list_agent_write_locks() == []
 
 
-@pytest.mark.parametrize("resume", [False, True])
-@pytest.mark.parametrize("reason", ["stop", "resource"])
-def test_workflow_entry_rejection_records_actual_run_outcome(tmp_path, monkeypatch, resume, reason, reload_for_data_dir):
-    _, _, _, _, threads = _fresh_agent_runner_modules(tmp_path, monkeypatch, reload_for_data_dir)
-    from row_bot import agent, tasks
-    from row_bot.runtime import executions
-    registry = executions.GenerationRuntimeRegistry()
-    monkeypatch.setattr(executions, "generation_registry", registry)
-    conversation_id = threads.create_thread("Synthetic workflow")
-    task_id = tasks.create_task("Synthetic task", prompts=["Synthetic input"], channels=[], apply_default_skills=False)
-    monkeypatch.setattr(agent, "invoke_agent", lambda *a, **k: pytest.fail("Rejected workflow dispatched"))
-    monkeypatch.setattr(agent, "resume_invoke_agent", lambda *a, **k: pytest.fail("Rejected workflow resumed"))
-    workers, start = _defer_worker_starts(monkeypatch)
-    if resume:
-        run_id = tasks._record_run_start(task_id, conversation_id, 1)
-        tasks._save_pipeline_state(run_id=run_id, task_id=task_id, thread_id=conversation_id,
-            current_step_index=0, step_outputs={}, config={"configurable": {"thread_id": conversation_id}},
-            resume_token="synthetic-resume", status="paused", graph_interrupted=True)
-        tasks._resume_pipeline("synthetic-resume", approved=True)
-    else:
-        tasks.run_task_background(task_id, conversation_id, [], notification=False)
-    handle = registry.active(conversation_id)[0]
-    _reject_entry(reason, registry, threads, conversation_id)
-    assert not handle.producer_done.is_set()
-    start(workers[0])
-    workers[0].join(5)
-    assert not workers[0].is_alive()
-    assert handle.producer_done.is_set() and handle.cleanup_complete
-    assert tasks.get_run_history(task_id)[0]["status"] == ("stopped" if reason == "stop" else "failed")
-    assert not tasks.get_running_tasks()
-
-
 @pytest.mark.parametrize("failure", ["unavailable", "changed"])
 def test_child_resource_inheritance_failure_rolls_back_only_new_child(tmp_path, monkeypatch, failure, reload_for_data_dir):
     runner, runs, _, _, threads = _fresh_agent_runner_modules(tmp_path, monkeypatch, reload_for_data_dir)
@@ -159,12 +127,10 @@ def test_child_resource_inheritance_failure_rolls_back_only_new_child(tmp_path, 
         assert resources.list_bindings(parent).bindings[0].resource_id == "new-resource"
 
 
-@pytest.mark.parametrize("domain", ["child", "workflow"])
 @pytest.mark.parametrize("resume", [False, True])
 @pytest.mark.parametrize("failure", ["closed", "start"])
-def test_rejected_start_finalizes_domain_admission_without_dispatch(tmp_path, monkeypatch, domain, resume, failure, reload_for_data_dir):
+def test_rejected_start_finalizes_domain_admission_without_dispatch(tmp_path, monkeypatch, resume, failure, reload_for_data_dir):
     runner, runs, _, _, threads = _fresh_agent_runner_modules(tmp_path, monkeypatch, reload_for_data_dir)
-    from row_bot import agent, tasks
     from row_bot.runtime import executions
     registry = executions.GenerationRuntimeRegistry()
     monkeypatch.setattr(executions, "generation_registry", registry)
@@ -172,8 +138,6 @@ def test_rejected_start_finalizes_domain_admission_without_dispatch(tmp_path, mo
     conversation_id = threads.create_thread("Synthetic closed runtime")
     monkeypatch.setattr(runner, "_invoke_agent", lambda *a, **k: pytest.fail("Closed child dispatched"))
     monkeypatch.setattr(runner, "_resume_invoke_agent", lambda *a, **k: pytest.fail("Closed child resumed"))
-    monkeypatch.setattr(agent, "invoke_agent", lambda *a, **k: pytest.fail("Closed workflow dispatched"))
-    monkeypatch.setattr(agent, "resume_invoke_agent", lambda *a, **k: pytest.fail("Closed workflow resumed"))
     if failure == "closed":
         registry.shutdown()
     else:
@@ -181,34 +145,19 @@ def test_rejected_start_finalizes_domain_admission_without_dispatch(tmp_path, mo
             raise RuntimeError("cannot start new thread")
         monkeypatch.setattr(threading.Thread, "start", failed_start)
     error = "runtime_closed" if failure == "closed" else "cannot start new thread"
-    if domain == "child":
+    if resume:
+        child = threads.create_thread("Synthetic paused child", thread_type="agent_child")
+        run = runs.create_agent_run(kind="subagent", status="waiting_approval", parent_thread_id=conversation_id, thread_id=child)
+        runs.save_agent_resume_state(run["id"], {"config": {"configurable": {"thread_id": child}},
+            "enabled_tool_names": [], "interrupts": []}, status="waiting_approval")
+    with pytest.raises((ValueError, RuntimeError), match=error):
         if resume:
-            child = threads.create_thread("Synthetic paused child", thread_type="agent_child")
-            run = runs.create_agent_run(kind="subagent", status="waiting_approval", parent_thread_id=conversation_id, thread_id=child)
-            runs.save_agent_resume_state(run["id"], {"config": {"configurable": {"thread_id": child}},
-                "enabled_tool_names": [], "interrupts": []}, status="waiting_approval")
-        with pytest.raises((ValueError, RuntimeError), match=error):
-            if resume:
-                runner.resume_agent_run(run["id"], approved=True)
-            else:
-                runner.spawn_agent_run("Synthetic objective", parent_thread_id=conversation_id, profile="review")
-        records = runs.list_agent_runs(parent_thread_id=conversation_id)
-        assert len(records) == 1 and records[0]["status"] == "failed"
-        assert not runner.list_active_agent_run_ids()
-    else:
-        task_id = tasks.create_task("Synthetic task", prompts=["Synthetic input"], channels=[], apply_default_skills=False)
-        if resume:
-            run_id = tasks._record_run_start(task_id, conversation_id, 1)
-            tasks._save_pipeline_state(run_id=run_id, task_id=task_id, thread_id=conversation_id,
-                current_step_index=0, step_outputs={}, config={"configurable": {"thread_id": conversation_id}},
-                resume_token="synthetic-closed-resume", status="paused", graph_interrupted=True)
-        with pytest.raises((ValueError, RuntimeError), match=error):
-            if resume:
-                tasks._resume_pipeline("synthetic-closed-resume", approved=True)
-            else:
-                tasks.run_task_background(task_id, conversation_id, [], notification=False)
-        assert tasks.get_run_history(task_id)[0]["status"] == "failed"
-        assert not tasks.get_running_tasks()
+            runner.resume_agent_run(run["id"], approved=True)
+        else:
+            runner.spawn_agent_run("Synthetic objective", parent_thread_id=conversation_id, profile="review")
+    records = runs.list_agent_runs(parent_thread_id=conversation_id)
+    assert len(records) == 1 and records[0]["status"] == "failed"
+    assert not runner.list_active_agent_run_ids()
     assert registry.active() == ()
 
 

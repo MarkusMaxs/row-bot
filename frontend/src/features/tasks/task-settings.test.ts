@@ -9,13 +9,11 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 const fields: TaskSettingsFields = {
-  concurrency_group: null,
   trigger_type: 'webhook',
   trigger_task_id: null,
   model_override: null,
   agent_profile_id: 'builtin:worker',
   approval_mode: 'block',
-  persistent_enabled: false,
 };
 function fixture() {
   const state = {

@@ -57,14 +57,6 @@ def _profile(conversation_id: str) -> dict | None:
     return get_agent_profile(reference, enabled_only=True) or None
 
 
-def _profile_allow(conversation_id: str, profile: dict | None = None) -> list[str] | None:
-    """The tool ceiling of the chat's agent profile (or of ``profile``, already read), as a turn would
-    freeze it (None: no limit)."""
-    policy = (profile if profile is not None else _profile(conversation_id) or {}).get("tool_policy_json") or {}
-    allowed = [str(v).strip() for v in (policy.get("allow_tools") or []) if str(v).strip()] if isinstance(policy, dict) else []
-    return allowed or None
-
-
 def _name(item: dict) -> str:
     return (item.get("app") or {}).get("name") or item["name"]
 
@@ -92,20 +84,19 @@ def _needs_you(item: dict) -> str:
 
 def chat_apps(conversation_id: str) -> list[dict]:
     """Every ready app, as Your apps lists them, for the composer: on unless switched off here, and
-    unavailable (with why) when the chat's agent profile leaves them out or the app needs attention, so
-    it never just disappears (B349). Built-in ways without chat tools (the GitHub account, channels) are
-    listed without a switch, saying why."""
+    unavailable (with why) when the app needs attention, so it never just disappears (B349). Built-in
+    ways without chat tools (the GitHub account, channels) are listed without a switch, saying why."""
     from row_bot.integrations import builtin
     from row_bot.threads import get_thread_apps_off
-    off, allow = set(get_thread_apps_off(conversation_id)), _profile_allow(conversation_id)
+    off = set(get_thread_apps_off(conversation_id))
     listed = [item for item in _items() if item["lifecycle"] == "installed" and item["readiness"] == "ready"
               or _needs_you(item)]
     found = []
     for item, name in zip(listed, _shown(listed)):
-        allowed, attention = _allowed(item, allow), _needs_you(item)
+        attention = _needs_you(item)
         found.append({"item_id": item["id"], "app_id": (item.get("app") or {}).get("id", ""),
-                      "name": name, "icon": item["icon"], "on": item["id"] not in off, "available": allowed and not attention,
-                      "switchable": True, "reason": attention or ("" if allowed else "This chat's agent profile doesn't use it.")})
+                      "name": name, "icon": item["icon"], "on": item["id"] not in off, "available": not attention,
+                      "switchable": True, "reason": attention})
     for row in builtin.rows():
         if not row.get("tools") and row["lifecycle"] == "installed" and row["readiness"] == "ready":
             found.append({"item_id": row["id"], "app_id": (row.get("app") or {}).get("id", ""), "name": row["name"][:128],
@@ -193,37 +184,6 @@ def with_tools_left_out(scope: dict | None, tool_groups: list[str] | tuple[str, 
     found = dict(scope or {"exclude_servers": [], "exclude_tools": [], "focus": [], "skills": []})
     found["exclude_tools"] = sorted({str(name) for name in found.get("exclude_tools") or []} | groups)
     return found
-
-
-def step_scope(item_ids: list[str] | tuple[str, ...] | None) -> dict | None:
-    """What a workflow step that names its apps leaves out: every other app, as an @mention of them
-    would (and only that: the workflow's profile and every approval still apply). None: it names none."""
-    wanted = list(dict.fromkeys(str(item_id) for item_id in item_ids or []))[:MAX_FOCUS]
-    if not wanted:
-        return None
-    left_out = [item for item in _items(strict=True) if item["id"] not in wanted]  # Unreadable: refuse.
-    return {"exclude_servers": sorted({item["server"] for item in left_out if item.get("server")}),
-            "exclude_tools": sorted({tool for item in left_out for tool in item.get("tools") or []}),
-            "focus": wanted, "skills": []}
-
-
-def apps_named(names: list[str] | tuple[str, ...]) -> list[str]:
-    """The set-up apps a workflow step names, by the names the composer shows (B345), as item ids.
-    A name that matches no set-up app is refused with the names that would."""
-    ready = [item for item in _items() if item["lifecycle"] == "installed" and item["readiness"] == "ready"]
-    known: dict[str, list[str]] = {}
-    for item, shown in zip(ready, _shown(ready)):
-        for name in {shown, _name(item)}:
-            known.setdefault(name.casefold(), []).append(item["id"])
-    found: list[str] = []
-    for raw in names:
-        name = str(raw or "").strip().lstrip("@")
-        ids = known.get(name.casefold())
-        if not ids:
-            choices = ", ".join(sorted(_shown(ready))) or "none are set up"
-            raise ValueError(f"No set-up app is called {name!r}. Apps: {choices}.")
-        found.extend(item for item in ids if item not in found)
-    return found[:MAX_FOCUS]
 
 
 def app_for_tool(tool_name: str) -> dict | None:

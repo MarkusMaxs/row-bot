@@ -373,17 +373,16 @@ def check_github_oauth() -> CheckResult:
 
 
 def check_task_scheduler() -> CheckResult:
-    """Workflows on a schedule, workflow runs, and workflow approvals waiting (B414).
+    """Workflows on a schedule, workflow runs, and workflow runs waiting on an approval (B414).
 
     Row-Bot's own upkeep jobs share the scheduler but aren't workflows, and a
     chat's or a helper's approval waits on its own card in that chat, so
     neither is counted here.
     """
     try:
-        from row_bot.tasks import _scheduler, count_scheduled_workflows, get_pending_approvals, get_running_tasks
+        from row_bot.tasks import _scheduler, count_scheduled_workflows, count_waiting_runs, get_running_tasks
         running = len(get_running_tasks())
-        pending = sum(1 for approval in get_pending_approvals()
-                      if str(approval.get("resume_kind") or "") in {"", "workflow"})
+        pending = count_waiting_runs()
         waiting = f"{pending} approval{'s' if pending != 1 else ''} waiting"
         if _scheduler is None:
             detail = "Scheduler not started"

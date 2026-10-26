@@ -258,16 +258,11 @@ def test_agent_approval_denial_stops_child_run(tmp_path, monkeypatch, reload_for
     assert final["status_message"] == "Approval denied by user"
 
 
-def test_legacy_workflow_approval_still_routes_to_pipeline(tmp_path, monkeypatch, reload_for_data_dir):
+def test_an_old_step_approval_resumes_nothing(tmp_path, reload_for_data_dir):
+    """F31: a workflow run is a chat turn, so a step pipeline's approval has nothing left to resume."""
     tasks, _threads, _agent_runs, _agent_runner = _fresh_agent_approval_modules(
         tmp_path,
         reload_for_data_dir,
-    )
-    calls = []
-    monkeypatch.setattr(
-        tasks,
-        "_resume_pipeline",
-        lambda resume_token, approved=True: calls.append((resume_token, approved)),
     )
 
     resume_token, _approval_id = tasks.create_approval_request(
@@ -277,5 +272,4 @@ def test_legacy_workflow_approval_still_routes_to_pipeline(tmp_path, monkeypatch
         message="Workflow approval",
     )
 
-    assert tasks.respond_to_approval(resume_token, True) is True
-    assert calls == [(resume_token, True)]
+    assert tasks.respond_to_approval(resume_token, True) is False

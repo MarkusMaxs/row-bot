@@ -14,6 +14,7 @@ import threading
 import uuid
 from datetime import datetime
 from typing import Any, Iterable, Mapping, Sequence
+from row_bot.agent_settings import MAX_ROUNDS
 from row_bot.application.live_updates import publishes as _publishes_live
 
 
@@ -54,7 +55,7 @@ TERMINAL_STATUSES = {
 }
 
 DEFAULT_AGENT_SETTINGS: dict[str, Any] = {
-    "max_iterations": 90,
+    "max_iterations": MAX_ROUNDS,
     "max_spawn_depth": 1,
     "max_concurrent_children": 3,
     "max_active_children_global": 8,
@@ -1935,72 +1936,3 @@ def cleanup_thread_agent_runs(thread_id: str) -> dict[str, Any]:
         "locks_released": locks_released,
         "warnings": tuple(dict.fromkeys(warnings)),
     }
-
-
-def mirror_workflow_run_start(
-    run_id: str,
-    *,
-    task_id: str,
-    thread_id: str,
-    display_name: str,
-    steps_total: int = 0,
-    profile_id: str = "",
-    profile_snapshot_json: Mapping[str, Any] | None = None,
-    approval_mode: str = "",
-    model_override: str = "",
-    tools_override: Sequence[str] | str | None = None,
-    skills_override: Sequence[str] | str | None = None,
-) -> dict[str, Any]:
-    """Create/update the Agent Run mirror for a legacy workflow run."""
-    return create_agent_run(
-        run_id=run_id,
-        kind="workflow",
-        status="running",
-        task_id=task_id,
-        thread_id=thread_id,
-        display_name=display_name,
-        profile_id=profile_id,
-        profile_snapshot_json=profile_snapshot_json,
-        approval_mode=approval_mode,
-        model_override=model_override,
-        tools_override=tools_override,
-        skills_override=skills_override,
-        max_turns=steps_total,
-        settings_snapshot_json=DEFAULT_AGENT_SETTINGS,
-    )
-
-
-def mirror_workflow_progress(
-    run_id: str,
-    steps_done: int,
-    *,
-    steps_total: int = 0,
-    label: str = "",
-) -> dict[str, Any] | None:
-    return record_agent_run_progress(
-        run_id,
-        steps_done=steps_done,
-        steps_total=steps_total,
-        label=label,
-    )
-
-
-def mirror_workflow_finish(
-    run_id: str,
-    status: str,
-    status_message: str = "",
-    terminal_reason: str = "",
-) -> dict[str, Any] | None:
-    if not get_agent_run(run_id):
-        return None
-    status = _normalize_status(status)
-    if status in TERMINAL_STATUSES:
-        return finish_agent_run(
-            run_id,
-            status,
-            summary=status_message if status.startswith("completed") else "",
-            error=status_message if status in {"failed", "blocked", "timed_out"} else "",
-            status_message=status_message,
-            terminal_reason=terminal_reason,
-        )
-    return update_agent_status(run_id, status, status_message)

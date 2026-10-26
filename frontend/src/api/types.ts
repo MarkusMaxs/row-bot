@@ -361,10 +361,6 @@ export interface ClientTransport {
     descriptor: Wire.ArtifactExport,
     signal?: AbortSignal,
   ): Promise<Blob>;
-  taskGraph?(
-    task: string,
-    signal?: AbortSignal,
-  ): Promise<Wire.TaskGraphSnapshot>;
   taskSettings?(
     task: string,
     signal?: AbortSignal,
@@ -588,12 +584,6 @@ export interface ClientTransport {
     run: string,
     signal?: AbortSignal,
   ): Promise<Wire.TaskRunSummary>;
-  taskApprovals?(
-    task: string,
-    run: string,
-    cursor?: string,
-    signal?: AbortSignal,
-  ): Promise<Wire.TaskApprovalPage>;
   dictationCapability?(signal?: AbortSignal): Promise<Wire.DictationCapability>;
   startTalk?(
     conversation: string,

@@ -49,7 +49,8 @@ FOLDERS = {"inbox": "Inbox", "drafts": "Drafts", "sentitems": "Sent Items", "del
 _ATTACHMENT_LIMIT = 3 * 1024 * 1024  # Graph takes a file in the message itself up to about 3 MB.
 _BODY_CHARS = 30_000
 _PREVIEW_CHARS = 300
-_MAIL_FIELDS = "id,subject,from,toRecipients,ccRecipients,receivedDateTime,isRead,flag,hasAttachments,bodyPreview,webLink"
+_MAIL_FIELDS = ("id,subject,from,toRecipients,ccRecipients,receivedDateTime,isRead,isDraft,flag,hasAttachments,"
+                "bodyPreview,webLink")
 _EVENT_FIELDS = ("id,subject,start,end,location,attendees,organizer,isOrganizer,isAllDay,isCancelled,"
                  "isOnlineMeeting,onlineMeeting,responseStatus,webLink")
 
@@ -189,7 +190,11 @@ def _listed(message: dict, number: int) -> str:
                                    ("attachments", message.get("hasAttachments"))) if on]
     received = _when(_moment(message.get("receivedDateTime") or ""))
     preview = " ".join(str(message.get("bodyPreview") or "").split())[:_PREVIEW_CHARS]
-    lines = [f"{number}. {message.get('subject') or '(no subject)'} — from {_person(message.get('from')) or 'unknown'}, "
+    sender = _person(message.get("from"))
+    # A draft has no sender until it is sent: it goes from this mailbox (U22).
+    who = (f"Draft · from {sender or microsoft_account.address() or 'your mailbox'}" if message.get("isDraft")
+           else f"from {sender or 'unknown'}")
+    lines = [f"{number}. {message.get('subject') or '(no subject)'} — {who}, "
              f"{received} UTC" + (" · " + " · ".join(marks) if marks else "")]
     if preview:
         lines.append(f"   {preview}")

@@ -709,7 +709,7 @@ def test_stream_agent_ignores_caller_recursion_limit_and_derives_internal_ceilin
     ))
 
     assert events == [("done", "")]
-    assert captured["recursion_limit"] == agent.framework_recursion_limit(90)
+    assert captured["recursion_limit"] == agent.framework_recursion_limit(1000)  # The safety ceiling (F31).
     assert isinstance(captured["recursion_limit"], int)
 
 

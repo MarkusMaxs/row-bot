@@ -696,7 +696,7 @@ def test_agent_status_profiles_and_profile_save(tmp_path, monkeypatch, reload_fo
         profile for profile in profiles_payload["profiles"]
         if profile["slug"] == "review"
     )
-    assert quality_profile["tool_mode"] == "selected_tools"
+    assert quality_profile["capability"] == "read_only"
 
     saved_payload = json.loads(agent_tool._agent_profile_save(
         slug="release_reviewer",
@@ -704,12 +704,10 @@ def test_agent_status_profiles_and_profile_save(tmp_path, monkeypatch, reload_fo
         description="Review releases.",
         when_to_use="Before shipping.",
         instructions="Review release risk.",
-        allow_tools=["filesystem"],
         skills=["release_notes"],
     ))
     assert saved_payload["ok"] is True
     assert saved_payload["profile"]["slug"] == "release_reviewer"
-    assert saved_payload["profile"]["allow_tools"] == ["filesystem"]
     assert saved_payload["profile"]["skills"] == ["release_notes"]
 
 
@@ -743,13 +741,12 @@ def test_agent_promote_creates_profile_and_disabled_workflow(tmp_path, monkeypat
 
     assert workflow["enabled"] is False
     assert task["enabled"] is False
-    assert task["advanced_mode"] is True
     assert task["agent_profile_id"] == "builtin:review"
     assert task["tools_override"] is None
     assert task["skills_override"] is None
     assert task["safety_mode"] == "approve"
-    assert "Review the release checklist." in task["steps"][0]["prompt"]
-    assert "Release checklist passed." in task["steps"][0]["prompt"]
+    assert "Review the release checklist." in task["prompts"][0]
+    assert "Release checklist passed." in task["prompts"][0]
 
 
 def test_agent_message_records_parent_steering_for_nonterminal_run(tmp_path, monkeypatch, reload_for_data_dir):

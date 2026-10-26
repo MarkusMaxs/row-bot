@@ -872,12 +872,6 @@ def _agent_child_ownership_states(
                     ("source_thread_id", "parent_thread_id"),
                 ),
                 (
-                    f"SELECT thread_id FROM pipeline_state "
-                    f"WHERE thread_id IN ({placeholders})",
-                    candidates,
-                    ("thread_id",),
-                ),
-                (
                     f"SELECT thread_id FROM task_runs "
                     f"WHERE thread_id IN ({placeholders})",
                     candidates,

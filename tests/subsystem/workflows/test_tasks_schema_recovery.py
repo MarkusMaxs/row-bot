@@ -12,8 +12,6 @@ pytestmark = pytest.mark.platform
 REQUIRED_TABLES = {
     "tasks",
     "task_runs",
-    "pipeline_state",
-    "workflow_drafts",
     "approval_requests",
     "approval_channel_refs",
     "channel_thread_refs",

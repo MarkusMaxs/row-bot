@@ -36,7 +36,6 @@ def _profile_fields(**overrides):
         "when_to_use": "Use for focused edits.",
         "instructions": "Keep private workspace details private.",
         "capability": "write_capable",
-        "allow_tools": ["read_file", "write_file"],
         "skills": ["local-style"],
         "context_mode": "focused",
         "workspace_mode": "single_writer",

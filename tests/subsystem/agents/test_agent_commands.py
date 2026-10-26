@@ -59,19 +59,8 @@ def test_app_slash_profile_commands_set_clear_and_list(tmp_path, reload_for_data
 
     config = {"agent_profile_id": threads._get_thread_agent_profile(thread_id)["id"]}
     freeze_profile(config)
-    assert config["tool_allowlist"] == [
-        "memory",
-        "row_bot_status",
-        "conversation_search",
-        "duckduckgo",
-        "web_search",
-        "url_reader",
-        "filesystem",
-        "shell",
-        "conversation_setup",
-        "documents",
-        "calculator",
-    ]
+    assert config["agent_profile_snapshot"]["slug"] == "review"
+    assert "tool_allowlist" not in config, "a profile lists no tools (F31)"
 
     current = commands.dispatch("sms", "/profile", thread_id=thread_id)
     assert current and "review" in current

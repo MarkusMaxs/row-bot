@@ -419,8 +419,7 @@ export const settingsRows: SettingsRow[] = [
     leaf: 'models',
     anchor: 'long-work',
     label: 'Limits for long work',
-    keywords:
-      'steps per run iterations helpers helper levels agents time limit goal turns',
+    keywords: 'helpers helper levels agents time limit goal turns',
   },
   {
     leaf: 'models',

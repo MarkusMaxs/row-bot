@@ -5015,10 +5015,7 @@ def _agent_profile_system_context(thread_id: str = "") -> str:
         f"context={context_policy.get('default_context_mode', 'auto')}",
         f"workspace={workspace_policy.get('workspace_mode_default', 'auto')}",
     ]
-    allow_tools = tool_policy.get("allow_tools") or []
     profile_skills = skill_policy.get("skills_override") or []
-    if allow_tools:
-        policy_bits.append(f"allow_tools={', '.join(str(name) for name in allow_tools)}")
     if profile_skills:
         policy_bits.append(f"profile_skills={', '.join(profile_skills)}")
     parts.extend(["", "Profile policy summary:", ", ".join(policy_bits)])
@@ -8508,8 +8505,7 @@ def _learning_finalization_call(messages: list, answer: str, reasoning: str, sta
 def _terminal_surface(config: dict) -> str:
     configurable = dict(config.get("configurable") or {})
     surface = str(configurable.get("runtime_surface") or "interactive").lower()
-    if "workflow" in surface:
-        return "workflow"
+    # A workflow's run is a chat turn in its own conversation (F31): Continue works there too.
     if configurable.get("agent_run_id") or "child" in surface:
         return "child"
     return "interactive"
@@ -8521,13 +8517,11 @@ def _terminal_fallback(surface: str, reason: str) -> str:
             "I stopped because the same action kept repeating without progress. "
             "No further repeated action was executed. Try a different approach or narrow the request."
         )
-    if surface == "workflow":
-        return "This workflow step reached its work limit and needs attention before it can continue."
     if surface == "child":
-        return "This child run reached its work limit and stopped incomplete; its partial work is preserved."
+        return "This helper took a very long run of steps and stopped before finishing; its partial work is kept."
     return (
-        "I reached this turn's work limit. The partial work is preserved, but the request is incomplete. "
-        "Send Continue to resume from the current context."
+        "I've taken a very long run of steps on this and stopped to check with you. What I've done so far is "
+        "kept. Keep going? Send Continue and I'll pick up from here."
     )
 
 
@@ -8563,9 +8557,9 @@ def _handle_agent_terminal(
     reasoning = ""
     if claimed and reason == "budget_exhausted":
         instruction = {
-            "workflow": "Summarize partial results and state that the workflow step needs attention.",
             "child": "Provide a parent-safe partial summary and state that the child run is incomplete.",
-            "interactive": "Summarize useful partial results and tell the user they may send Continue.",
+            "interactive": "Summarize useful partial results, then ask whether to keep going: the user may "
+                           "send Continue.",
         }[surface]
         try:
             model_label, _ = _selected_model_label_from_config(config)

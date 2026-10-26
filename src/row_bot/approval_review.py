@@ -225,7 +225,7 @@ def _workflow_request(thread_id: str) -> tuple[str, ...] | None:
         conn = _get_conn()
         try:
             row = conn.execute(
-                "SELECT t.name, t.description, t.prompts, t.steps FROM tasks t "
+                "SELECT t.name, t.description, t.prompts FROM tasks t "
                 "WHERE t.persistent_thread_id = ? OR t.id IN "
                 "(SELECT task_id FROM task_runs WHERE thread_id = ?) LIMIT 1",
                 (thread_id, thread_id),
@@ -240,16 +240,13 @@ def _workflow_request(thread_id: str) -> tuple[str, ...] | None:
     lines = [f"Workflow: {row['name']}"]
     if row["description"]:
         lines.append(f"About: {row['description']}")
-    for raw in (row["steps"], row["prompts"]):
-        try:
-            items = json.loads(raw or "[]")
-        except (TypeError, ValueError):
-            items = []
-        for item in items if isinstance(items, list) else []:
-            # A step is {"prompt": ...}; a simple workflow's prompts are plain text.
-            text = item.get("prompt") if isinstance(item, Mapping) else item
-            if isinstance(text, str) and text.strip():
-                lines.append(f"Step: {text.strip()}")
+    try:
+        items = json.loads(row["prompts"] or "[]")
+    except (TypeError, ValueError):
+        items = []
+    for text in items if isinstance(items, list) else []:
+        if isinstance(text, str) and text.strip():
+            lines.append(f"Message: {text.strip()}")
     return tuple(_clean(line, _MAX_MESSAGE_CHARS) for line in lines[:_MAX_WORKFLOW_LINES])
 
 

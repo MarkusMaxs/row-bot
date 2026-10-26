@@ -155,30 +155,9 @@ def dispatch_refusal(
         return None
     if profile.get("enabled", True) is not True:
         return "BLOCKED: The selected Agent Profile is unavailable."
+    # A profile lists no tools (F31): what it may do is its capability and the approval level.
     policy = profile.get("tool_policy_json")
     policy = policy if isinstance(policy, Mapping) else {}
-    if source != "bridge" and policy.get("deny_tools"):
-        denied = policy["deny_tools"]
-        if not isinstance(denied, (list, tuple)) or any(
-            type(item) is not str for item in denied
-        ):
-            return "BLOCKED: The selected Agent Profile tool policy is unavailable."
-        plugin = (
-            source.split(":")[1] if source.startswith(("plugin:", "custom:")) else ""
-        )
-        if name in denied or parent in denied or plugin in denied:
-            return "BLOCKED: This tool is denied by the selected Agent Profile."
-    if source != "bridge" and policy.get("allow_tools"):
-        selected = policy["allow_tools"]
-        if not isinstance(selected, (list, tuple)) or any(
-            type(item) is not str for item in selected
-        ):
-            return "BLOCKED: The selected Agent Profile tool policy is unavailable."
-        plugin = (
-            source.split(":")[1] if source.startswith(("plugin:", "custom:")) else ""
-        )
-        if name not in selected and parent not in selected and plugin not in selected:
-            return "BLOCKED: This tool is outside the selected Agent Profile allowlist."
     if (
         name == "delegate_work"
         and source == "core"
