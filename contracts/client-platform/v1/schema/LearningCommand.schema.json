@@ -165,7 +165,15 @@
         "dont_suggest_change",
         "edit_change",
         "test_lesson",
-        "delete_lesson"
+        "delete_lesson",
+        "hf_sign_in",
+        "hf_cancel_sign_in",
+        "hf_sign_out",
+        "hf_choose_model",
+        "hf_set_cap",
+        "hf_start",
+        "hf_cancel",
+        "hf_check_now"
       ],
       "title": "Action",
       "type": "string"
@@ -186,6 +194,20 @@
       "maxLength": 2000,
       "title": "Answer",
       "type": "string"
+    },
+    "cap_usd": {
+      "anyOf": [
+        {
+          "maximum": 1000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Cap Usd"
     },
     "category": {
       "anyOf": [
@@ -297,6 +319,20 @@
       "maxLength": 2000,
       "title": "Note",
       "type": "string"
+    },
+    "quote_cost_cents": {
+      "anyOf": [
+        {
+          "maximum": 100000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Quote Cost Cents"
     },
     "revision": {
       "pattern": "^[0-9a-f]{64}$",

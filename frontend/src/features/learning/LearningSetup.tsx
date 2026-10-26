@@ -220,8 +220,8 @@ function HardwareRows({
       {hardware.gpu && (
         <p>
           <span className="learning-label">This computer: </span>
-          {hardware.gpu.label}. A personal model needs a graphics card with
-          16 GB to train here.
+          {hardware.gpu.label}. A personal model needs a graphics card with 16
+          GB to train here.
         </p>
       )}
       {hugging ? (

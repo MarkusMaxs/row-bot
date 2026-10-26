@@ -1,0 +1,43 @@
+{
+  "format": "row-bot-recipe",
+  "version": 1,
+  "id": "hf-9b",
+  "tier": "hf",
+  "certified": false,
+  "title": "Qwen3.5 9B on Hugging Face",
+  "starting_model": "qwen3.5-9b",
+  "method": "lora_sft",
+  "evidence": "Not measured yet (C1): the times are estimates from the RTX 5090 runs (L2x) until a real run on Hugging Face certifies this recipe.",
+  "settings": {
+    "max_seq_length": 16384,
+    "bits": 4,
+    "rank": 16,
+    "alpha": 16,
+    "learning_rate": 0.0002,
+    "batch_size": 1,
+    "gradient_accumulation": 4,
+    "warmup_steps": 2,
+    "weight_decay": 0.0,
+    "vram_cap": 0.95,
+    "seed": 3407
+  },
+  "epochs": 3,
+  "checkpoint_every": 10,
+  "min_examples": 90,
+  "min_new_examples": 50,
+  "validation_share": 0.1,
+  "serve_context": 32768,
+  "quantization": "Q8_0",
+  "reasoning": "off",
+  "memory_mib": 46000,
+  "system_memory_mib": {},
+  "remote": {
+    "flavor": "l40sx1",
+    "price_per_hour": 1.8,
+    "image": "python:3.12-bookworm",
+    "setup_seconds": 900,
+    "seconds_per_step": 16.0,
+    "export_seconds_per_pass": 240,
+    "upload_seconds": 300
+  }
+}

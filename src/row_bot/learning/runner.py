@@ -332,8 +332,12 @@ class LearningRunner:
 
     def __init__(self, supervisor: TrainingSupervisor, *, root: Path | None = None,
                  hours: QuietHours | None = None, planner: Any = None, releases: Any = None,
-                 comparisons: Any = None, unloader: Any = None, look: NightLook | None = None) -> None:
+                 comparisons: Any = None, unloader: Any = None, look: NightLook | None = None,
+                 remote: Any = None, remote_planner: Any = None) -> None:
         self.supervisor = supervisor
+        # C1: the Hugging Face backend and its planner (the same dataset, its own recipe).
+        self.remote = remote
+        self.remote_planner = remote_planner
         self._root = root
         self.hours = hours or QuietHours(root)
         self.planner = planner
@@ -383,6 +387,8 @@ class LearningRunner:
 
             if not releases.holds_back(job, self._root):
                 job = None  # its version couldn't start: the next one is planned (it stays listed)
+        if settings.train_where == "hugging_face" and self.remote is not None:
+            return self._decide_remote(settings, job, act)
         if supervisor.training() and (job is None or job.state in jobs_module.LIVE):
             return RunnerStatus("training")
         engine_ready = supervisor.engine.ready()
@@ -422,6 +428,69 @@ class LearningRunner:
         if not supervisor.lease.read().free:
             return RunnerStatus("waiting", "in_use")
         return self._start(job, "quiet_hours", act)
+
+    def _decide_remote(self, settings: Any, job: Any, act: bool) -> RunnerStatus:
+        """Training on Hugging Face (C1): plan from the same dataset, start in quiet hours within the month's cap
+        once the person has started a first run (O132), and follow the run (``remote.tick`` reads it)."""
+
+        remote = self.remote
+        if act:
+            remote.tick()
+            job = self.supervisor.jobs.current() if self.supervisor.jobs.store.exists() else None
+        if job is not None and job.backend != "hugging_face":
+            if job.state in jobs_module.LIVE or job.state in ("planned", "waiting", "paused"):
+                return RunnerStatus("nothing_to_do", "hugging_face")  # a run planned here waits for this computer
+            if job.state not in ("failed", "evaluating"):
+                job = None
+        if job is None or job.state == "failed" and job.backend != "hugging_face":
+            if not remote.signed_in():
+                return RunnerStatus("nothing_to_do", "hf_signed_out")
+            if remote.choice() is None:
+                return RunnerStatus("nothing_to_do", "hf_no_model")
+            if not settings.train_in_quiet_hours:
+                return RunnerStatus("nothing_to_do", "train_off")
+            planner = self.remote_planner
+            if planner is None:
+                return RunnerStatus("nothing_to_do", "no_data")
+            if act and planner.due() and not self.supervisor.lease.read().busy:
+                outcome = planner.plan()
+                if outcome.job is None:
+                    return RunnerStatus("nothing_to_do", outcome.reason or "no_data")
+                job = outcome.job
+            else:
+                summary = planner.summary(compute=True)
+                if summary is None or not summary.enough:
+                    return RunnerStatus("nothing_to_do", "no_data")
+                return RunnerStatus("nothing_to_do", "planning")
+        if job.state == "failed":
+            return RunnerStatus("failed", job.error_code)
+        if job.state in ("evaluating", "ready", "trial", "in_use"):
+            return RunnerStatus("trained")
+        if job.state == "unknown_remote":
+            return RunnerStatus("training", "hf_unknown")
+        if job.state in ("preparing", "running"):
+            return RunnerStatus("training", "hugging_face")
+        if job.state not in ("planned", "waiting"):
+            return RunnerStatus("nothing_to_do", "hugging_face")
+        if not remote.signed_in():
+            return RunnerStatus("waiting", "hf_signed_out")
+        if not settings.hf_runs_confirmed:
+            return RunnerStatus("waiting", "hf_first_run")  # the first run always asks (its quote's Start)
+        if not settings.train_in_quiet_hours:
+            return RunnerStatus("nothing_to_do", "train_off")
+        if not self.hours.inside():
+            return RunnerStatus("scheduled", "quiet_hours")
+        if not self.hours.dream_done():
+            return RunnerStatus("scheduled", "after_dream")
+        from row_bot.learning.remote.training import RemoteError
+
+        if not act:
+            return RunnerStatus("scheduled", "now")
+        try:
+            remote.start(job, "quiet_hours")
+        except RemoteError as error:
+            return RunnerStatus("waiting", f"hf_{error.code}")
+        return RunnerStatus("training", "hugging_face")
 
     def _start(self, job, trigger: str, act: bool) -> RunnerStatus:
         if not act:
@@ -554,14 +623,32 @@ def get() -> LearningRunner:
             from row_bot.learning.model_compare import Comparisons
             from row_bot.learning.training.freeing import OwnModelUnloader
 
+            from row_bot.learning.remote.training import RemoteTrainer
+
             supervisor = TrainingSupervisor(engine=LocalEngine())
             planner = Planner(jobs=supervisor.jobs, engine=supervisor.engine)
             supervisor.dataset = LearningDataset(planner)
             comparisons = Comparisons(lease=supervisor.lease, training=supervisor.training)
+            remote = remote_module_get(supervisor.jobs, RemoteTrainer)
+            remote_planner = Planner(jobs=supervisor.jobs, engine=remote, recipe_for=remote.recipe,
+                                     backend="hugging_face")
+            remote.dataset = LearningDataset(remote_planner)
             _runner = LearningRunner(supervisor, planner=planner, releases=ReleaseMaker(jobs=supervisor.jobs),
                                      comparisons=comparisons, unloader=OwnModelUnloader(),
-                                     look=NightLook(lease=supervisor.lease))
+                                     look=NightLook(lease=supervisor.lease), remote=remote,
+                                     remote_planner=remote_planner)
         return _runner
+
+
+def remote_module_get(jobs: Any, factory: Any) -> Any:
+    """The app's Hugging Face backend, sharing the supervisor's jobs."""
+
+    from row_bot.learning.remote import training as remote_training
+
+    trainer = remote_training.get()
+    if trainer._jobs is None:  # noqa: SLF001 - wired once, here
+        trainer._jobs = jobs  # noqa: SLF001
+    return trainer if isinstance(trainer, factory) else factory(jobs=jobs)
 
 
 def loaded() -> LearningRunner | None:

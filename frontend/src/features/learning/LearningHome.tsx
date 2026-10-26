@@ -60,6 +60,7 @@ import {
   UsedByItself,
 } from './ChangesView';
 import { StrongerModelNotice } from './StrongerModelNotice';
+import { HuggingFaceCard } from './HuggingFace';
 import { TrainingProgress } from './TrainingProgress';
 import {
   dayWords,
@@ -509,12 +510,7 @@ function PersonalModel({
       </EmptyState>
     );
   else if (model.train_where === 'hugging_face')
-    state = (
-      <EmptyState title="Training on Hugging Face" action={settings}>
-        Your personal model will train in your own Hugging Face account, priced
-        before each run. Nothing is uploaded until you agree to a run.
-      </EmptyState>
-    );
+    state = null; // the Hugging Face card below: guided start, sign-in, model, spending (C1)
   else if (hardware?.state === 'old_driver')
     state = (
       <EmptyState
@@ -595,6 +591,9 @@ function PersonalModel({
           model={model}
           onRunsIn={() => setRunsInOpen(true)}
         />
+      )}
+      {model.train_where === 'hugging_face' && model.hugging_face && (
+        <HuggingFaceCard io={io} hugging={model.hugging_face} />
       )}
       <UsesSection io={io} model={model} mainName={mainName} />
       <VersionsSection io={io} model={model} onReview={onReview} />

@@ -4063,7 +4063,8 @@ class LearningVersion(WireModel):
     version: int = Field(ge=1)
     phase: Literal["exporting", "export_failed", "making_ready", "ready", "runtime_failed", "waiting_for_you"]
     # While preparing: merging what it learned, converting, compressing.
-    step: Literal["merge", "convert", "quantize"] | None = None
+    # C1: "download" for a version trained on Hugging Face (its GGUF downloads and is checked).
+    step: Literal["merge", "convert", "quantize", "download"] | None = None
     failure: Literal[
         "not_enough_disk", "adapter_missing", "engine_missing", "tools_missing", "export_failed", "not_installed",
         "not_running", "not_local", "create_failed", "not_loaded", "probe_failed", "tool_turn_failed",
@@ -4220,6 +4221,88 @@ class LearningCardRoom(WireModel):
     smaller: LearningStartingModel | None = None
 
 
+class LearningHuggingFaceSignIn(WireModel):
+    state: Literal["signed_out", "signing_in", "signed_in", "expired"]
+    user: str = Field(max_length=96)
+    # While signing in: the code Hugging Face shows, and its page with the code filled in.
+    code: str | None = Field(default=None, max_length=32)
+    url: str | None = Field(default=None, max_length=512)
+    failure: Literal["expired", "denied", "refused"] | None = None
+
+
+class LearningHuggingFaceModel(WireModel):
+    id: str = Field(max_length=128)
+    name: str = Field(max_length=128)
+    licence: str = Field(max_length=64)
+    params_b: float = Field(ge=0)
+    certified: bool
+    recommended: bool
+    # The graphics memory it needs to run on this computer after (O131), and its file's size.
+    runs_here_gb: float | None = Field(default=None, ge=0)
+    download_bytes: int = Field(ge=0)
+
+
+class LearningHuggingFaceQuote(WireModel):
+    """A run's price before it starts (O133): GPU, time, cost, the most it can cost, what is uploaded and where."""
+
+    model_id: str = Field(max_length=128)
+    model_name: str = Field(max_length=128)
+    flavor: str = Field(max_length=64)
+    flavor_label: str = Field(max_length=128)
+    gpu_memory_gb: int | None = Field(default=None, ge=0)
+    price_per_hour: float = Field(ge=0)
+    seconds: int = Field(ge=0)
+    cost_usd: float = Field(ge=0)
+    timeout_seconds: int = Field(ge=0)
+    max_cost_usd: float = Field(ge=0)
+    examples: int = Field(ge=0)
+    upload_bytes: int = Field(ge=0)
+    download_bytes: int = Field(ge=0)
+    dataset_repo: str = Field(max_length=256)
+    # Measured on Hugging Face (a certified recipe), else estimated from this computer's runs.
+    measured: bool
+    month_spent_usd: float = Field(ge=0)
+    cap_usd: int = Field(ge=0)
+    fits_cap: bool
+
+
+class LearningHuggingFaceRunCost(WireModel):
+    job_id: str = Field(max_length=128)
+    cost_usd: float = Field(ge=0)
+    minutes: int = Field(ge=0)
+    final: bool
+
+
+class LearningHuggingFaceLastRun(WireModel):
+    version: int | None = Field(default=None, ge=1)
+    cost_usd: float = Field(ge=0)
+    minutes: int = Field(ge=0)
+    outcome: Literal["completed", "error", "canceled", "not_started"] | None = None
+    # O133: its uploaded examples and the run's files are deleted from Hugging Face (or couldn't be yet).
+    cleaned: bool
+    cleanup_failed: bool
+
+
+class LearningHuggingFace(WireModel):
+    """Training on Hugging Face (C1): sign-in, the models it can train for this computer, the quote, the cap."""
+
+    # Whether this install can reach the Hub (Row-Bot's full install carries Hugging Face's own library).
+    available: bool
+    sign_in: LearningHuggingFaceSignIn
+    models: list[LearningHuggingFaceModel] = Field(default_factory=list, max_length=8)
+    model: str = Field(default="", max_length=128)
+    card_gb: int | None = Field(default=None, ge=0)
+    # The planned run's quote, else a typical first run's (for the guided start).
+    quote: LearningHuggingFaceQuote | None = None
+    planned: bool
+    cap_usd: int = Field(ge=0)
+    cap_choices: list[int] = Field(default_factory=list, max_length=8)
+    month_spent_usd: float = Field(ge=0)
+    runs_confirmed: bool
+    recent_runs: list[LearningHuggingFaceRunCost] = Field(default_factory=list, max_length=6)
+    last_run: LearningHuggingFaceLastRun | None = None
+
+
 class LearningPersonalModel(WireModel):
     train_in_quiet_hours: bool
     train_where: Literal["this_computer", "hugging_face"]
@@ -4254,6 +4337,8 @@ class LearningPersonalModel(WireModel):
     # O124: a stronger starting model this card trains than the one in use (what setup would recommend
     # now), offered once in the Personal model view until the person switches or dismisses it (else None).
     stronger_model: LearningStartingModel | None = None
+    # C1: training on Hugging Face (None while Learning is off).
+    hugging_face: LearningHuggingFace | None = None
 
 
 class LearningNeedsYou(WireModel):
@@ -4404,14 +4489,32 @@ class LearningRunnerStatus(WireModel):
         "workflow", "indexing", "dream", "you", "app_closed", "worker_stopped", "out_of_gpu_memory", "out_of_disk",
         "cannot_resume", "data_unreadable", "engine_error", "learning_off", "learning_paused", "extraction",
         "planned", "planning", "up_to_date", "gpu_busy", "memory_busy", "comparing",
+        "hf_signed_out", "hf_no_model", "hf_unknown", "hf_first_run", "hf_over_cap", "hf_no_credit", "hf_network",
+        "hf_busy", "hf_not_confirmed",
     ] | None = None
+
+
+class LearningRemoteRun(WireModel):
+    """A Hugging Face run's own facts (C1): its stage, cost so far, lost contact, cleanup. Never a token."""
+
+    phase: Literal["uploading", "submitting", "running", "downloading", "downloaded", "cleaned"]
+    stage: Literal["setting_up", "downloading", "training", "exporting", "uploading", "done"] | None = None
+    cost_usd: float = Field(ge=0)
+    minutes: int = Field(ge=0)
+    # "Checking whether Hugging Face is still training…": no answer since the last check (never "Failed").
+    lost: bool
+    flavor: str = Field(max_length=32)
+    cleaned: bool
+    cleanup_failed: bool
+    url: str | None = Field(default=None, max_length=256)
 
 
 class LearningTraining(WireModel):
     """The personal model's current training run (L2a), polled while it runs."""
 
     # "none": no run planned; the others are the run's state (never a raw machine word on screen).
-    state: Literal["none", "planned", "waiting", "preparing", "running", "pausing", "paused", "evaluating", "failed"]
+    state: Literal["none", "planned", "waiting", "preparing", "running", "pausing", "paused", "evaluating", "failed",
+                   "unknown_remote"]
     job_id: str | None = Field(default=None, max_length=128)
     # The personal-model version this run trains ("Training v2").
     version: int | None = Field(default=None, ge=1)
@@ -4425,12 +4528,17 @@ class LearningTraining(WireModel):
     ] | None = None
     # Paused runs: continues by itself (quiet hours, or when Row-Bot is free after Train now), or asks.
     resumes: Literal["quiet_hours", "when_free", "ask"] | None = None
-    failure: Literal["out_of_gpu_memory", "out_of_disk", "cannot_resume", "data_unreadable", "engine_error"] | None = None
+    failure: Literal["out_of_gpu_memory", "out_of_disk", "cannot_resume", "data_unreadable", "engine_error",
+                     "upload_failed", "not_started", "remote_error", "no_credit", "signed_out", "model_mismatch",
+                     "export_failed"] | None = None
     # The newest saved step couldn't be used: it went back to the one before, or started over.
     recovered: Literal["previous_checkpoint", "start_over"] | None = None
     trigger: Literal["quiet_hours", "train_now"] | None = None
     can_train_now: bool
     runner: LearningRunnerStatus
+    # C1: where this run trains, and a Hugging Face run's own facts.
+    where: Literal["this_computer", "hugging_face"] = "this_computer"
+    remote: LearningRemoteRun | None = None
 
 
 class LearningSnapshot(WireModel):
@@ -4618,6 +4726,8 @@ class LearningCommand(WireModel):
         "review_version", "use_smaller_model", "change_starting_model",
         "test_change", "use_change", "undo_change", "not_now_change", "dont_suggest_change", "edit_change",
         "test_lesson", "delete_lesson",
+        "hf_sign_in", "hf_cancel_sign_in", "hf_sign_out", "hf_choose_model", "hf_set_cap", "hf_start", "hf_cancel",
+        "hf_check_now",
     ]
     setup: LearningSetupChoices | None = None
     # use_smaller_model (O112): the smaller starting model the Personal model view offered;
@@ -4649,6 +4759,10 @@ class LearningCommand(WireModel):
     change_id: str = Field(default="", max_length=128)
     text: str = Field(default="", max_length=4000)
     download: Literal["download", "not_now"] | None = None
+    # C1: the monthly Hugging Face cap in dollars (hf_set_cap, or chosen with the first run's hf_start), and the
+    # quote's cost the person agreed to, in cents (hf_start is refused if the price changed since).
+    cap_usd: int | None = Field(default=None, ge=1, le=1000)
+    quote_cost_cents: int | None = Field(default=None, ge=0, le=100_000)
 
 
 class LearningReceipt(WireModel):

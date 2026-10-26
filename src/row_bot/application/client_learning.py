@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from row_bot import learning
+from row_bot.application import learning_hugging_face as _hugging_face
 from row_bot.application.client_platform import ClientPlatformError
 from row_bot.runtime import admissions
 
@@ -63,6 +64,9 @@ _VERSION_NUMBER_ACTIONS = frozenset({"compare_version", "use_version", "export_v
 # The personal model's version (L2c): make it ready again (Try again, Check again), or choose where it runs.
 _VERSION_ACTIONS = frozenset({"make_ready", "choose_runtime"})
 # The personal model's download (L2b): the training engine and the starting model.
+_ACTIONS = _ACTIONS | _hugging_face.ACTIONS
+# The Hugging Face commands for one run (the run the person saw).
+_HF_JOB_ACTIONS = frozenset({"hf_start", "hf_cancel", "hf_check_now"})
 _DOWNLOAD_ACTIONS = frozenset({"start_download", "stop_download", "cancel_download", "remove_engine",
                                "delete_starting_model"})
 _DOWNLOAD_ERRORS = {
@@ -87,6 +91,9 @@ _RUNNER_REASONS = frozenset({
     "workflow", "indexing", "dream", "you", "app_closed", "worker_stopped", "out_of_gpu_memory", "out_of_disk",
     "cannot_resume", "data_unreadable", "engine_error", "learning_off", "learning_paused", "extraction",
     "planned", "planning", "up_to_date", "gpu_busy", "memory_busy", "comparing",
+    # C1: training on Hugging Face.
+    "hf_signed_out", "hf_no_model", "hf_unknown", "hf_first_run", "hf_over_cap", "hf_no_credit", "hf_network",
+    "hf_busy", "hf_not_confirmed",
 })
 _VERSION_PHASES = frozenset({"exporting", "export_failed", "making_ready", "ready", "runtime_failed",
                              "waiting_for_you"})
@@ -95,7 +102,8 @@ _VERSION_FAILURES = frozenset({"not_enough_disk", "adapter_missing", "engine_mis
                                "not_loaded", "probe_failed", "tool_turn_failed", "server_missing",
                                "server_unavailable", "server_failed", "load_failed"})
 _FAILURES = frozenset({"out_of_gpu_memory", "out_of_disk", "cannot_resume", "data_unreadable", "engine_error"})
-_SHOWN_STATES = frozenset({"planned", "waiting", "preparing", "running", "pausing", "paused", "evaluating", "failed"})
+_SHOWN_STATES = frozenset({"planned", "waiting", "preparing", "running", "pausing", "paused", "evaluating", "failed",
+                           "unknown_remote"})
 # The owner id each channel needs before its direct chats count as the owner's (O2), in words.
 _OWNER_WORDS = {
     "telegram": "Telegram user ID",
@@ -504,6 +512,7 @@ def _personal_model(settings: learning.LearningSettings) -> dict[str, Any]:
         "runtimes": _runtimes(),
         "examples": _examples(settings, engine == "installed"),
         "version": _version(),
+        "hugging_face": _hugging_face.view(settings) if settings.enabled else None,
         "room": _room_view(settings),
         "stronger_model": _stronger_view(settings),
         **_use_parts(),
@@ -936,7 +945,8 @@ def _training(settings: learning.LearningSettings) -> dict[str, Any]:
         if job is None or job.state not in _SHOWN_STATES:
             return _no_training(runner_view)
         state, reason = job.state, job.pause_reason
-        if state in LIVE and supervisor.live_job_id() != job.id:
+        remote = job.backend == "hugging_face"
+        if state in LIVE and supervisor.live_job_id() != job.id and not remote:
             # Left running when Row-Bot closed; the runner pauses it when it next starts.
             state, reason = "paused", "app_closed"
         seconds_left = None
@@ -947,8 +957,12 @@ def _training(settings: learning.LearningSettings) -> dict[str, Any]:
             resumes = "ask" if reason in HELD else "when_free" if job.trigger == "train_now" else "quiet_hours"
         can_train_now = (
             not settings.paused and supervisor.engine.ready()
-            and state in ("planned", "paused") and settings.train_where == "this_computer"
+            and state in ("planned", "paused") and settings.train_where == "this_computer" and not remote
         )
+        failure = None
+        if state == "failed":
+            failure = _hugging_face.failure(job) if remote else (
+                job.error_code if job.error_code in _FAILURES else "engine_error")
         return {
             "state": state,
             "job_id": job.id,
@@ -959,11 +973,13 @@ def _training(settings: learning.LearningSettings) -> dict[str, Any]:
             "seconds_left": seconds_left,
             "pause_reason": reason,
             "resumes": resumes,
-            "failure": (job.error_code if job.error_code in _FAILURES else "engine_error") if state == "failed" else None,
+            "failure": failure,
             "recovered": job.recovered,
             "trigger": job.trigger,
             "can_train_now": bool(can_train_now),
             "runner": runner_view,
+            "where": "hugging_face" if remote else "this_computer",
+            "remote": _hugging_face.run_view(job) if remote else None,
         }
     except Exception:
         logger.debug("Learning could not read its training", exc_info=True)
@@ -1804,6 +1820,13 @@ def execute_learning(command: dict, *, owner_id: str, validate: Callable[[], Non
     job_id = _text(command.get("job_id"), 128)
     if action in _TRAINING_ACTIONS - {"train_now"} and not job_id:
         raise ClientPlatformError("invalid_learning_command")
+    if action in _HF_JOB_ACTIONS and not job_id:
+        raise ClientPlatformError("invalid_learning_command")
+    cap = command.get("cap_usd")
+    if action == "hf_set_cap" and type(cap) is not int:
+        raise ClientPlatformError("invalid_learning_command")
+    if action == "hf_choose_model" and not _text(command.get("model"), 128):
+        raise ClientPlatformError("invalid_learning_command")
     runtime = _text(command.get("runtime"), 32)
     if action == "choose_runtime" and runtime not in learning.SERVE_RUNTIMES:
         raise ClientPlatformError("invalid_learning_command")
@@ -1857,6 +1880,8 @@ def execute_learning(command: dict, *, owner_id: str, validate: Callable[[], Non
         "change_id": change_id,
         "text": text[:4000],
         "answer": _text(command.get("answer"), 2000),
+        "cap_usd": cap if type(cap) is int else None,
+        "quote_cost_cents": command.get("quote_cost_cents") if type(command.get("quote_cost_cents")) is int else None,
     }
     existing = admissions.read_command_metadata(owner_id, command["command_id"])
     if existing is not None:
@@ -1972,6 +1997,8 @@ def _perform(
         summary = _use_action(action, wire)
     elif action in _CHANGE_ACTIONS:
         summary = _change_action(action, wire)
+    elif action in _hugging_face.ACTIONS:
+        summary = _hugging_face.perform(action, wire)
     elif action == "delete_data":
         from row_bot.learning.store import LearningStoreError
         from row_bot.learning.training import jobs as training_jobs

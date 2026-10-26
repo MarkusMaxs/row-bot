@@ -68,7 +68,8 @@ TRANSITIONS: dict[str, frozenset[str]] = {
     "planned": frozenset({"waiting", "preparing", "stopped"}),
     # Waiting for the computer after Train now; Stop sends it back to where it was.
     "waiting": frozenset({"preparing", "planned", "paused", "stopped", "failed"}),
-    "preparing": frozenset({"running", "waiting", "paused", "failed", "stopped"}),
+    # A Hugging Face run whose submission got no answer is unknown until it is found (C1).
+    "preparing": frozenset({"running", "waiting", "paused", "failed", "stopped", "unknown_remote"}),
     "running": frozenset({"pausing", "paused", "evaluating", "failed", "stopped", "unknown_remote"}),
     "pausing": frozenset({"paused", "evaluating", "failed", "stopped"}),
     "paused": frozenset({"waiting", "preparing", "failed", "stopped"}),
@@ -302,7 +303,8 @@ class TrainingJobs:
         return max(versions, default=0) + 1
 
     def plan(self, *, steps_total: int, checkpoint_every: int, recipe: dict[str, Any] | None = None,
-             version: int | None = None, trigger: str = "quiet_hours", dataset: dict[str, Any] | None = None) -> Job:
+             version: int | None = None, trigger: str = "quiet_hours", dataset: dict[str, Any] | None = None,
+             backend: str = "local") -> Job:
         """A new planned training job (L2c plans them from a dataset; tests and the fixture too).
         ``dataset`` names the compiled dataset its lease holds (its id and example count)."""
 
@@ -322,6 +324,7 @@ class TrainingJobs:
                 id=f"job_{uuid.uuid4().hex}", kind=KIND, created_at=now, updated_at=now, state="planned",
                 spec_blob=sha, steps_total=int(steps_total), version=version or self.next_version(),
                 trigger=trigger,  # type: ignore[arg-type]
+                backend=backend,  # type: ignore[arg-type]
                 transitions=(JobTransition(state="planned", at=now),),
             )
             self.store.put(job)
