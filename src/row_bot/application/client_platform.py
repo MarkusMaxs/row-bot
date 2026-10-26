@@ -708,11 +708,19 @@ class ClientPlatformService:
         activity = get_thread_orchestration_activity([row[0] for row in selected]) if selected else {}
         awaiting = self._awaiting_approval([row[0] for row in selected])
         goals_waiting = self._goals_waiting([row[0] for row in selected])
-        return {"items": [self.get_conversation(row[0], workflow_thread_ids=workflow_thread_ids,
-                parent_conversation_id=parent_ids.get(row[0], ""),
-                orchestration_activity=activity.get(row[0], {}),
-                awaiting_approval=row[0] in awaiting, goal_waiting=row[0] in goals_waiting)
-                for row in selected], "has_more": more,
+        items = []
+        for row in selected:
+            try:
+                items.append(self.get_conversation(row[0], workflow_thread_ids=workflow_thread_ids,
+                             parent_conversation_id=parent_ids.get(row[0], ""),
+                             orchestration_activity=activity.get(row[0], {}),
+                             awaiting_approval=row[0] in awaiting, goal_waiting=row[0] in goals_waiting))
+            except ClientPlatformError as error:
+                if error.code != "not_found":
+                    raise
+                # Deleted while the page was read (a workflow's conversation goes with its workflow):
+                # it is left out, never the whole list.
+        return {"items": items, "has_more": more,
                 "next_cursor": base64.urlsafe_b64encode(json.dumps([revision, [selected[-1][1], selected[-1][2], selected[-1][0]]]).encode()).decode() if more else None}
 
     def _refresh_checkpoint(self, conversation_id: str, *, settle: tuple[str, bool] | None = None) -> None:

@@ -2132,6 +2132,7 @@ _N4_PAGES = {"header": "Pages", "question": "Which pages go in the beta?", "mult
                          {"label": "Ledger", "description": "Spending by month."},
                          {"label": "Docs", "description": "The help pages."}]}
 _N4_APPROVALS: list[str] = []
+_N4_WORKFLOWS: list[str] = []  # The conversations of workflow runs waiting on a question.
 
 
 def _n4_stream(text: str, config: dict):
@@ -6267,19 +6268,24 @@ def n4_helper(payload: dict, x_fixture_token: str = Header(default="")) -> dict:
 
 @app.post("/__n4_fixture/workflow")
 def n4_workflow(x_fixture_token: str = Header(default="")) -> dict:
-    """An unattended run waiting on Row-Bot's question, for Needs you (a record: nothing runs)."""
+    """An unattended run waiting on Row-Bot's question, for Needs you: its turn asks in the workflow's
+    conversation, as a scheduled run's would (F31)."""
+    import time
+
     predecessor._authorize(x_fixture_token)
     from row_bot import tasks
-    from row_bot.questions import DEFAULT_TIMEOUT_MINUTES, card, normalize
 
-    task_id = tasks.create_task("Weekly launch check", prompts=["Check the launch plan"], channels=[],
-                                enabled=False)
-    item = {"__interrupt_id": fixture_id("n4-workflow:" + task_id), **card(normalize([_N4_BETA]))}
-    _token, approval_id = tasks.create_approval_request(
-        fixture_id("n4-workflow-run:" + task_id), task_id, "step_1",
-        "Step 1/1: Row-Bot has a question: When should the beta go out?",
-        timeout_minutes=DEFAULT_TIMEOUT_MINUTES, approval_payload_json={"interrupt": [item]})
+    task_id = tasks.create_task("Weekly launch check", prompts=["n4 question fixture"], channels=[],
+                                enabled=False, safety_mode="approve", apply_default_skills=False)
+    thread_id = tasks._prepare_task_thread(tasks.get_task(task_id))
+    tasks.run_task_background(task_id, thread_id, [])
+    deadline = time.monotonic() + 10
+    while (approval_id := tasks.pending_approval_id(thread_id)) is None and time.monotonic() < deadline:
+        time.sleep(0.05)
+    if approval_id is None:
+        raise HTTPException(status_code=500, detail="The run did not ask its question")
     _N4_APPROVALS.append(approval_id)
+    _N4_WORKFLOWS.append(thread_id)
     return {"approval_id": approval_id, "task_id": task_id}
 
 
@@ -6291,6 +6297,8 @@ def n4_reset(x_fixture_token: str = Header(default="")) -> dict:
 
     while _S11_RUNS:
         tasks.cancel_agent_run_approvals(_S11_RUNS.pop())
+    while _N4_WORKFLOWS:  # A run still waiting on its question stops, and its card goes with it.
+        tasks.stop_task(_N4_WORKFLOWS.pop())
     conn = tasks._get_conn()
     try:
         for approval_id in _N4_APPROVALS:
