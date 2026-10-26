@@ -44,7 +44,7 @@ ROOT = Path(__file__).resolve().parents[4]
 EXIT_PLANNED_CRASH = 86
 EXIT_TOKEN_CAP = 75
 MAX_RESTARTS = 3
-STAGES = ("profile", "past", "days", "checks", "benchmark", "tidy")
+STAGES = ("profile", "past", "days", "generations", "checks", "benchmark", "tidy")
 #: Run after every person's work (O116): the benchmarks hold the card longest, and tidy follows them.
 LAST = ("benchmark", "tidy")
 #: A person's run kept under another name: ``<person>@<label>`` (``--archive``).
