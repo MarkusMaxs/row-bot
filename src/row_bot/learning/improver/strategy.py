@@ -315,10 +315,12 @@ def change_words(before: Strategy, after: Strategy) -> str:
     if not changed:
         return "the same method"
     first = CHANGE_WORDS.get(changed[0], "changes how it learns")
-    if changed[0] == "methods.prefer" and after.methods.prefer:
+    if changed[0] == "methods.prefer" and after.methods.prefer and after.methods.prefer[0] != before.methods.prefer[0]:
         names = {"lesson": "a lesson", "way_of_working": "a way of working", "create_skill": "a new skill",
                  "patch_skill": "a skill edit", "train": "training"}
         first = f"tries {names[after.methods.prefer[0]]} first"
+    elif changed[0] == "methods.prefer":
+        first = "changes which kinds of change it tries, and in what order"
     return first + (" and more" if len(changed) > 1 else "")
 
 

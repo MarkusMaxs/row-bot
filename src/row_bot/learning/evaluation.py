@@ -2159,8 +2159,8 @@ def freeze_check(arms: Sequence[Arm], *, as_of: float, asked_by: str, contrasts:
 
 # ── Strategy trials (L4a, pre-registration §3.3, §6.1, §7): only aggregates leave ──
 
-#: A trial runs once at least this many fresh hidden problems have built up since the last (O82); H3 counts a
-#: generation only when it was judged on at least this many (§7's minimum size).
+#: A trial runs once at least this many fresh hidden problems have built up since the last (O82), and draws this
+#: many (the newest); H3 counts a generation only when it was judged on at least this many (§7's minimum size).
 MIN_FRESH = 30
 
 
@@ -2175,7 +2175,7 @@ def _replay_tokens(case: ReplayCase) -> int:
 
 def fresh_problems(*, asked_by: str, store: Any | None = None) -> dict[str, int]:
     """How many fresh hidden problems wait for a strategy trial (real work no trial has drawn) and about how many
-    tokens one run of each costs together: counts only. Never creates a vault."""
+    tokens one run of the ones a trial would draw costs together: counts only. Never creates a vault."""
 
     from row_bot.learning.store import LearningStore
 
@@ -2184,15 +2184,18 @@ def fresh_problems(*, asked_by: str, store: Any | None = None) -> dict[str, int]
         return {"fresh": 0, "tokens_per_run": 0}
     who = f"{_caller()}: {asked_by}".strip(": ")
     cases = [ReplayCase.from_content(item) for item in _vault(saved).fresh_tasks(asked_by=who)]
-    return {"fresh": len(cases), "tokens_per_run": sum(_replay_tokens(case) for case in cases)}
+    drawn = sorted(cases, key=lambda case: (case.created_at, case.decision_id))[-MIN_FRESH:]
+    return {"fresh": len(cases), "tokens_per_run": sum(_replay_tokens(case) for case in drawn)}
 
 
-def draw_trial(trial_id: str, *, asked_by: str, store: Any | None = None, minimum: int = MIN_FRESH) -> int:
-    """Give a strategy trial every fresh hidden problem now (at least ``minimum``, else none): from now on they
-    are that trial's, and the next trial's fresh problems are those that arrive after. Returns how many."""
+def draw_trial(trial_id: str, *, asked_by: str, store: Any | None = None, minimum: int = MIN_FRESH,
+               take: int = MIN_FRESH) -> int:
+    """Give a strategy trial the newest ``take`` fresh hidden problems (when at least ``minimum`` are fresh, else
+    none): from now on they are that trial's, and the next trial's fresh problems are those that arrive after.
+    Returns how many."""
 
     who = f"{_caller()}: {asked_by}".strip(": ")
-    return int(_vault(store).draw(str(trial_id), asked_by=who, minimum=int(minimum)))
+    return int(_vault(store).draw(str(trial_id), asked_by=who, take=int(take), minimum=int(minimum)))
 
 
 def trial_size(trial_id: str, *, asked_by: str, store: Any | None = None) -> int:

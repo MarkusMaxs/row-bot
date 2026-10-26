@@ -29,10 +29,13 @@ order they were made and holds every :data:`HOLD_EVERY`-th one, nothing a strate
 can steer. Past :data:`MAX_REPLAY_TASKS` the oldest retire (their text is dropped; the
 decision stays held out of training and drafting for good).
 
-**Fresh problems for strategy trials** (L4a, pre-registration §3.3): real-work tasks no trial has drawn.
-:meth:`AuditVault.draw` gives a trial every fresh one at once (so the next trial's are those that arrived
-after it), and the trial's judgments (each change's per-problem pass fractions with and without it) are
-kept here, sealed like the tasks, for the paper's H3 estimate; only aggregates leave ``evaluation``.
+**Fresh problems for strategy trials** (L4a, pre-registration §3.3): real-work tasks that arrived after
+the previous trial's set was drawn and that no trial has drawn. :meth:`AuditVault.draw` gives a trial the
+newest of them (a fixed number, by time: nothing a strategy can steer); from then on the next trial's fresh
+problems are those that arrive after it, and the older ones left undrawn are ordinary hidden problems (a
+trial's arms may test their own drafts on them). Each trial's judgments (every change's per-problem pass
+fractions with and without it) are kept here, sealed like the tasks, for the paper's H3 estimate; only
+aggregates leave ``evaluation``.
 
 **Deletion reaches it**: a deleted or opted-out conversation's tasks leave the vault
 (``store`` calls :func:`forget_threads`), and "Delete learning data" removes the file.
@@ -547,31 +550,39 @@ class AuditVault:
 
     _FRESH = ("SELECT id, kind_of_work, thread_id, conversation_id, source_at, content FROM tasks"
               " WHERE retired_at IS NULL AND content IS NOT NULL AND origin IN ('replay', 'correction')"
-              " AND id NOT IN (SELECT task_id FROM draws)")
+              " AND added_at > ? AND id NOT IN (SELECT task_id FROM draws)")
 
     def fresh_tasks(self, *, asked_by: str) -> list[dict[str, Any]]:
-        """The real-work tasks no trial has drawn (pre-registration §3.3's fresh hidden problems). Logged."""
+        """The real-work tasks that arrived after the last draw and that no trial has drawn (pre-registration
+        §3.3's fresh hidden problems), oldest first. Logged."""
 
         caller = require_reader(_SEAL, "fresh_tasks")
         with self._open() as connection:
-            rows = connection.execute(self._FRESH + " ORDER BY source_at, id").fetchall()
+            since = float(self._meta(connection, "last_draw_at", "0") or 0)
+            rows = connection.execute(self._FRESH + " ORDER BY source_at, id", (since,)).fetchall()
             _log(connection, self._clock(), asked_by, caller, "run", "fresh tasks", len(rows))
         return self._rows(rows)
 
-    def draw(self, trial: str, *, asked_by: str, minimum: int) -> int:
-        """Give ``trial`` every fresh task at once (at least ``minimum``, else none). Returns how many."""
+    def draw(self, trial: str, *, asked_by: str, take: int, minimum: int) -> int:
+        """Give ``trial`` the newest ``take`` fresh tasks (at least ``minimum`` must be fresh, else none). From now
+        on only tasks that arrive later are fresh. Returns how many it drew."""
 
         caller = require_reader(_SEAL, "draw")
         now = float(self._clock())
         with self._open() as connection:
-            ids = [str(row[0]) for row in connection.execute(self._FRESH)]
+            since = float(self._meta(connection, "last_draw_at", "0") or 0)
+            ids = [str(row[0]) for row in connection.execute(self._FRESH + " ORDER BY source_at DESC, id DESC",
+                                                             (since,))]
             if len(ids) < int(minimum):
                 _log(connection, now, asked_by, caller, "draw", f"too few ({len(ids)})", 0)
                 return 0
+            chosen = ids[: max(int(minimum), int(take))]
             connection.executemany("INSERT OR IGNORE INTO draws (task_id, trial, drawn_at) VALUES (?, ?, ?)",
-                                   [(item, str(trial), now) for item in ids])
-            _log(connection, now, asked_by, caller, "draw", f"drew {len(ids)}", len(ids))
-        return len(ids)
+                                   [(item, str(trial), now) for item in chosen])
+            newest = connection.execute("SELECT MAX(added_at) FROM tasks").fetchone()[0]
+            self._set_meta(connection, "last_draw_at", repr(max(now, float(newest or 0))))
+            _log(connection, now, asked_by, caller, "draw", f"drew {len(chosen)} of {len(ids)}", len(chosen))
+        return len(chosen)
 
     def drawn_ids(self, trial: str) -> set[str]:
         """The tasks ``trial`` drew (ids only, for evaluation to leave out or run)."""

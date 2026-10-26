@@ -435,7 +435,7 @@ def test_tonights_drafts_are_tested_after_the_look_and_before_training_then_summ
 
     monkeypatch.setattr(changes, "test_waiting", test_waiting)
     monkeypatch.setattr(changes, "due", lambda: [{"id": "proposal_1"}])
-    setup.runner.look.tester = lambda: changes.Tester(setup.root)
+    setup.runner.look.tester = lambda **_kwargs: changes.Tester(setup.root)
     _plan(setup)
     _journal(setup.root, datetime(2026, 10, 16, 1, 10))
     setup.lease.set(since_activity=600.0)

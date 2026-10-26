@@ -351,6 +351,12 @@ def _rest(by_kind: Mapping[str, Mapping[str, Any]], kind: str) -> dict[str, Any]
             "arm": round(mean("arm"), 6)}
 
 
+def rest_of(by_kind: Mapping[str, Mapping[str, Any]], kind: str) -> dict[str, Any]:
+    """Every kind of work but ``kind``, together (the "rest" the keeping rule reads)."""
+
+    return _rest(by_kind, kind)
+
+
 def verdict(own: Mapping[str, Any], rest: Mapping[str, Any]) -> str:
     """The pre-registered rule (§6.1): better when the mean paired difference is above 0 on the change's kind
     of work and not below -10 points on the rest; ``too_few`` when nothing of its kind was counted."""
@@ -550,6 +556,8 @@ class Tester:
             done[0] += 1
             if progress:
                 self._progress(done=done[0])
+            if getattr(_case, "local_tokens", 0) and hasattr(meter, "charge_gpu"):
+                meter.charge_gpu(float(getattr(_case, "seconds", 0.0) or 0.0))  # a trial arm's card time
             if should_stop():
                 raise _Stop("stopped")
 
@@ -1257,6 +1265,7 @@ __all__ = [
     "note_recalled",
     "progress",
     "relink_lesson",
+    "rest_of",
     "test_again",
     "test_waiting",
     "testing",
