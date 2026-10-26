@@ -343,7 +343,23 @@ class StaleRun(PersonRun):
         if self.arm != "local":
             return
         self._wait_for_person()
+        from tests.e2e.learning.seeded.scratch import after_quiet_hours
+
+        if after_quiet_hours():
+            # From 05:00 to 08:00 the gate waits while the card holds memory no lane booked (the person's Row-Bot may
+            # still compare). Our own model, kept loaded by Ollama after the last day, counts as that: unload it
+            # first, so the gate reads what others hold (found 05:02 26 Oct: the run waited on its own 9B).
+            self._unload_local_model()
         self.gpu.acquire(what, expect=expect)
+
+    def _unload_local_model(self) -> None:
+        import httpx
+
+        try:
+            httpx.post("http://127.0.0.1:11434/api/generate", timeout=60,
+                       json={"model": self.args.local_model, "keep_alive": 0})
+        except httpx.HTTPError:
+            logger.debug("couldn't unload %s", self.args.local_model, exc_info=True)
 
     def _card(self, phase: str, seconds: float) -> None:
         if self.arm == "local":
