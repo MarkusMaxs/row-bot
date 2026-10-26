@@ -5093,16 +5093,18 @@ def l1a_learning(action: str, x_fixture_token: str = Header(default="")) -> dict
         # The personal model's download (L2b): a stand-in whose states the specs set; never a real one.
         from row_bot.learning.training import downloads as _downloads
         _downloads._downloads = _FixtureDownloads()
-    elif action in {"gpu", "no-gpu"}:
+    elif action in {"gpu", "small-gpu", "no-gpu"}:
         # A 16 GB laptop card (the 9B's smallest tier, O124) on a computer with memory to spare: the fake
         # card's memory and this computer's, never the real ones (a busy card or a computer short of
         # memory would make training wait in the spec).
+        # small-gpu: an 8 GB card, which runs a personal model trained on Hugging Face but can't train one.
         memory = hardware.SystemMemory(limit_mib=65_536, free_mib=40_960)
-        found = (hardware.classify([hardware.Gpu("NVIDIA GeForce RTX 5080 Laptop GPU", 16_303, "596.08")], memory)
-                 if action == "gpu" else hardware.HardwareCheck("no_gpu"))
+        card = {"gpu": hardware.Gpu("NVIDIA GeForce RTX 5080 Laptop GPU", 16_303, "596.08"),
+                "small-gpu": hardware.Gpu("NVIDIA GeForce RTX 5070 Laptop GPU", 8_151, "596.08")}.get(action)
+        found = hardware.classify([card], memory) if card else hardware.HardwareCheck("no_gpu")
         hardware.check = lambda *, refresh=False, detector=None: found
         hardware.peek = lambda: found  # what reads that mustn't wait see (Runs in, the recipe's need)
-        hardware.gpu_memory = lambda **kwargs: (600, 16_303) if action == "gpu" else None
+        hardware.gpu_memory = lambda **kwargs: (600, card.memory_mib) if card else None
         memory_free = _l1a_saved["memory_free"]
         hardware.memory_free_for_training = lambda *, reader=None: memory_free(reader=reader or (lambda: memory))
     elif action == "paused":

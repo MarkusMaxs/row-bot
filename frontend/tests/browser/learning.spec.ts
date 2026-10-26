@@ -337,18 +337,45 @@ test('Learning data says how much of it is browser and computer pictures', async
   await shoot(page, info, 'settings-learning-data-pictures');
 });
 
-test('without a suitable graphics card the setup sheet offers Hugging Face', async ({
+test('without an NVIDIA graphics card the setup sheet says Learning still improves Row-Bot (O131)', async ({
   page,
 }, info) => {
+  // A model trained on Hugging Face runs here after, so with no card to run one it isn't offered.
   await fixture(page, 'preview');
   await fixture(page, 'no-gpu');
   await openSettings(page, 'learning');
   await page.getByRole('button', { name: 'Turn on Learning' }).click();
   const sheet = page.getByRole('dialog', { name: 'Turn on Learning' });
   await expect(
-    sheet.getByText(/^This computer can’t train a model\./),
+    sheet.getByText(
+      'A personal model runs on an NVIDIA graphics card with 8 GB or more, and this computer has none.',
+    ),
   ).toBeVisible();
+  await expect(
+    sheet.getByText(
+      'Learning still improves Row-Bot with lessons and ways of working.',
+    ),
+  ).toBeVisible();
+  await expect(
+    sheet.getByRole('button', { name: 'Use Hugging Face' }),
+  ).toHaveCount(0);
   await shoot(page, info, 'setup-no-gpu');
+});
+
+test('a graphics card too small to train offers Hugging Face in setup (O124)', async ({
+  page,
+}, info) => {
+  await fixture(page, 'preview');
+  await fixture(page, 'small-gpu');
+  await openSettings(page, 'learning');
+  await page.getByRole('button', { name: 'Turn on Learning' }).click();
+  const sheet = page.getByRole('dialog', { name: 'Turn on Learning' });
+  await expect(
+    sheet.getByText(
+      /A personal model needs a graphics card with 16\sGB to train here\.$/,
+    ),
+  ).toBeVisible();
+  await shoot(page, info, 'setup-small-gpu');
   await sheet.getByRole('button', { name: 'Use Hugging Face' }).click();
   await expect(
     sheet.getByText(/will train on Hugging Face, in your own account/),
@@ -360,6 +387,5 @@ test('without a suitable graphics card the setup sheet offers Hugging Face', asy
   await expect(
     page.getByRole('heading', { name: 'Training on Hugging Face' }),
   ).toBeVisible();
-  await expect(page.getByText('No NVIDIA graphics card')).toBeVisible();
   await shoot(page, info, 'model-hugging-face');
 });
