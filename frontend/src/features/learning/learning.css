@@ -620,3 +620,45 @@
 .learning-change-row .entity-row-meta .status-indicator {
   flex: none;
 }
+
+/* How Row-Bot learns (L4a): the Overview's summary, the sheet's history and what it can never change. */
+.learning-method-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.learning-method-summary p {
+  margin: 0;
+}
+.learning-method-head {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.learning-method-history,
+.learning-method-never {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.learning-method-history > li {
+  display: grid;
+  grid-template-columns: 4.5em 1fr auto;
+  align-items: baseline;
+  gap: var(--space-2);
+  overflow-wrap: anywhere;
+}
+.learning-method-never > li::before {
+  content: '·';
+  margin-inline-end: var(--space-2);
+  color: var(--text-secondary);
+}
+.learning-method-switched > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}

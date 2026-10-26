@@ -5,7 +5,6 @@ import {
   MoreHorizontal,
   Moon,
   Search,
-  Sparkles,
 } from 'lucide-react';
 import { clientError } from '../../api/errors';
 import type {
@@ -59,6 +58,7 @@ import {
   ChangesView,
   UsedByItself,
 } from './ChangesView';
+import { MethodSheet, MethodSummary, MethodSwitched } from './HowRowBotLearns';
 import { StrongerModelNotice } from './StrongerModelNotice';
 import { TrainingProgress } from './TrainingProgress';
 import {
@@ -167,10 +167,12 @@ function Overview({
   io,
   onReview,
   onReviewChange,
+  onMethod,
 }: {
   io: LearningIO;
   onReview: (version: number) => void;
   onReviewChange: (id: string) => void;
+  onMethod: () => void;
 }) {
   const needs = io.snapshot?.needs_you ?? [];
   const changes = io.snapshot?.changes ?? [];
@@ -180,6 +182,7 @@ function Overview({
   const testing = io.snapshot?.testing_now;
   const uses = io.snapshot?.personal_model.uses ?? [];
   const night = io.snapshot?.overnight;
+  const method = io.snapshot?.method;
   const lines = night ? overnightLines(night) : [];
   const learning = io.snapshot?.kinds_learning ?? [];
   const kinds = [
@@ -227,6 +230,7 @@ function Overview({
                 </li>
               ))}
             </ul>
+            <MethodSwitched io={io} night={night} method={method} />
             <UsedByItself io={io} changes={changes} />
           </>
         ) : (
@@ -280,9 +284,7 @@ function Overview({
         )}
       </Section>
       <Section title="How Row-Bot learns">
-        <InlineEmpty icon={<Sparkles size={15} />}>
-          Its learning method shows here once it has tested its first change.
-        </InlineEmpty>
+        <MethodSummary method={method} onDetails={onMethod} />
       </Section>
     </div>
   );
@@ -708,6 +710,7 @@ export default function LearningHome({
   const [busy, setBusy] = useState(false);
   const [reviewing, setReviewing] = useState(false);
   const [changeOpen, setChangeOpen] = useState<string | null>(null);
+  const [methodOpen, setMethodOpen] = useState(false);
   const deleteData = useDeleteLearningData(io);
   const snapshot = io.snapshot;
   const comparison = snapshot?.personal_model.comparison;
@@ -786,6 +789,7 @@ export default function LearningHome({
           io={io}
           onReview={() => setReviewing(true)}
           onReviewChange={setChangeOpen}
+          onMethod={() => setMethodOpen(true)}
         />
       )}
       {view === 'changes' && (
@@ -806,6 +810,14 @@ export default function LearningHome({
           change={reviewingChange}
           open
           onOpenChange={(next) => !next && setChangeOpen(null)}
+        />
+      )}
+      {snapshot.method && (
+        <MethodSheet
+          io={io}
+          method={snapshot.method}
+          open={methodOpen}
+          onOpenChange={setMethodOpen}
         />
       )}
       {comparison?.state === 'done' && (
