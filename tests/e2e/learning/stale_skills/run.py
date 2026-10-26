@@ -59,6 +59,9 @@ CONSENT_ASK = ("I'll be asking you this a lot - can you save how you just did it
                "way every time?")
 CONSENT_APPLY = "Yes, go ahead and save it."
 _OFFER = re.compile(r"\bskill\b", re.IGNORECASE)
+#: What ``row_bot_apply_proposal`` answers when its own approval question is swallowed (the product's
+#: ``_apply_controlled_proposal`` catches LangGraph's interrupt as an error, so the card never shows; found 26 Oct).
+LOST_CARD = "Failed to apply proposal: (Interrupt("
 _LIMIT_WORDS = ("rate limit", "rate_limit", "ratelimit", "usage limit", "usage_limit", "429", "too many requests",
                 "quota", "rate_limited", "usage_limit_reached")
 #: No new card booking from here until the person's quiet hours end (a day takes a few minutes: never run into 00:40).
@@ -398,6 +401,7 @@ class StaleRun(PersonRun):
             "recalled": [text for batch in self._recalled for text in batch],
             "answer": result.answer[:3000],
             "error": result.error,
+            "lost_card": any(LOST_CARD in item["content"] for item in results),
         }
         return result, seen
 
@@ -578,6 +582,12 @@ class StaleRun(PersonRun):
             self.clock.advance(minutes=2)
             if made:
                 break
+            if seen["lost_card"]:
+                # The person has said yes and Row-Bot asked for its approval card, which the product lost: the
+                # person approves the proposal Row-Bot drafted, as the card would (the product's own apply, the
+                # draft unchanged), and it is recorded as such.
+                made = self._approve_lost_card(proposals_before, consent)
+                break
             message = CONSENT_APPLY
         consent["proposals"] = _proposals(since=proposals_before)
         consent["made"] = sorted(made)
@@ -588,6 +598,7 @@ class StaleRun(PersonRun):
             consent["names_fact"] = world.states(procedure.kind, value, made[name])
             self.state.data["skills"][procedure.id] = {"name": name, "source": "offer" if offered else "asked",
                                                        "day": request.day, "names_fact": consent["names_fact"],
+                                                       "card_stand_in": bool(consent.get("card_stand_in")),
                                                        "consent": consent}
             self.note(f"skill {name!r} made by Row-Bot ({'offer' if offered else 'asked'}), day {request.day}"
                       f", names the fact: {consent['names_fact']}")
@@ -604,6 +615,20 @@ class StaleRun(PersonRun):
                                                    "consent": consent}
         record["consent"] = consent
         self.note(f"skill {spec['name']!r} seeded on day {request.day} (Row-Bot saved none)")
+
+    def _approve_lost_card(self, proposals_before: set[str], consent: dict[str, Any]) -> dict[str, str]:
+        from row_bot import evolution
+
+        before = self._user_skills()
+        ready = [item for item in _proposals(since=proposals_before)
+                 if item["type"] == "create_skill" and item["status"] in ("ready", "approved", "draft")]
+        consent["card_stand_in"] = {"proposals": [item["id"] for item in ready]}
+        if not ready:
+            return {}
+        result = evolution.apply_proposal(ready[-1]["id"], require_approval=False, approved_by_user=True)
+        consent["card_stand_in"].update({"applied": ready[-1]["id"], "ok": bool(result.get("ok")),
+                                         "message": str(result.get("message") or "")[:300]})
+        return {name: text for name, text in self._user_skills().items() if name not in before}
 
     # ── Result ──────────────────────────────────────────────────────────
 
