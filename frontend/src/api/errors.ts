@@ -2815,6 +2815,10 @@ const CATALOG: Record<string, Entry> = {
     'Row-Bot is testing a change right now. It says here when it’s done.',
     'none',
   ],
+  learning_method_changed: [
+    'How Row-Bot learns changed meanwhile, so there’s nothing to undo. It shows the method in use now.',
+    'none',
+  ],
   knowledge_changed: [
     'This memory changed. Try again with its current version.',
     'retry',

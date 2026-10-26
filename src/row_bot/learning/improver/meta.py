@@ -171,9 +171,9 @@ def plan(store: Any, *, local: bool = False, now: float | None = None) -> Plan:
         return Plan("resume")
     found = evaluation.fresh_problems(asked_by=ASKED_BY, store=store)
     fresh = int(found["fresh"])
-    incumbent = archive.current(store)
-    control = archive.frozen_control(store)
-    arms = 1 + CHALLENGERS + (control.id != incumbent.id)
+    incumbent = archive.current(store, create=False)
+    control = archive.frozen_control(store, create=False)
+    arms = 1 + CHALLENGERS + (incumbent is not None and control is not None and control.id != incumbent.id)
     if fresh < evaluation.MIN_FRESH:
         return Plan("fewer_fresh", fresh, arms)
     if local:

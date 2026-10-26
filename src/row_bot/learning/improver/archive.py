@@ -129,9 +129,12 @@ def ensure_first(store: Any) -> Entry:
     return entry
 
 
-def current(store: Any) -> Entry:
-    """The method in use now (the first one until a trial switches)."""
+def current(store: Any, *, create: bool = True) -> Entry | None:
+    """The method in use now (the first one until a trial switches). ``create=False`` reads only: None before
+    the first method was kept."""
 
+    if not create and not entries(store):
+        return None
     first = ensure_first(store)
     steps = chain(store)
     if steps:
@@ -207,10 +210,13 @@ def record_trial(store: Any, summary: Mapping[str, Any]) -> None:
     store.set_meta_values({TRIALS_KEY: json.dumps(found[-TRIALS_KEPT:], sort_keys=True)})
 
 
-def frozen_control(store: Any) -> Entry:
+def frozen_control(store: Any, *, create: bool = True) -> Entry | None:
     """The frozen control of the next trial (pre-registration §7): the method in use two trials back (the
-    incumbent of the trial before last), and the first method for the first two trials."""
+    incumbent of the trial before last), and the first method for the first two trials. ``create=False`` reads
+    only: None before the first method was kept."""
 
+    if not create and not entries(store):
+        return None
     done = [item for item in trials(store) if not item.get("final")]
     first = ensure_first(store)
     if len(done) < 2:

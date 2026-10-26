@@ -1040,6 +1040,252 @@
       "title": "LearningKindState",
       "type": "object"
     },
+    "LearningMethod": {
+      "additionalProperties": false,
+      "description": "How Row-Bot learns (L4a; designs/learning-ux.md \u00a76): the method in use in plain words, its trials with their\ndenominators, its history and Undo.",
+      "properties": {
+        "can_undo": {
+          "default": false,
+          "title": "Can Undo",
+          "type": "boolean"
+        },
+        "description": {
+          "maxLength": 600,
+          "title": "Description",
+          "type": "string"
+        },
+        "history": {
+          "items": {
+            "$ref": "#/$defs/LearningMethodStep"
+          },
+          "maxItems": 30,
+          "title": "History",
+          "type": "array"
+        },
+        "kept": {
+          "minimum": 0,
+          "title": "Kept",
+          "type": "integer"
+        },
+        "next_trial": {
+          "$ref": "#/$defs/LearningNextTrial"
+        },
+        "since": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Since"
+        },
+        "tokens": {
+          "minimum": 0,
+          "title": "Tokens",
+          "type": "integer"
+        },
+        "trials": {
+          "items": {
+            "$ref": "#/$defs/LearningMethodTrial"
+          },
+          "maxItems": 20,
+          "title": "Trials",
+          "type": "array"
+        },
+        "tried": {
+          "minimum": 0,
+          "title": "Tried",
+          "type": "integer"
+        },
+        "version": {
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "version",
+        "description",
+        "tried",
+        "kept",
+        "tokens",
+        "next_trial"
+      ],
+      "title": "LearningMethod",
+      "type": "object"
+    },
+    "LearningMethodArm": {
+      "additionalProperties": false,
+      "description": "One method's result in a trial: the changes it accepted and how many were better on the trial's new\nproblems, what its improvement loop spent, and the ideas kept per 1M tokens.",
+      "properties": {
+        "accepted": {
+          "minimum": 0,
+          "title": "Accepted",
+          "type": "integer"
+        },
+        "better": {
+          "minimum": 0,
+          "title": "Better",
+          "type": "integer"
+        },
+        "per_million": {
+          "minimum": 0,
+          "title": "Per Million",
+          "type": "number"
+        },
+        "role": {
+          "enum": [
+            "incumbent",
+            "challenger",
+            "control",
+            "generation"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "tokens": {
+          "minimum": 0,
+          "title": "Tokens",
+          "type": "integer"
+        },
+        "version": {
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "role",
+        "version",
+        "accepted",
+        "better",
+        "tokens",
+        "per_million"
+      ],
+      "title": "LearningMethodArm",
+      "type": "object"
+    },
+    "LearningMethodStep": {
+      "additionalProperties": false,
+      "description": "A line of the learning method's history: the first method, a switch, one tried and dropped, an Undo.",
+      "properties": {
+        "against": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Against"
+        },
+        "at": {
+          "maxLength": 64,
+          "title": "At",
+          "type": "string"
+        },
+        "can_undo": {
+          "default": false,
+          "title": "Can Undo",
+          "type": "boolean"
+        },
+        "event": {
+          "enum": [
+            "first",
+            "switched",
+            "tried",
+            "undone"
+          ],
+          "title": "Event",
+          "type": "string"
+        },
+        "version": {
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        },
+        "words": {
+          "default": "",
+          "maxLength": 200,
+          "title": "Words",
+          "type": "string"
+        }
+      },
+      "required": [
+        "at",
+        "version",
+        "event"
+      ],
+      "title": "LearningMethodStep",
+      "type": "object"
+    },
+    "LearningMethodTrial": {
+      "additionalProperties": false,
+      "description": "One strategy trial (L4a): every method on the same new problems at the same budget.",
+      "properties": {
+        "arm_tokens": {
+          "minimum": 0,
+          "title": "Arm Tokens",
+          "type": "integer"
+        },
+        "arms": {
+          "items": {
+            "$ref": "#/$defs/LearningMethodArm"
+          },
+          "maxItems": 8,
+          "title": "Arms",
+          "type": "array"
+        },
+        "at": {
+          "maxLength": 64,
+          "title": "At",
+          "type": "string"
+        },
+        "outcome": {
+          "enum": [
+            "switched",
+            "kept",
+            "final"
+          ],
+          "title": "Outcome",
+          "type": "string"
+        },
+        "problems": {
+          "minimum": 0,
+          "title": "Problems",
+          "type": "integer"
+        },
+        "to_version": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "To Version"
+        }
+      },
+      "required": [
+        "at",
+        "problems",
+        "arm_tokens",
+        "arms",
+        "outcome"
+      ],
+      "title": "LearningMethodTrial",
+      "type": "object"
+    },
     "LearningNeedsYou": {
       "additionalProperties": false,
       "description": "One line of Overview's Needs you about the personal model (UX \u00a73, \u00a75).",
@@ -1096,6 +1342,39 @@
       "title": "LearningNeedsYou",
       "type": "object"
     },
+    "LearningNextTrial": {
+      "additionalProperties": false,
+      "description": "When the next strategy trial can run: once 30 new hidden problems have built up and the trials' share of\nthe month allows it.",
+      "properties": {
+        "fresh": {
+          "minimum": 0,
+          "title": "Fresh",
+          "type": "integer"
+        },
+        "needed": {
+          "minimum": 0,
+          "title": "Needed",
+          "type": "integer"
+        },
+        "state": {
+          "enum": [
+            "waiting",
+            "ready",
+            "running",
+            "limit"
+          ],
+          "title": "State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "state",
+        "fresh",
+        "needed"
+      ],
+      "title": "LearningNextTrial",
+      "type": "object"
+    },
     "LearningOvernight": {
       "additionalProperties": false,
       "description": "Last night's look for things to improve (L3a; UX \u00a73 Overnight), in counts the client words.",
@@ -1119,6 +1398,41 @@
           "minimum": 0,
           "title": "Looks Like Bug",
           "type": "integer"
+        },
+        "method": {
+          "anyOf": [
+            {
+              "enum": [
+                "switched",
+                "kept"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Method"
+        },
+        "method_version": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Method Version"
+        },
+        "method_words": {
+          "default": "",
+          "maxLength": 200,
+          "title": "Method Words",
+          "type": "string"
         },
         "needs_examples": {
           "minimum": 0,
@@ -2346,6 +2660,17 @@
       "maxItems": 5,
       "title": "Kinds Learning",
       "type": "array"
+    },
+    "method": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LearningMethod"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "needs_you": {
       "items": {
