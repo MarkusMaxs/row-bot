@@ -132,25 +132,24 @@ test('the night’s look: next look, Overnight, what Row-Bot is learning, and th
   await open(page, 'changes');
   const filters = page.getByRole('radiogroup', { name: 'Show changes' });
   await expect(filters.getByRole('radio', { name: 'Testing' })).toBeChecked();
-  const list = page.getByRole('list', { name: 'Changes waiting to be tested' });
+  const list = page.getByRole('list', { name: 'Changes being tested' });
   await expect(list.getByText('Waiting to be tested')).toHaveCount(2);
   await expect(list.getByText('Use the current policy')).toBeVisible();
   await shoot(page, info, 'changes-drafts');
-  await page
-    .getByRole('button', { name: 'Show details for Use the current policy' })
+  await list
+    .getByRole('button', { name: 'Review Check the calendar before booking' })
     .click();
+  const sheet = page.getByRole('dialog', {
+    name: 'Check the calendar before booking',
+  });
   await expect(
-    list.getByText(
-      /In 3 chats about document lookups, you corrected Row-Bot twice and you stopped it once/,
+    sheet.getByText(
+      /^In 2 chats about tool workflows, you stopped it twice and you asked it to try again once\..+never used by itself\.$/,
     ),
   ).toBeVisible();
-  await page
-    .getByRole('button', {
-      name: 'Show details for Check the calendar before booking',
-    })
-    .click();
-  await expect(list.getByText(/never used by itself/)).toBeVisible();
+  await expect(sheet.getByText(/^Not tested yet\./)).toBeVisible();
   await shoot(page, info, 'changes-draft-why');
+  await sheet.getByRole('button', { name: 'Close', exact: true }).click();
   await filters.getByRole('radio', { name: 'Ready' }).click();
   await expect(
     page.getByText(/No changes are ready to review\./),

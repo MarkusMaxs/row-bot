@@ -150,7 +150,7 @@ def test_the_markdown_shows_rates_with_intervals_and_names_what_isnt_built():
     assert "of a 25,000,000 cap" in text
 
 
-def test_the_nights_looks_for_things_to_improve_add_up_and_say_the_drafts_wait(tmp_path):
+def test_the_nights_looks_and_their_tests_add_up(tmp_path):
     result = _result("mara", first=8, final=9)
     result["nights"] = {
         "1": {"steps": {"vault": {"outcome": {"summary": {"correction_tasks": 0}}},
@@ -159,7 +159,10 @@ def test_the_nights_looks_for_things_to_improve_add_up_and_say_the_drafts_wait(t
                         "look": {"outcome": {"state": "done", "found": 3, "diagnosed": 3, "drafted": 2, "refused": 1,
                                              "needs_examples": 0, "bugs": 1, "tokens": 9_000,
                                              "drafts": {"lesson": 1, "way_of_working": 1},
-                                             "refusals": {"url": 1}}}}},
+                                             "refusals": {"url": 1},
+                                             "tests": {"ran": True, "tested": 2, "ready": 1, "not_better": 1,
+                                                       "unclear": 0, "tokens": 400_000, "use_undo_survived": 1,
+                                                       "use_undo_failed": 0}}}}},
         "3": {"steps": {"look": {"outcome": {"ran": False}}}},
     }
 
@@ -171,4 +174,7 @@ def test_the_nights_looks_for_things_to_improve_add_up_and_say_the_drafts_wait(t
     assert (looks["nights"], looks["found"], looks["drafted"], looks["refused"], looks["tokens"]) == (2, 3, 2, 1, 9_000)
     assert looks["drafts"] == {"lesson": 1, "way_of_working": 1} and looks["held_out_corrections_stored"] == 1
     assert ("Looks for things to improve (L3a): 2 nights, 3 issues found, 3 diagnosed, 2 drafts (1 lesson, "
-            "1 way of working; waiting to be tested: L3b isn't built yet), 1 refused by E9 (1 url)") in text
+            "1 way of working), 1 refused by E9 (1 url)") in text
+    assert looks["tests"]["use_undo_survived"] == 1
+    assert ("Changes tested (L3b): 2 tested on 1 nights, 1 ready, 1 not better, 0 with too little of their kind "
+            "to tell; use → Undo 1 survived, 0 failed; 400,000 testing tokens.") in text

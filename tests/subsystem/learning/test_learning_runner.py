@@ -415,3 +415,37 @@ def test_a_paused_learning_runs_no_look(setup, monkeypatch):
     setup.runner.check()
 
     assert runs == []
+
+
+# ── L3b: tonight's drafts are tested after the look and before training; a morning summary ──
+
+
+def test_tonights_drafts_are_tested_after_the_look_and_before_training_then_summed_up_in_the_morning(setup,
+                                                                                                    monkeypatch):
+    from row_bot.learning import changes
+
+    runs = _look(setup, monkeypatch)
+    tested = []
+
+    def test_waiting(tester, *, night, should_stop, **_kwargs):
+        tested.append({"night": night, "after_look": bool(runs), "training": setup.supervisor.training()})
+        report = changes.NightTests(night, tested=2, ready=1, not_better=0, used=1)
+        tester.store.set_meta_values({changes.NIGHT_KEY: json.dumps(report.to_dict())})
+        return report
+
+    monkeypatch.setattr(changes, "test_waiting", test_waiting)
+    monkeypatch.setattr(changes, "due", lambda: [{"id": "proposal_1"}])
+    setup.runner.look.tester = lambda: changes.Tester(setup.root)
+    _plan(setup)
+    _journal(setup.root, datetime(2026, 10, 16, 1, 10))
+    setup.lease.set(since_activity=600.0)
+
+    assert setup.runner.check().state == "training"
+    assert tested == [{"night": "2026-10-16", "after_look": True, "training": False}]
+
+    said = []
+    assert setup.runner.look.morning(said.append) is None  # still quiet hours: nothing yet
+    setup.when.now = datetime(2026, 10, 16, 8, 0)
+    text = setup.runner.look.morning(said.append)
+    assert text == "Overnight: 1 change put into use by itself (Undo in Learning)"
+    assert said == [text] and setup.runner.look.morning(said.append) is None  # once a morning

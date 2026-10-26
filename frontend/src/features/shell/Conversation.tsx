@@ -3195,7 +3195,9 @@ export default function Conversation({
                 : headerMenu
             }
             trailingMenuActions={(() => {
-              const item = id ? learningMenuItem({ id, title }) : null;
+              const item = id
+                ? learningMenuItem({ id, title, incognito })
+                : null;
               return item ? [item] : [];
             })()}
             breadcrumb={breadcrumb}

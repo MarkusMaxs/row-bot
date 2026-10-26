@@ -569,6 +569,12 @@ def _merge_entities(entity_a: dict, entity_b: dict) -> dict | None:
         logger.warning("Dream merge update failed: %s", exc)
         return None
 
+    # A lesson in use that was the duplicate moves to the survivor (O7), before the delete marks it gone.
+    if str(duplicate.get("entity_type") or "") == "self_knowledge":
+        from row_bot import learning
+
+        learning.lesson_memory_deleted_soon(duplicate["id"], survivor["id"])
+
     # Delete the duplicate
     try:
         deleted = kg.delete_entity(duplicate["id"])

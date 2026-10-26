@@ -20,7 +20,7 @@ import row_bot.agent as agent
 from row_bot import agent_runs, thread_cleanup, threads
 from row_bot.learning import capture
 from row_bot.learning.store import LearningStore
-from tests.fixtures.learning import read_json_blob
+from tests.fixtures.learning import all_blob_text, read_json_blob
 from tests.helpers.learning_turns import AgentTurns, ScriptedModel, asks, call, model_call_in_turn, says
 
 pytestmark = [pytest.mark.integration, pytest.mark.platform]  # the writer thread across real turns
@@ -256,6 +256,66 @@ def test_a_delegated_agents_turn_belongs_to_the_conversation_that_started_it(lea
     agent_runs.finish_agent_run(run["id"], "completed")
     assert thread_cleanup.delete_thread(parent.thread_id).deleted is True
     assert store.find("episode") == [] and store.find("decision") == []
+
+
+def test_a_chat_records_nothing_from_the_moment_it_turns_incognito_even_when_turned_off_again(
+        learning_dir, monkeypatch):
+    """N11 through the real seams and the saved flag: the person turns the chat incognito while a turn
+    runs (here a tool does it at that moment); nothing more of that turn is recorded, nothing while it
+    stays incognito, and nothing after it is turned off, since every later request carries that part."""
+
+    @tool
+    def look_up() -> str:
+        """Look something up."""
+        assert capture.flush(10)  # what the turn did before is written first
+        threads.set_thread_incognito(turns.thread_id, True)
+        return "PRIVATE-RESULT"
+
+    model = ScriptedModel(responses=[
+        says("Noted: you like tea."), asks(call("look_up", "c1")), says("PRIVATE-REPLY"), says("PRIVATE-TOO"),
+        says("PRIVATE-AFTER"),
+    ], seen=[])
+    turns = AgentTurns(monkeypatch, model, [look_up])
+    turns.send("I like tea.")
+    turns.send("Look this up for me.")
+    turns.send("PRIVATE-QUESTION while incognito")
+    threads.set_thread_incognito(turns.thread_id, False)
+    turns.send("PRIVATE-QUESTION after incognito")
+
+    store = _written(learning_dir)
+    first, cut = sorted(store.find("episode"), key=lambda item: item.started_at)
+    assert (first.status, cut.status) == ("completed", "running")  # the cut turn never settles or trains
+    calls = _decisions(store, subkind="model_call")
+    assert [item.episode_id for item in calls] == [first.id, cut.id]  # each turn's call made before incognito
+    assert store.find("decision", subkind="tool_call") == [] and store.find("signal") == []
+    assert "PRIVATE-" not in all_blob_text(learning_dir)
+
+
+def test_a_tool_call_its_runtime_couldnt_parse_is_asked_once_more_and_both_calls_are_captured(
+        learning_dir, monkeypatch):
+    """5.3's one retry of a tool call the runtime couldn't parse (B418) goes through Learning's seam as the
+    overflow retry does: the refused call with its error, then the retry naming it."""
+
+    class Unparsed(ScriptedModel):
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            if not self.seen:
+                self.seen.append(list(messages))
+                raise ValueError("error parsing tool call: raw='<tool_call>{\"name\": \"read_note\"'")
+            return super()._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
+
+    model = Unparsed(responses=[says("Your home note says: water the plants.")], seen=[])
+    turns = AgentTurns(monkeypatch, model, [read_note])
+
+    events = turns.send("What does my home note say?")
+
+    assert ("done", "Your home note says: water the plants.") in events
+    store = _written(learning_dir)
+    refused, retried = _decisions(store, subkind="model_call")
+    assert refused.status == "error" and refused.raw_output_blob is None
+    assert retried.retry_of == refused.id and retried.status == "ok"
+    assert _sent(store, refused) == _sent(store, retried) == [message_to_dict(message) for message in model.seen[1]]
+    [episode] = store.find("episode")
+    assert episode.status == "completed"
 
 
 class _StreamingModel(BaseChatModel):

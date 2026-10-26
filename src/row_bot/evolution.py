@@ -52,8 +52,9 @@ MUTATING_PROPOSAL_TYPES = {
     "lesson",
     "behaviour",
 }
-# The whitelisted ways-of-working slots a behaviour draft may name (D18; L3b wires each one).
-BEHAVIOUR_SLOTS = ("guidance", "tool_guidance", "recall", "delegation", "step_budget")
+# The whitelisted ways-of-working slots a behaviour draft may name (D18). L3b wired these three; recall
+# settings and step budgets aren't slots (``learning.behaviour`` says why).
+BEHAVIOUR_SLOTS = ("guidance", "tool_guidance", "delegation")
 LEARNING_DRAFT_TYPES = {"lesson", "behaviour", "create_skill", "patch_skill"}
 SKILL_MUTATION_TYPES = {"create_skill", "patch_skill", "consolidate_skills"}
 # What applying can carry out. The other kinds are review proposals: the
@@ -369,6 +370,34 @@ def learning_untested(proposal: dict[str, Any]) -> bool:
 
     learning = _safe_payload(proposal.get("payload")).get("learning")
     return isinstance(learning, dict) and learning.get("state") != "tested"
+
+
+def update_learning(proposal_id: str, learning: dict[str, Any], *, status: str | None = None,
+                    payload: dict[str, Any] | None = None, title: str | None = None) -> dict[str, Any] | None:
+    """Merge ``learning`` into a Learning change's ``payload.learning`` (its tests, its state, when it was
+    used), and optionally its status, payload fields (an edit's new words) and title. None when there is
+    no such Learning change. The ``learning`` block is Learning's own; the rest of the proposal is
+    evolution's (L3b)."""
+
+    store = _load_store()
+    for proposal in store.get("proposals", []):
+        if proposal.get("id") != proposal_id:
+            continue
+        current = _safe_payload(proposal.get("payload"))
+        block = current.get("learning")
+        if not isinstance(block, dict):
+            return None
+        merged = {**current, **(payload or {})}
+        merged["learning"] = {**block, **learning}
+        proposal["payload"] = merged
+        if title is not None:
+            proposal["title"] = str(title)[:200]
+        if status is not None and status in VALID_PROPOSAL_STATUSES:
+            proposal["status"] = status
+        proposal["updated_at"] = _now()
+        _save_store(store)
+        return proposal
+    return None
 
 
 def remove_learning_drafts(attempt_ids: set[str] | None = None) -> int:

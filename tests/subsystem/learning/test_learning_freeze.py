@@ -28,11 +28,17 @@ FREEZE = 1_000.0
 
 
 def _problem(number: int, *, chat: str, at: float, source: str = "captured", fidelity: str = "exact",
-             model: str = "model:codex:gpt-canary-q9z", kind: str = "Document lookups") -> dict[str, Any]:
+             model: str = "model:codex:gpt-canary-q9z", kind: str = "Document lookups", untrusted: bool = False,
+             picture: bool = False) -> dict[str, Any]:
     question = f"Problem {number}: what does {CANARY}-{number}.txt say?"
+    messages: tuple[dict[str, Any], ...] = ({"type": "human", "data": {"content": question}},)
+    if picture:  # the page's picture after a browser action (5.3): one extra message with no id
+        messages += ({"type": "human", "data": {"content": [
+            {"type": "text", "text": "The browser page after that action."},
+            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,/9j/4AAQ"}}]}},)
     case = ReplayCase(f"dec_{CANARY}_{number}", f"thread-{CANARY}-{chat}", f"thread-{CANARY}-{chat}", at, kind,
-                      fidelity, False, ({"type": "human", "data": {"content": question}},), None, model,
-                      Action(text=f"answer {number}"), source, "exact_action", question)
+                      fidelity, untrusted, messages, None, model, Action(text=f"answer {number}"), source,
+                      "exact_action", question)
     return {"id": case.decision_id, "kind_of_work": kind, "thread_id": case.thread_id,
             "conversation_id": case.conversation_id, "created_at": at, **case.to_content()}
 
@@ -105,7 +111,8 @@ def test_only_aggregates_leave_the_freeze_evaluation(vault):
     text = json.dumps(result)
     for secret in (CANARY, "dec_", "thread-", "gpt-", "answer ", *(task.id for task in tasks)):
         assert secret not in text
-    assert result["problems"] == {"real_uncorrected": 9, "real_corrected": 0, "packs": 4, "after_as_of": 0}
+    assert result["problems"] == {"real_uncorrected": 9, "real_corrected": 0, "packs": 4, "after_as_of": 0,
+                                  "untrusted": 0, "with_picture": 0}
     assert result["repeats"] == 3 and result["metric_version"] == evaluation.METRIC_VERSION
     personal = result["arms"]["personal"]["splits"]["real_uncorrected"]
     assert (personal["problems"], personal["counted"], personal["mean"]) == (9, 9, 1.0)
@@ -166,6 +173,25 @@ def test_the_sensitivity_analyses_are_computed_beside_the_primary_one(vault):
     assert result["main_models"] == 2
 
 
+def test_the_freeze_adds_a_trusted_only_and_a_without_pictures_analysis(vault):
+    # A7: problems with untrusted input count in the primary analysis, with a trusted-only one beside it.
+    # A8: problems whose prefix carries a page picture count too (text-only arms are asked without it),
+    # with an analysis without them beside it.
+    replay = [_problem(number, chat=f"c{number}", at=10.0 + number, untrusted=number >= 2, picture=number >= 4)
+              for number in range(6)]
+    vault([], replay)
+
+    result = _freeze(lambda model, number, run: model == "personal" and number >= 4, replay=replay)
+
+    real = result["contrasts"]["personal vs start"]["real_uncorrected"]
+    assert (real["primary"]["problems"], real["primary"]["difference"]) == (6, round(2 / 6, 6))
+    assert (real["trusted_only"]["problems"], real["trusted_only"]["difference"]) == (2, 0.0)
+    assert (real["without_pictures"]["problems"], real["without_pictures"]["difference"]) == (4, 0.0)
+    assert (result["problems"]["untrusted"], result["problems"]["with_picture"]) == (4, 2)
+    personal = result["arms"]["personal"]["splits"]["real_uncorrected"]
+    assert personal["runs"] == {"failed": 12, "passed": 6}  # every problem counted: none "unverified"
+
+
 def test_a_problem_with_no_counted_run_in_one_arm_leaves_the_pair(vault):
     replay = [_problem(number, chat="a", at=10.0 + number) for number in range(3)]
     vault([], replay)
@@ -219,9 +245,11 @@ def test_the_vaults_counts_come_without_reading_any_problem_out(writer, chats, c
     work = CapturedWork(writer, chats, clock)
     answers = [work.turn(f"chat-{CANARY}-{index}", f"Question {index} about {CANARY}", f"Answer {index}.")[-1]
                for index in range(6)]
-    store = LearningStore(learning_on)
-    for number, at in enumerate((10.0, 20.0)):
-        store.put(signal(f"chat-{CANARY}-{number}", f"sig_{number}", decision_id=answers[number], created_at=at))
+    store = LearningStore(learning_on, clock=clock)
+    for number in range(2):
+        # Taught with what it should have said (A3: a reference), so the 2nd is held out as a correction.
+        store.put(signal(f"chat-{CANARY}-{number}", f"sig_{number}", decision_id=answers[number],
+                         created_at=clock.now + number, answer=f"It should have said {CANARY}."))
     before = evaluation.audit_counts(asked_by="test", store=store)
     assert before["vault"] == 0 and not audit.vault_exists(learning_on)  # never creates a vault
 
@@ -230,7 +258,7 @@ def test_the_vaults_counts_come_without_reading_any_problem_out(writer, chats, c
 
     # 12 model calls, 2 of them corrected (never uncorrected problems): every 4th of the other 10.
     assert refreshed["held"] == 2
-    assert counts["vault"] == 1 and counts["pack_tasks"] == 32 and counts["corrected"] == 0
-    assert counts["uncorrected"] == counts["exact"] == 2 and counts["redacted"] == 0
-    assert counts["corrections_waiting"] == len(holdout.waiting_for_vault(store)) == 1
+    assert counts["vault"] == 1 and counts["pack_tasks"] == 32 and counts["corrected"] == 1
+    assert counts["uncorrected"] == 2 and counts["exact"] == 3 and counts["redacted"] == 0
+    assert len(holdout.waiting_for_vault(store)) == 1 and counts["corrections_waiting"] == 0
     assert CANARY not in json.dumps(counts)

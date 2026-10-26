@@ -252,7 +252,7 @@ it('on: its settings, and turning Learning off asks with what stays', async () =
   const io = fakeIO(
     learningSnapshot({
       state: 'on',
-      data: { exists: true, bytes: 12_000_000 },
+      data: { ...learningSnapshot().data, exists: true, bytes: 12_000_000 },
       spending: {
         ...learningSnapshot().spending,
         used_tokens: 240_000,
@@ -279,9 +279,23 @@ it('on: its settings, and turning Learning off asks with what stays', async () =
     screen.getByRole('button', { name: 'Delete learning data…' }),
   ).toBeVisible();
   expect(screen.getAllByText('Not downloaded')).toHaveLength(2);
+  const limit = screen.getByRole('combobox', { name: 'Monthly limit' });
+  expect(limit).toHaveDisplayValue('2M tokens');
+  // A large subscription can give Learning up to 50M tokens a month.
   expect(
-    screen.getByRole('combobox', { name: 'Monthly limit' }),
-  ).toHaveDisplayValue('2M tokens');
+    within(limit)
+      .getAllByRole('option')
+      .map((option) => option.textContent),
+  ).toEqual([
+    '500K tokens',
+    '1M tokens',
+    '2M tokens',
+    '5M tokens',
+    '10M tokens',
+    '20M tokens',
+    '50M tokens',
+    'No model calls',
+  ]);
 
   fireEvent.click(screen.getByRole('switch', { name: 'Learning' }));
   const confirm = await screen.findByRole('dialog', {
@@ -576,4 +590,20 @@ it('setup says why it recommends a smaller model when the graphics card has litt
   expect(
     within(sheet).getByRole('combobox', { name: 'Starting model' }),
   ).toHaveDisplayValue(/^Qwen3\.5 2B/);
+});
+
+it('the learning data line says how much of it is browser and computer pictures', () => {
+  const data = {
+    ...learningSnapshot().data,
+    exists: true,
+    bytes: 1_240_000_000,
+    picture_bytes: 830_000_000,
+  };
+  show(fakeIO(learningSnapshot({ state: 'on', data })));
+
+  expect(
+    screen.getByText(
+      '1.2 GB, including 830 MB of browser and computer pictures (up to 10 GB; the oldest go first). Turning Learning off keeps it.',
+    ),
+  ).toBeVisible();
 });

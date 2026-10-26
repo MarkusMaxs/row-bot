@@ -3,7 +3,6 @@
 Simple by default: the certified recipe of this computer's tier is the recommendation, and Advanced
 is a disclosure with those values filled in and **Reset to recommended**. What can change:
 
-- **starting model**: the tier's starting models (Qwen3.5 2B on the 8 GB tier);
 - **LoRA rank** (alpha follows it), **learning rate**, **epochs** (passes over the examples);
 - **context length**: from the 16K minimum (O23: Row-Bot's own envelope is 10.75K tokens) up to what
   the tier measured (16K on 8 GB: 32K ran out of memory, L2b);
@@ -16,6 +15,11 @@ Every value is clamped to the training engine's own limits (``learning_engine/tr
 and to the recipe's certified bounds, so no choice here can ask the engine for something it would
 refuse or a card can't fit. The choices are saved in ``learning_advanced.json`` in the data folder (a
 setting: "Delete learning data" keeps it) and apply to the **next** training run.
+
+The starting model isn't chosen here (O124): it is the setting Settings › Learning › Starting model ›
+Change… sets, which the downloads, the planner, the measure and the export all read. A choice here
+changed only the recipe's label, so a larger model chosen here would have trained from the setting's
+weights. A starting model saved here by an earlier build is ignored.
 """
 
 from __future__ import annotations
@@ -40,7 +44,7 @@ EPOCHS = (1, 2, 3)
 METHODS = ("standard",)
 DATA_SOURCES = (("your_work", "Your work"), ("corrections", "Corrections"), ("practice", "Practice"),
                 ("general", "General replay"))
-_KEYS = frozenset({"starting_model", "rank", "learning_rate", "epochs", "context", "method"})
+_KEYS = frozenset({"rank", "learning_rate", "epochs", "context", "method"})
 
 
 @functools.cache
@@ -70,7 +74,6 @@ def path(root: Path | None = None) -> Path:
 class Choices:
     """The values in effect (recommended where nothing was changed)."""
 
-    starting_model: str
     rank: int
     learning_rate: float
     epochs: int
@@ -78,12 +81,12 @@ class Choices:
     method: str = "standard"
 
     def to_dict(self) -> dict[str, Any]:
-        return {"starting_model": self.starting_model, "rank": self.rank, "learning_rate": self.learning_rate,
+        return {"rank": self.rank, "learning_rate": self.learning_rate,
                 "epochs": self.epochs, "context": self.context, "method": self.method}
 
 
 def recommended(recipe: Any) -> Choices:
-    return Choices(recipe.starting_model, int(recipe.settings.get("rank", 16)),
+    return Choices(int(recipe.settings.get("rank", 16)),
                    float(recipe.settings.get("learning_rate", 2e-4)), int(recipe.epochs), int(recipe.max_seq_length))
 
 
@@ -100,15 +103,6 @@ def contexts(recipe: Any) -> tuple[int, ...]:
     return tuple(found)
 
 
-def starting_models(recipe: Any) -> tuple[str, ...]:
-    from row_bot.learning.training import hardware
-
-    found = hardware.peek()
-    tier = found.tier if found is not None else None
-    ids = tuple(model.id for model in (tier.models if tier is not None else ())) or (recipe.starting_model,)
-    return ids if recipe.starting_model in ids else (recipe.starting_model, *ids)
-
-
 def _nearest(value: float, options: tuple[Any, ...]) -> Any:
     return min(options, key=lambda option: abs(float(option) - float(value)))
 
@@ -122,9 +116,7 @@ def clamp(values: Mapping[str, Any], recipe: Any) -> Choices:
     for key, value in values.items():
         if key not in _KEYS or value is None:
             continue
-        if key == "starting_model":
-            result[key] = value if value in starting_models(recipe) else base.starting_model
-        elif key == "method":
+        if key == "method":
             result[key] = value if value in METHODS else "standard"
         elif isinstance(value, bool) or not isinstance(value, (int, float)):
             continue
@@ -197,8 +189,7 @@ def apply(recipe: Any, root: Path | None = None) -> Any:
     settings = {**dict(recipe.settings), "rank": chosen.rank, "alpha": chosen.rank,
                 "learning_rate": chosen.learning_rate, "max_seq_length": chosen.context}
     digest = hashlib.sha256((recipe.sha256 + json.dumps(chosen.to_dict(), sort_keys=True)).encode("utf-8")).hexdigest()
-    return replace(recipe, settings=MappingProxyType(settings), epochs=chosen.epochs,
-                   starting_model=chosen.starting_model, sha256=digest)
+    return replace(recipe, settings=MappingProxyType(settings), epochs=chosen.epochs, sha256=digest)
 
 
 def view(recipe: Any, root: Path | None = None) -> dict[str, Any]:
@@ -206,13 +197,9 @@ def view(recipe: Any, root: Path | None = None) -> dict[str, Any]:
 
     chosen = current(recipe, root)
     base = recommended(recipe)
-    from row_bot.learning.training import hardware
-
-    names = {model.id: model.name for model in hardware.STARTING_MODELS.values()}
     return {
         "values": chosen.to_dict(), "recommended": base.to_dict(), "changed": chosen != base,
         "choices": {
-            "starting_model": [{"id": item, "name": names.get(item, item)} for item in starting_models(recipe)],
             "rank": list(RANKS), "learning_rate": list(LEARNING_RATES), "epochs": list(EPOCHS),
             "context": list(contexts(recipe)), "method": list(METHODS),
         },

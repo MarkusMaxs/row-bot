@@ -3,18 +3,53 @@
     "LearningLessonView": {
       "additionalProperties": false,
       "properties": {
+        "change_id": {
+          "default": "",
+          "maxLength": 128,
+          "title": "Change Id",
+          "type": "string"
+        },
         "id": {
           "maxLength": 128,
           "title": "Id",
           "type": "string"
         },
+        "kind": {
+          "anyOf": [
+            {
+              "enum": [
+                "document_lookups",
+                "structured_transforms",
+                "small_coding",
+                "tool_workflows",
+                "other"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Kind"
+        },
         "origin": {
-          "const": "agent_saved",
+          "enum": [
+            "agent_saved",
+            "learning"
+          ],
           "title": "Origin",
           "type": "string"
         },
         "status": {
-          "const": "not_tested",
+          "enum": [
+            "not_tested",
+            "testing",
+            "tested_better",
+            "tested_not_better",
+            "in_use",
+            "off"
+          ],
           "title": "Status",
           "type": "string"
         },
@@ -32,6 +67,12 @@
           "maxLength": 64,
           "title": "Updated At",
           "type": "string"
+        },
+        "used": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Used",
+          "type": "integer"
         }
       },
       "required": [

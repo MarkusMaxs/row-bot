@@ -20,7 +20,8 @@ import type { LiveFrame } from './types';
  * - `monitor`: what Monitor lists as needing the person.
  * - `models`: the saved model catalog: refreshed, or a provider connected or
  *   disconnected (B411).
- * - `learning`: reserved for Row-Bot Learning.
+ * - `learning`: Row-Bot Learning (preview): a version, a comparison, the
+ *   vault, a setting or a personal model's use changed.
  *
  * Subscribe with `controller.live.subscribe(topic, onChange)`, which returns
  * an unsubscribe, or in a component with `useLiveUpdate(topics, onChange)`

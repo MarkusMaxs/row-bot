@@ -3803,6 +3803,11 @@
           "maxItems": 256,
           "title": "Traces",
           "type": "array"
+        },
+        "used_lesson": {
+          "default": false,
+          "title": "Used Lesson",
+          "type": "boolean"
         }
       },
       "required": [

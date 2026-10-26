@@ -752,6 +752,8 @@ async def _run_startup_sequence():
         # Training left running when Row-Bot closed pauses at its newest checkpoint; the
         # quiet-hours runner starts (L2a).
         await asyncio.to_thread(_learning.start_runner)
+    # Once per store, in the background: blobs no Learning record references any more go (P2).
+    _learning.start_blob_sweep()
 
     _set("⬆ Starting auto-update scheduler…")
     try:

@@ -27,10 +27,12 @@ import {
 } from './learning-state';
 import { DownloadAsk, LearningSetupSheet } from './LearningSetup';
 import { CancelDownload, downloadView } from './PersonalModelDownload';
+import { StartingModelSheet } from './StartingModelSheet';
 import {
   limitMeaning,
   limitOptions,
   percentWords,
+  pictureWords,
   quietHoursWords,
   sizeWords,
   tokenWords,
@@ -120,6 +122,7 @@ export default function LearningSettings({
   const [cancelling, setCancelling] = useState(false);
   const [askOpen, setAskOpen] = useState(false);
   const [askHardware, setAskHardware] = useState<LearningHardware | null>(null);
+  const [modelOpen, setModelOpen] = useState(false);
   const [confirmOff, setConfirmOff] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -189,6 +192,11 @@ export default function LearningSettings({
         io={io}
         onTurnedOn={turnedOn}
         onLeave={() => setSetupOpen(false)}
+      />
+      <StartingModelSheet
+        open={modelOpen}
+        onOpenChange={setModelOpen}
+        io={io}
       />
       <DownloadAsk
         open={askOpen}
@@ -548,21 +556,33 @@ export default function LearningSettings({
             </StatusLine>
           }
           trailing={
-            model.starting_model_state === 'downloaded' ? (
-              <Button
-                className="small"
-                disabled={busy || running}
-                onClick={(event) => deleteModel(event.currentTarget)}
-              >
-                Delete
-              </Button>
-            ) : showDownload &&
-              model.engine === 'installed' &&
-              model.starting_model_state === 'not_downloaded' ? (
-              <Button className="small" onClick={openAsk}>
-                Download…
-              </Button>
-            ) : undefined
+            <span className="learning-actions-inline">
+              {here && (
+                <Button
+                  className="small"
+                  disabled={busy || running}
+                  aria-label="Change the starting model"
+                  onClick={() => setModelOpen(true)}
+                >
+                  Change…
+                </Button>
+              )}
+              {model.starting_model_state === 'downloaded' ? (
+                <Button
+                  className="small"
+                  disabled={busy || running}
+                  onClick={(event) => deleteModel(event.currentTarget)}
+                >
+                  Delete
+                </Button>
+              ) : showDownload &&
+                model.engine === 'installed' &&
+                model.starting_model_state === 'not_downloaded' ? (
+                <Button className="small" onClick={openAsk}>
+                  Download…
+                </Button>
+              ) : null}
+            </span>
           }
         />
         {view && here && (
@@ -614,7 +634,7 @@ export default function LearningSettings({
           label="Kept on this computer"
           help={
             snapshot.data.exists
-              ? `${sizeWords(snapshot.data.bytes)}. Turning Learning off keeps it.`
+              ? `${sizeWords(snapshot.data.bytes)}${pictureWords(snapshot.data)}. Turning Learning off keeps it.`
               : 'Nothing yet.'
           }
           trailing={

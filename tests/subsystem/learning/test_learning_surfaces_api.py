@@ -142,7 +142,7 @@ def test_with_the_preview_flag_the_app_offers_learning_off_with_the_setup_defaul
     model = snapshot["personal_model"]
     assert model["starting_model"]["name"] == "Qwen3.5 2B" and model["download"] == "not_asked"
     assert model["engine"] == "not_downloaded"
-    assert snapshot["data"] == {"exists": False, "bytes": 0}
+    assert snapshot["data"] == {"exists": False, "bytes": 0, "picture_bytes": 0, "picture_cap_bytes": 10_000_000_000}
     # Reading Learning creates nothing.
     assert learning_files(data) == []
 
@@ -405,10 +405,9 @@ def test_only_delete_data_ever_deletes_learning_data(api, no_channels, chats, mo
     fields = {"version": 1, "kind": "document_lookups", "job_id": "job_unknown", "runtime": "ollama",
               "folder": "C:/nowhere", "item_id": "item_unknown", "model": "qwen3.5-2b", "download": "not_now",
               "conversation_id": "chat-b", "message_id": "run-msg-3", "signal_id": "sig_unknown",
-              "category": "wrong_answer"}
+              "category": "wrong_answer", "change_id": "proposal_unknown", "text": "Use the ID"}
     extra = {"turn_on": {"setup": SETUP},
-             "save_advanced": {"advanced": {"starting_model": "qwen3.5-2b", "rank": 16, "learning_rate": 0.0002,
-                                            "epochs": 3, "context": 16384}}}
+             "save_advanced": {"advanced": {"rank": 16, "learning_rate": 0.0002, "epochs": 3, "context": 16384}}}
 
     reached = 0
     for action in actions:
@@ -503,7 +502,8 @@ def test_the_snapshot_says_when_learning_looks_next_and_what_last_night_drafted(
     snapshot = _snapshot(client, headers)
 
     assert snapshot["overnight"] == {"night": night, "state": "done", "found": 3, "drafted": 1, "left_out": 1,
-                                     "needs_examples": 1, "looks_like_bug": 0}
+                                     "needs_examples": 1, "looks_like_bug": 0, "tested": 0, "ready": 0,
+                                     "not_better": 0, "used": 0, "tests_state": None}
     [change] = snapshot["changes"]
     assert (change["change"], change["kind"], change["state"]) == ("lesson", "document_lookups", "waiting_to_test")
     assert change["why"]["corrections"] == 2 and change["why"]["chats"] == 2
@@ -516,3 +516,39 @@ def test_the_snapshot_says_when_learning_looks_next_and_what_last_night_drafted(
     assert client_learning._next_look(1, 5, settings, {"night": "2026-10-23", "state": "done"}, at_two) \
         == "2026-10-24T01:00"
     assert client_learning._next_look(1, 5, settings, None, datetime(2026, 10, 23, 14, 0)) == "2026-10-24T01:00"
+
+
+def test_a_tested_change_is_reviewed_used_and_undone_through_the_api(api, no_channels, chats):
+    # L3b: the snapshot lists a tested change as Ready with its test (counts only); Use this change answers
+    # "Now in use." and Undo takes it back out; Edit asks to test again; E9 words are refused at use.
+    from row_bot import evolution
+
+    client, headers, data, _ = api
+    _turn_on(client, headers)
+    learning_block = {"issue": "tool_workflows:corrected", "attempt_id": None, "kind_of_work": "tool_workflows",
+                      "state": "tested", "never_automatic": False, "why": {"chats": 2, "corrections": 2},
+                      "test": {"verdict": "better", "rows": [{"label": "Tool workflows it hadn’t seen", "total": 8,
+                                                              "without": 5, "with": 7}],
+                               "note": "Testing used 400K tokens.", "small": True, "tested_at": 1.0,
+                               "own": {"problems": 8, "difference": 0.25, "low": 0.0, "high": 0.5}}}
+    change = evolution.create_proposal(insight_ids=[], proposal_type="behaviour", title="Check the calendar first",
+                                       rationale="r", status="ready", dedupe=False,
+                                       payload={"text": "Check the calendar before booking.", "slot": "tool_guidance",
+                                                "kind_of_work": "tool_workflows", "learning": learning_block})["id"]
+
+    [view] = _snapshot(client, headers)["changes"]
+    assert (view["state"], view["change"], view["setting"]) == ("ready", "way_of_working", "How Row-Bot uses its tools")
+    assert view["test"]["rows"] == [{"label": "Tool workflows it hadn’t seen", "total": 8, "without": 5,
+                                     "with_change": 7}]
+    assert view["test"]["difference"] == 25.0 and view["test"]["verdict"] == "better"
+
+    used = _ok(_command(client, headers, "use_change", change_id=change))
+    assert used["summary"] == "Now in use."
+    [view] = used["snapshot"]["changes"]
+    assert view["state"] == "in_use" and view["used_by"] == "person"
+    assert {item["state"] for item in used["snapshot"]["kinds_learning"]} == {"change_in_use"}
+    undone = _ok(_command(client, headers, "undo_change", change_id=change))
+    assert undone["snapshot"]["changes"][0]["state"] == "not_used"
+    assert undone["snapshot"]["changes"][0]["not_used"] == "undone"
+    refused = _command(client, headers, "use_change", change_id=change)
+    assert refused.status_code == 409 and refused.json()["code"] == "learning_change_changed"
