@@ -2488,7 +2488,10 @@ def _send_feedback(
 
 
 def _apply_controlled_proposal(proposal_id: str) -> str:
-    """Apply a proposal through the controlled action-run path."""
+    """Apply a proposal through the controlled action-run path. The approval card pausing the run and Stop are
+    not failures: they go on up."""
+
+    from langgraph.errors import GraphBubbleUp
 
     try:
         from row_bot.evolution import apply_proposal
@@ -2503,6 +2506,8 @@ def _apply_controlled_proposal(proposal_id: str) -> str:
         if rollback:
             details.append(f"Rollback ref: {rollback}")
         return "\n".join(details)
+    except (GraphBubbleUp, InterruptedError):
+        raise
     except Exception as exc:
         return f"Failed to apply proposal: {exc}"
 

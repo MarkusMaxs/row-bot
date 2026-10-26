@@ -601,3 +601,34 @@ def test_row_bot_status_exposes_evolution_and_proposal_tools(evolution_env):
         "row_bot_review_skill_library",
         "row_bot_verify_proposal",
     } <= tool_names
+
+
+def test_applying_a_skill_in_chat_asks_with_the_approval_card(evolution_env, monkeypatch):
+    # In Ask, applying a proposal pauses the run for the person's approval (a LangGraph interrupt). The tool must
+    # let that pause through, not answer "Failed to apply proposal", or the card never shows and nothing is saved.
+    from langgraph.errors import GraphInterrupt
+
+    status = evolution_env.status_tool
+    output = status._create_skill(
+        name="weekly_bread_order",
+        display_name="Weekly bread order",
+        icon="sparkles",
+        description="Send the weekly bread order to the bakery.",
+        instructions="Use the mail tool to send the order to the bakery's order address.",
+    )
+    proposal_id = output.split("Skill creation proposal created: ", 1)[1].split()[0]
+    asked = []
+
+    def ask(payload, **_kwargs):
+        asked.append(payload)
+        raise GraphInterrupt(())
+
+    monkeypatch.setattr(evolution_env.evolution, "gate_action", ask)
+    apply_tool = next(tool for tool in status.RowBotStatusTool().as_langchain_tools()
+                      if tool.name == "row_bot_apply_proposal")
+
+    with pytest.raises(GraphInterrupt):
+        apply_tool.func(proposal_id=proposal_id)
+
+    assert asked and asked[0]["tool"] == "row_bot_apply_proposal"
+    assert evolution_env.skills.get_skill("weekly_bread_order") is None  # saved only once the person says yes
