@@ -17,7 +17,7 @@ import logging
 import shutil
 import sys
 from collections.abc import Callable
-from datetime import date
+from datetime import date, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
@@ -175,7 +175,8 @@ def _spending(settings: learning.LearningSettings) -> dict[str, Any]:
     }
 
 
-def _quiet_hours(root: Path) -> dict[str, Any]:
+def _quiet_hours(root: Path, settings: learning.LearningSettings, night: dict[str, Any] | None,
+                 now: datetime | None = None) -> dict[str, Any]:
     start, end = 1, 5
     try:
         document = json.loads((root / "dream_config.json").read_text(encoding="utf-8"))
@@ -184,8 +185,122 @@ def _quiet_hours(root: Path) -> dict[str, Any]:
             end = max(0, min(23, int(document.get("window_end", 5))))
     except (OSError, ValueError, TypeError):
         pass
-    # Nothing runs in quiet hours yet (L3a adds the runner), so there is no next look.
-    return {"window_start": start, "window_end": end, "next_look_at": None}
+    return {"window_start": start, "window_end": end, "next_look_at": _next_look(start, end, settings, night, now)}
+
+
+def _next_look(start: int, end: int, settings: learning.LearningSettings, night: dict[str, Any] | None,
+               now: datetime | None = None) -> str | None:
+    """When Learning next looks for things to improve (L3a): the next quiet hours' start, or tonight's when
+    tonight's look hasn't run yet. None while Learning is off or paused."""
+
+    if not settings.enabled or settings.paused:
+        return None
+    moment = now or datetime.now()
+    began = moment.replace(hour=start, minute=0, second=0, microsecond=0)
+    inside = start <= moment.hour < end if start <= end else (moment.hour >= start or moment.hour < end)
+    if inside and began > moment:
+        began -= timedelta(days=1)
+    if inside:
+        done = bool(night and night.get("night") == began.date().isoformat() and night.get("state") != "stopped")
+        upcoming = began + timedelta(days=1) if done else moment
+    else:
+        upcoming = began if began > moment else began + timedelta(days=1)
+    return upcoming.isoformat(timespec="minutes")
+
+
+_OVERNIGHT_STATES = frozenset({"done", "nothing", "stopped", "claude_plan", "no_model", "limit", "unavailable",
+                               "failed"})
+
+
+def _night() -> dict[str, Any] | None:
+    if not learning.store_exists():
+        return None
+    try:
+        from row_bot.learning import diagnosis
+
+        return diagnosis.last_night(_store())
+    except Exception:
+        logger.debug("Learning could not read last night's look", exc_info=True)
+        return None
+
+
+def _overnight(night: dict[str, Any] | None, today: date | None = None) -> dict[str, Any] | None:
+    """Last night's look (UX §3 Overnight): only a recent one, in counts."""
+
+    if not night or night.get("state") not in _OVERNIGHT_STATES:
+        return None
+    try:
+        when = date.fromisoformat(str(night.get("night")))
+    except ValueError:
+        return None
+    if ((today or date.today()) - when).days > 1:
+        return None
+    return {"night": when.isoformat(), "state": night["state"], "found": max(0, int(night.get("found") or 0)),
+            "drafted": max(0, int(night.get("drafted") or 0)), "left_out": max(0, int(night.get("refused") or 0)),
+            "needs_examples": max(0, int(night.get("needs_examples") or 0)),
+            "looks_like_bug": max(0, int(night.get("bugs") or 0))}
+
+
+_CHANGE_OF = {"lesson": "lesson", "behaviour": "way_of_working", "create_skill": "skill", "patch_skill": "skill"}
+_KINDS = ("document_lookups", "structured_transforms", "small_coding", "tool_workflows", "other")
+_WHY = ("chats", "corrections", "stops", "retries", "denials", "failures", "imported")
+
+
+def _changes() -> list[dict[str, Any]]:
+    """Learning's drafted changes waiting to be tested (UX §7), newest first."""
+
+    if not learning.store_exists():
+        return []
+    try:
+        from row_bot.learning import diagnosis
+
+        proposals = diagnosis.drafts(_store())
+    except Exception:
+        logger.debug("Learning could not read its drafted changes", exc_info=True)
+        return []
+    found = []
+    for proposal in proposals:
+        payload = proposal.get("payload") or {}
+        meta = payload.get("learning") or {}
+        change = _CHANGE_OF.get(str(proposal.get("proposal_type")))
+        if change is None or proposal.get("status") != "draft" or meta.get("state") != "waiting_to_test":
+            continue
+        why = meta.get("why") if isinstance(meta.get("why"), dict) else {}
+        text = payload.get("text") or payload.get("description") or payload.get("updated_instructions") or ""
+        kind = str(meta.get("kind_of_work") or "other")
+        found.append({
+            "id": _text(proposal.get("id"), 128),
+            "change": change,
+            "title": _text(proposal.get("title"), 200),
+            "kind": kind if kind in _KINDS else "other",
+            "state": "waiting_to_test",
+            "created_at": _text(proposal.get("created_at"), 64),
+            "text": _text(text, 1200),
+            "why": {key: max(0, int(why.get(key) or 0)) for key in _WHY},
+            "never_automatic": bool(meta.get("never_automatic")),
+        })
+    return found[:50]
+
+
+def _kinds_learning(changes: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """Kinds of work with a change waiting to be tested, or that need more examples (UX §3)."""
+
+    states: dict[str, str] = {item["kind"]: "testing_change" for item in changes}
+    if learning.store_exists():
+        try:
+            from row_bot.learning.contracts import Attempt
+
+            latest: dict[str, Attempt] = {}
+            for item in _store().find("attempt", limit=100_000):
+                if isinstance(item, Attempt) and item.issue and item.kind_of_work in _KINDS:
+                    if item.kind_of_work not in latest or item.created_at > latest[item.kind_of_work].created_at:
+                        latest[item.kind_of_work] = item
+            for kind, item in latest.items():
+                if kind not in states and item.reason.startswith("needs_examples"):
+                    states[kind] = "needs_examples"
+        except Exception:
+            logger.debug("Learning could not read what it is learning", exc_info=True)
+    return [{"kind": kind, "state": states[kind]} for kind in _KINDS if kind in states]
 
 
 def _past_chats(settings: learning.LearningSettings) -> dict[str, Any]:
@@ -736,6 +851,8 @@ def read_learning(*, validate: Callable[[], None]) -> dict[str, Any]:
     opted_out = _store().opted_out_chats() if learning.store_exists() else []
     state = "off" if not settings.enabled else "paused" if settings.paused else "on"
     training = _training(settings)  # first: it loads the runner the engine's state comes from
+    night = _night() if settings.enabled else None
+    changes = _changes() if settings.enabled else []
     data = {
         "schema_version": 1,
         "state": state,
@@ -747,7 +864,7 @@ def read_learning(*, validate: Callable[[], None]) -> dict[str, Any]:
         },
         "apply_mode": settings.apply_mode,
         "spending": _spending(settings),
-        "quiet_hours": _quiet_hours(root),
+        "quiet_hours": _quiet_hours(root, settings, night),
         "past_chats": _past_chats(settings),
         "personal_model": _personal_model(settings),
         "training": training,
@@ -755,6 +872,9 @@ def read_learning(*, validate: Callable[[], None]) -> dict[str, Any]:
         "opted_out_conversations": [_text(item, 256) for item in opted_out[:2000]],
         "owner_unset_channels": _owner_unset_channels(),
         "needs_you": _needs_you(settings),
+        "overnight": _overnight(night),
+        "changes": changes,
+        "kinds_learning": _kinds_learning(changes) if settings.enabled else [],
     }
     data["revision"] = sha256(
         json.dumps(_control_state(settings, opted_out), sort_keys=True).encode("utf-8")
@@ -1599,6 +1719,9 @@ def _perform(
             report = _store().delete_all()
         except LearningStoreError:
             raise ClientPlatformError("learning_data_busy") from None
+        from row_bot import evolution
+
+        evolution.remove_learning_drafts()  # the changes drafted from it go too (never one in use)
         summary = f"Learning data deleted ({_size_words(report.bytes_freed + runs_bytes)})."
     else:
         # An action no branch handles is refused: it never falls through to deleting learning data.

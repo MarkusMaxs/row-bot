@@ -61,7 +61,7 @@ TRAIN_PLACES = ("this_computer", "hugging_face")
 # Starting models a personal model can be trained from (``training/hardware.py`` describes them,
 # ``training/weights.py`` pins them): the 8 GB tier's first (the default, O23), then the larger tiers'
 # (L2x, O90). A card trains only the certified ones it fits (``HardwareCheck.starting_models``).
-STARTING_MODELS = ("qwen3.5-2b", "qwen3.5-9b", "qwen3.8-27b")
+STARTING_MODELS = ("qwen3.5-2b", "qwen3.5-9b")
 # The answer to the download ask after turning Learning on: not asked yet, Download
 # ("waiting": the person agreed; L2b downloads when they tap it, and an old answer reads
 # as "Ready to download", O36) or Not now.

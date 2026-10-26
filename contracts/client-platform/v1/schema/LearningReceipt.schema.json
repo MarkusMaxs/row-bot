@@ -211,6 +211,129 @@
       "title": "LearningCardRoom",
       "type": "object"
     },
+    "LearningChangeView": {
+      "additionalProperties": false,
+      "description": "A change Learning drafted (UX \u00a77 Changes). Until L3b tests it, it only waits to be tested.",
+      "properties": {
+        "change": {
+          "enum": [
+            "lesson",
+            "way_of_working",
+            "skill"
+          ],
+          "title": "Change",
+          "type": "string"
+        },
+        "created_at": {
+          "maxLength": 64,
+          "title": "Created At",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "document_lookups",
+            "structured_transforms",
+            "small_coding",
+            "tool_workflows",
+            "other"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "never_automatic": {
+          "title": "Never Automatic",
+          "type": "boolean"
+        },
+        "state": {
+          "const": "waiting_to_test",
+          "title": "State",
+          "type": "string"
+        },
+        "text": {
+          "maxLength": 1200,
+          "title": "Text",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 200,
+          "title": "Title",
+          "type": "string"
+        },
+        "why": {
+          "$ref": "#/$defs/LearningChangeWhy"
+        }
+      },
+      "required": [
+        "id",
+        "change",
+        "title",
+        "kind",
+        "state",
+        "created_at",
+        "text",
+        "why",
+        "never_automatic"
+      ],
+      "title": "LearningChangeView",
+      "type": "object"
+    },
+    "LearningChangeWhy": {
+      "additionalProperties": false,
+      "description": "Why a change was drafted, in counts only (never anyone's words, UX \u00a74).",
+      "properties": {
+        "chats": {
+          "minimum": 0,
+          "title": "Chats",
+          "type": "integer"
+        },
+        "corrections": {
+          "minimum": 0,
+          "title": "Corrections",
+          "type": "integer"
+        },
+        "denials": {
+          "minimum": 0,
+          "title": "Denials",
+          "type": "integer"
+        },
+        "failures": {
+          "minimum": 0,
+          "title": "Failures",
+          "type": "integer"
+        },
+        "imported": {
+          "minimum": 0,
+          "title": "Imported",
+          "type": "integer"
+        },
+        "retries": {
+          "minimum": 0,
+          "title": "Retries",
+          "type": "integer"
+        },
+        "stops": {
+          "minimum": 0,
+          "title": "Stops",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "chats",
+        "corrections",
+        "stops",
+        "retries",
+        "denials",
+        "failures",
+        "imported"
+      ],
+      "title": "LearningChangeWhy",
+      "type": "object"
+    },
     "LearningChannelNote": {
       "additionalProperties": false,
       "properties": {
@@ -732,6 +855,37 @@
       "title": "LearningExamples",
       "type": "object"
     },
+    "LearningKindState": {
+      "additionalProperties": false,
+      "description": "Where Learning stands on a kind of work (UX \u00a73 \"What Row-Bot is learning\"), besides models in use.",
+      "properties": {
+        "kind": {
+          "enum": [
+            "document_lookups",
+            "structured_transforms",
+            "small_coding",
+            "tool_workflows",
+            "other"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "testing_change",
+            "needs_examples"
+          ],
+          "title": "State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "state"
+      ],
+      "title": "LearningKindState",
+      "type": "object"
+    },
     "LearningNeedsYou": {
       "additionalProperties": false,
       "description": "One line of Overview's Needs you about the personal model (UX \u00a73, \u00a75).",
@@ -786,6 +940,67 @@
         "title"
       ],
       "title": "LearningNeedsYou",
+      "type": "object"
+    },
+    "LearningOvernight": {
+      "additionalProperties": false,
+      "description": "Last night's look for things to improve (L3a; UX \u00a73 Overnight), in counts the client words.",
+      "properties": {
+        "drafted": {
+          "minimum": 0,
+          "title": "Drafted",
+          "type": "integer"
+        },
+        "found": {
+          "minimum": 0,
+          "title": "Found",
+          "type": "integer"
+        },
+        "left_out": {
+          "minimum": 0,
+          "title": "Left Out",
+          "type": "integer"
+        },
+        "looks_like_bug": {
+          "minimum": 0,
+          "title": "Looks Like Bug",
+          "type": "integer"
+        },
+        "needs_examples": {
+          "minimum": 0,
+          "title": "Needs Examples",
+          "type": "integer"
+        },
+        "night": {
+          "maxLength": 16,
+          "title": "Night",
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "done",
+            "nothing",
+            "stopped",
+            "claude_plan",
+            "no_model",
+            "limit",
+            "unavailable",
+            "failed"
+          ],
+          "title": "State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "night",
+        "state",
+        "found",
+        "drafted",
+        "left_out",
+        "needs_examples",
+        "looks_like_bug"
+      ],
+      "title": "LearningOvernight",
       "type": "object"
     },
     "LearningPastChats": {
@@ -1164,8 +1379,24 @@
           "title": "Apply Mode",
           "type": "string"
         },
+        "changes": {
+          "items": {
+            "$ref": "#/$defs/LearningChangeView"
+          },
+          "maxItems": 50,
+          "title": "Changes",
+          "type": "array"
+        },
         "data": {
           "$ref": "#/$defs/LearningData"
+        },
+        "kinds_learning": {
+          "items": {
+            "$ref": "#/$defs/LearningKindState"
+          },
+          "maxItems": 5,
+          "title": "Kinds Learning",
+          "type": "array"
         },
         "needs_you": {
           "items": {
@@ -1183,6 +1414,17 @@
           "maxItems": 2000,
           "title": "Opted Out Conversations",
           "type": "array"
+        },
+        "overnight": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LearningOvernight"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "owner_unset_channels": {
           "items": {

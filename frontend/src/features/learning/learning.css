@@ -584,3 +584,39 @@
   flex: none;
   margin-top: 2px;
 }
+/* L3a: last night's look (Overnight) and a drafted change's details. */
+.learning-overnight {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.learning-overnight > li {
+  color: var(--text-primary);
+  line-height: var(--leading-13);
+  overflow-wrap: anywhere;
+}
+.learning-overnight > li[data-tone='warning'] {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--status-warning-border);
+  border-radius: var(--radius-card);
+  background: var(--status-warning-background);
+}
+.learning-change-details {
+  display: grid;
+  gap: var(--space-2);
+}
+.learning-change-details > p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+/* A drafted change's state and kind wrap on a phone rather than cut "Waiting to be tested" short. */
+.learning-change-row .entity-row-meta {
+  flex-wrap: wrap;
+  column-gap: 8px;
+  row-gap: 0;
+}
+.learning-change-row .entity-row-meta .status-indicator {
+  flex: none;
+}

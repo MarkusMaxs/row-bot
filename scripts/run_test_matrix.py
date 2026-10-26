@@ -67,7 +67,8 @@ APP_LANES = ("tests", "--ignore=tests/docs", "--ignore=tests/marketing")
 # cards) with Microsoft 365's tenant step and a failed step in words,
 # pages (a plan approved and sent, a dashboard, a checklist, Library › Pages, the sandbox),
 # and Learning (preview): turning it on, its tab, Teach and Undo, a chat switched off, the personal
-# model's download, training, its versions, and comparing, trying and using it.
+# model's download, training, its versions, comparing, trying and using it, and the night's look
+# for things to improve with the changes it drafted.
 BROWSER_SMOKE_SPECS = (
     "bootstrap",
     "setup-first-run",
@@ -105,6 +106,7 @@ BROWSER_SMOKE_SPECS = (
     "learning-download",
     "learning-version",
     "learning-use",
+    "learning-diagnosis",
 )
 # Nightly at desktop width, in four fixture runs (each run starts a fresh backend).
 BROWSER_NIGHTLY_SPECS = (

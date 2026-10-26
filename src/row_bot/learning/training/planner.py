@@ -158,25 +158,6 @@ class Planner:
         return self.jobs.replan(job, steps_total=steps, checkpoint_every=recipe.checkpoint_interval(steps),
                                 recipe=spec)
 
-    def refresh(self, job: Any) -> Any:
-        """A run that hasn't trained a step starts with the recipe as it is now (O117): this computer's
-        recipe with the person's own Advanced choices, not the one current when it was planned (a recipe
-        update would otherwise wait a run). Its steps follow the recipe's passes; its rows stay."""
-
-        plan = self.jobs.plan_of(job)
-        examples = int((plan.get("dataset") or {}).get("examples") or 0)
-        if examples <= 0:
-            return job
-        recipe = self.recipe()
-        steps = recipe.steps_for(examples)
-        spec = recipe.spec()
-        if spec == plan["recipe"] and steps == job.steps_total:
-            return job
-        logger.info("Learning starts personal model v%s with the recipe as it is now (%s, %d steps)", job.version,
-                    recipe.name, steps)
-        return self.jobs.replan(job, steps_total=steps, checkpoint_every=recipe.checkpoint_interval(steps),
-                                recipe=spec)
-
     def trained_ids(self) -> set[str]:
         if self._trained_ids is not None:
             return self._trained_ids()

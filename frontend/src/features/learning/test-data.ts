@@ -2,9 +2,11 @@
 import { vi } from 'vitest';
 import type {
   LearningAdvanced,
+  LearningChangeView,
   LearningComparison,
   LearningDownload,
   LearningHardware,
+  LearningOvernight,
   LearningPersonalModel,
   LearningReceipt,
   LearningSnapshot,
@@ -487,4 +489,46 @@ export function comparedModel(
     export_folder: 'C:\\Users\\me\\Documents',
     ...overrides,
   });
+}
+
+/** A drafted change waiting to be tested (L3a; never real data). */
+export function draftedChange(
+  overrides: Partial<LearningChangeView> = {},
+): LearningChangeView {
+  return {
+    id: 'proposal_1',
+    change: 'lesson',
+    title: 'Use the current policy',
+    kind: 'document_lookups',
+    state: 'waiting_to_test',
+    created_at: new Date(Date.now() - 3_600_000).toISOString(),
+    text: 'When two versions of a policy exist, answer from the newest approved one and say which.',
+    why: {
+      chats: 3,
+      corrections: 2,
+      stops: 1,
+      retries: 0,
+      denials: 0,
+      failures: 0,
+      imported: 0,
+    },
+    never_automatic: false,
+    ...overrides,
+  };
+}
+
+/** Last night's look (L3a): found 3, drafted 2 by default. */
+export function overnight(
+  overrides: Partial<LearningOvernight> = {},
+): LearningOvernight {
+  return {
+    night: new Date().toISOString().slice(0, 10),
+    state: 'done',
+    found: 3,
+    drafted: 2,
+    left_out: 0,
+    needs_examples: 0,
+    looks_like_bug: 0,
+    ...overrides,
+  };
 }

@@ -8,8 +8,8 @@ practice already leave out (:meth:`LearningStore.held_out_ids`), so nothing ever
 the ``held_out_correction`` mark that says the vault should hold it with its corrected action as
 the reference (L3a stores and tests it; :func:`waiting_for_vault` is that seam).
 
-- **Confirmed correction**: a Teach (or, from L3a, a next-message correction) linked to the
-  decision it corrects, not withdrawn.
+- **Confirmed correction**: a Teach or a next-message correction (``corrections`` confirms those
+  first, on every pass) linked to the decision it corrects, not withdrawn.
 - **Exact capture** (O89): the decision's fidelity is ``exact`` or ``redacted``. Imported past
   chats (``partial``) are never held out, never hidden, and don't count towards "every 2nd".
 - **Time order, append-only**: corrections newer than the last one considered are walked in the
@@ -58,6 +58,9 @@ def mark_corrections(store: LearningStore) -> HoldReport:
 
     if not store.exists():
         return HoldReport(0, 0, ())
+    from row_bot.learning import corrections
+
+    corrections.confirm(store)  # the person's next-message corrections count too (O12)
     horizon = float(store.meta_value(_HORIZON, "0") or 0)
     try:
         decided: list[str] = [str(item) for item in json.loads(store.meta_value(_COUNTED, "[]"))]
@@ -94,8 +97,9 @@ def mark_corrections(store: LearningStore) -> HoldReport:
 
 
 def waiting_for_vault(store: LearningStore) -> set[str]:
-    """Corrected decisions held out that the vault should hold (L3a reads this, stores each with its
-    corrected action as the reference, and keeps them out of everything else as now)."""
+    """Corrected decisions held out that the vault should hold: ``evaluation.refresh_audit`` stores each
+    with its corrected action as the reference once the person accepted a redo; they stay out of
+    everything else either way."""
 
     return store.held_out_correction_ids()
 

@@ -4271,6 +4271,62 @@ class LearningNeedsYou(WireModel):
     title: str = Field(max_length=200)
 
 
+LearningAnyKind = Literal["document_lookups", "structured_transforms", "small_coding", "tool_workflows", "other"]
+
+
+class LearningOvernight(WireModel):
+    """Last night's look for things to improve (L3a; UX §3 Overnight), in counts the client words."""
+
+    # The quiet-hours night it ran (local date).
+    night: str = Field(max_length=16)
+    # done/nothing: it looked; stopped: the person came back, it goes on later that night; claude_plan:
+    # Learning makes no calls through the person's Claude plan (O99); no_model, limit, unavailable, failed.
+    state: Literal["done", "nothing", "stopped", "claude_plan", "no_model", "limit", "unavailable", "failed"]
+    found: int = Field(ge=0)
+    drafted: int = Field(ge=0)
+    # Ideas left out by E9 (they'd have added an address, a link, a password or a permission, or rested on
+    # no feedback from the person).
+    left_out: int = Field(ge=0)
+    needs_examples: int = Field(ge=0)
+    looks_like_bug: int = Field(ge=0)
+
+
+class LearningChangeWhy(WireModel):
+    """Why a change was drafted, in counts only (never anyone's words, UX §4)."""
+
+    chats: int = Field(ge=0)
+    corrections: int = Field(ge=0)
+    stops: int = Field(ge=0)
+    retries: int = Field(ge=0)
+    denials: int = Field(ge=0)
+    failures: int = Field(ge=0)
+    # How many of them came from past chats Learning read when it was turned on.
+    imported: int = Field(ge=0)
+
+
+class LearningChangeView(WireModel):
+    """A change Learning drafted (UX §7 Changes). Until L3b tests it, it only waits to be tested."""
+
+    id: str = Field(max_length=128)
+    change: Literal["lesson", "way_of_working", "skill"]
+    title: str = Field(max_length=200)
+    kind: LearningAnyKind
+    state: Literal["waiting_to_test"]
+    created_at: str = Field(max_length=64)
+    # The lesson or way of working in its own words, or what a skill is for.
+    text: str = Field(max_length=1200)
+    why: LearningChangeWhy
+    # It rests only on tool or web content: it never goes into use by itself (E9).
+    never_automatic: bool
+
+
+class LearningKindState(WireModel):
+    """Where Learning stands on a kind of work (UX §3 "What Row-Bot is learning"), besides models in use."""
+
+    kind: LearningAnyKind
+    state: Literal["testing_change", "needs_examples"]
+
+
 class LearningData(WireModel):
     exists: bool
     bytes: int = Field(ge=0)
@@ -4338,6 +4394,10 @@ class LearningSnapshot(WireModel):
     opted_out_conversations: list[Annotated[str, StringConstraints(max_length=256)]] = Field(max_length=2000)
     owner_unset_channels: list[LearningChannelNote] = Field(max_length=8)
     needs_you: list[LearningNeedsYou] = Field(default_factory=list, max_length=20)
+    # L3a: last night's look for things to improve, the changes it drafted and where each kind of work stands.
+    overnight: LearningOvernight | None = None
+    changes: list[LearningChangeView] = Field(default_factory=list, max_length=50)
+    kinds_learning: list[LearningKindState] = Field(default_factory=list, max_length=5)
 
 
 class LearningNamedValue(WireModel):
@@ -4475,7 +4535,7 @@ class LearningSetupChoices(WireModel):
     monthly_token_limit: int = Field(ge=0, le=1_000_000_000)
     train_in_quiet_hours: bool
     train_where: Literal["this_computer", "hugging_face"]
-    starting_model: Literal["qwen3.5-2b", "qwen3.5-9b", "qwen3.8-27b"] = "qwen3.5-2b"
+    starting_model: Literal["qwen3.5-2b", "qwen3.5-9b"] = "qwen3.5-2b"
 
 
 class LearningCommand(WireModel):
@@ -4493,7 +4553,7 @@ class LearningCommand(WireModel):
     ]
     setup: LearningSetupChoices | None = None
     # use_smaller_model (O112): the smaller starting model the Personal model view offered.
-    model: Literal["", "qwen3.5-2b", "qwen3.5-9b", "qwen3.8-27b"] = ""
+    model: Literal["", "qwen3.5-2b", "qwen3.5-9b"] = ""
     # L2c2: the version an action is for, the kind of work, Export…'s folder, Advanced's values and a
     # Needs you line to dismiss.
     version: int | None = Field(default=None, ge=1, le=100_000)

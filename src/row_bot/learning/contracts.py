@@ -709,9 +709,15 @@ class Attempt(Record):
     Every attempt is recorded with its lineage (``parent_ids``), hypothesis,
     evidence, outcome, cost and the reason it was or wasn't kept. Only an
     attempt that improved can be kept.
+
+    ``issue`` (v2, L3a) names the issue it answers (its kind of work and what went
+    wrong, ``document_lookups:corrected``), so a later night knows what was tried.
     """
 
     KIND: ClassVar[str] = "attempt"
+    SCHEMA_VERSION: ClassVar[int] = 2
+    # v1 had no issue: it reads as None.
+    MIGRATIONS: ClassVar[Mapping[int, Callable[[dict[str, Any]], dict[str, Any]]]] = {1: lambda data: data}
     FORM: ClassVar[Literal["jsonl", "manifest"]] = "jsonl"
 
     id: str = _field(pattern="id")
@@ -730,6 +736,7 @@ class Attempt(Record):
     release_id: str | None = _field(None, pattern="id")
     finished_at: float | None = _field(None, minimum=0)
     source_thread_ids: tuple[str, ...] = _field((), pattern="thread", items=50_000)
+    issue: str | None = _field(None, text=128)
 
     def _validate(self) -> None:
         if self.kept and self.outcome != "improved":

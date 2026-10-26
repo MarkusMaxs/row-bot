@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { clientError } from '../../api/errors';
 import type {
+  LearningChangeView,
   LearningHardware,
   LearningLessonPage,
   LearningSnapshot,
@@ -55,13 +56,19 @@ import {
 import { CardRoomNotice } from './CardRoomNotice';
 import { TrainingProgress } from './TrainingProgress';
 import {
+  CHANGE_NAMES,
   dayWords,
+  KIND_STATE_WORDS,
+  kindLabel,
   memoryAdvice,
   memoryNeedWords,
+  nextLookWords,
+  overnightLines,
   plural,
   quietHoursWords,
   sizeWords,
   tokenWords,
+  whyWords,
 } from './words';
 import './learning.css';
 
@@ -84,11 +91,11 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-/** "Quiet hours 1:00 AM–5:00 AM · 240K of 2M tokens this month". */
+/** "Next look tonight at 1:00 AM · 240K of 2M tokens this month" (designs §3). */
 function headerLine(snapshot: LearningSnapshot) {
   const { quiet_hours: hours, spending } = snapshot;
   const when = hours.next_look_at
-    ? `Next look ${new Intl.DateTimeFormat(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' }).format(new Date(hours.next_look_at))}`
+    ? nextLookWords(hours.next_look_at)
     : `Quiet hours ${quietHoursWords(hours.window_start, hours.window_end)}`;
   return `${when} · ${tokenWords(spending.used_tokens)} of ${tokenWords(spending.limit_tokens)} tokens this month`;
 }
@@ -159,6 +166,15 @@ function Overview({
 }) {
   const needs = io.snapshot?.needs_you ?? [];
   const uses = io.snapshot?.personal_model.uses ?? [];
+  const night = io.snapshot?.overnight;
+  const lines = night ? overnightLines(night) : [];
+  const learning = io.snapshot?.kinds_learning ?? [];
+  const kinds = [
+    ...uses.map((item) => item.kind),
+    ...learning
+      .map((item) => item.kind)
+      .filter((kind) => !uses.some((item) => item.kind === kind)),
+  ];
   return (
     <div className="learning-section-list">
       <Section title="Needs you">
@@ -171,13 +187,23 @@ function Overview({
         )}
       </Section>
       <Section title="Overnight">
-        <InlineEmpty icon={<Moon size={15} />}>
-          Nothing has run yet. What Learning does in quiet hours shows here the
-          next morning.
-        </InlineEmpty>
+        {lines.length ? (
+          <ul className="learning-overnight">
+            {lines.map((line) => (
+              <li key={line.text} data-tone={line.tone}>
+                {line.text}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <InlineEmpty icon={<Moon size={15} />}>
+            Nothing has run yet. What Learning does in quiet hours shows here
+            the next morning.
+          </InlineEmpty>
+        )}
       </Section>
       <Section title="What Row-Bot is learning">
-        {uses.length ? (
+        {kinds.length ? (
           <table className="learning-results learning-kinds">
             <caption className="visually-hidden">
               Kinds of work and where they stand
@@ -189,16 +215,23 @@ function Overview({
               </tr>
             </thead>
             <tbody>
-              {uses.map((item) => (
-                <tr key={item.kind}>
-                  <th scope="row">{item.label}</th>
-                  <td>
-                    {item.state === 'trial'
-                      ? `Trying personal model v${item.version}`
-                      : `Personal model v${item.version} in use`}
-                  </td>
-                </tr>
-              ))}
+              {kinds.map((kind) => {
+                const use = uses.find((item) => item.kind === kind);
+                const state = learning.find((item) => item.kind === kind);
+                const words = [
+                  use &&
+                    (use.state === 'trial'
+                      ? `Trying personal model v${use.version}`
+                      : `Personal model v${use.version} in use`),
+                  state && KIND_STATE_WORDS[state.state],
+                ].filter(Boolean);
+                return (
+                  <tr key={kind}>
+                    <th scope="row">{use?.label ?? kindLabel(kind)}</th>
+                    <td>{words.join(' · ')}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         ) : (
@@ -229,8 +262,43 @@ const CHANGE_EMPTY: Record<ChangeFilter, string> = {
   not_used: 'No changes were turned down or tested worse.',
 };
 
-function Changes() {
-  const [filter, setFilter] = useState<ChangeFilter>('ready');
+function ChangeRow({ change }: { change: LearningChangeView }) {
+  return (
+    <EntityRow
+      className="learning-change-row"
+      title={change.title}
+      icon={<GraduationCap size={16} />}
+      status={{ tone: 'neutral', label: 'Waiting to be tested' }}
+      meta={`${CHANGE_NAMES[change.change]} · ${kindLabel(change.kind)}${
+        change.created_at ? ` · ${relativeTime(change.created_at)}` : ''
+      }`}
+      details={
+        <div className="learning-change-details">
+          <p>
+            <strong>Why</strong> {whyWords(change)}
+          </p>
+          {change.text && (
+            <p>
+              <strong>What changes</strong> {change.text}
+            </p>
+          )}
+          {change.never_automatic && (
+            <p className="home-caption">
+              It rests only on what tools or web pages said, so it’s never used
+              by itself.
+            </p>
+          )}
+        </div>
+      }
+    />
+  );
+}
+
+function Changes({ changes }: { changes: LearningChangeView[] }) {
+  const [filter, setFilter] = useState<ChangeFilter>(
+    changes.length ? 'testing' : 'ready',
+  );
+  const shown = filter === 'testing' ? changes : [];
   return (
     <div className="learning-section-list">
       <div className="learning-filters">
@@ -247,10 +315,25 @@ function Changes() {
           ]}
         />
       </div>
-      <InlineEmpty icon={<GraduationCap size={15} />}>
-        {CHANGE_EMPTY[filter]} Row-Bot proposes a change only after testing it
-        during quiet hours.
-      </InlineEmpty>
+      {shown.length ? (
+        <>
+          <p className="home-caption">
+            Row-Bot drafted {plural(shown.length, 'change')} from what went
+            wrong. Each is tested on work it hasn’t seen before it’s offered;
+            nothing is used yet.
+          </p>
+          <EntityList label="Changes waiting to be tested">
+            {shown.map((change) => (
+              <ChangeRow key={change.id} change={change} />
+            ))}
+          </EntityList>
+        </>
+      ) : (
+        <InlineEmpty icon={<GraduationCap size={15} />}>
+          {CHANGE_EMPTY[filter]} Row-Bot proposes a change only after testing it
+          during quiet hours.
+        </InlineEmpty>
+      )}
     </div>
   );
 }
@@ -675,7 +758,7 @@ export default function LearningHome({
       {view === 'overview' && (
         <Overview io={io} onReview={() => setReviewing(true)} />
       )}
-      {view === 'changes' && <Changes />}
+      {view === 'changes' && <Changes changes={snapshot.changes ?? []} />}
       {view === 'lessons' && <Lessons io={io} />}
       {view === 'model' && (
         <PersonalModel

@@ -410,14 +410,14 @@ it('a 32 GB card offers its own tier’s model first, the smaller tiers’ as ch
       id: '32gb',
       label: '32 GB',
       certified: true,
-      summary: 'Can train large models (up to about 27B) on your tasks.',
+      summary: 'Can train models up to about 9B on your tasks.',
     },
     starting_models: [
       {
-        id: 'qwen3.8-27b',
-        name: 'Qwen3.8 27B',
+        id: 'qwen3.5-9b',
+        name: 'Qwen3.5 9B',
         licence: 'Apache 2.0',
-        download_bytes: 55_586_113_293,
+        download_bytes: 19_331_993_000,
       },
       ...GPU_8GB.starting_models,
     ],
@@ -432,14 +432,14 @@ it('a 32 GB card offers its own tier’s model first, the smaller tiers’ as ch
   const sheet = await screen.findByRole('dialog', { name: 'Turn on Learning' });
   expect(
     await within(sheet).findByText(
-      'Can train large models (up to about 27B) on your tasks.',
+      'Can train models up to about 9B on your tasks.',
     ),
   ).toBeVisible();
   const starting = within(sheet).getByRole('combobox', {
     name: 'Starting model',
   });
   expect(starting).toHaveDisplayValue(
-    /^Qwen3\.8 27B · Apache 2\.0 · 55\.6\sGB download$/,
+    /^Qwen3\.5 9B · Apache 2\.0 · 19\.3\sGB download$/,
   );
   expect(
     within(starting).getByRole('option', {
