@@ -63,6 +63,9 @@ logger = logging.getLogger("row_bot.seeded")
 
 EXIT_PLANNED_CRASH = 86
 EXIT_TOKEN_CAP = 75
+#: The ChatGPT lane answered with a usage or rate limit: the run stops at once (the person's own use comes first).
+EXIT_PROVIDER_LIMIT = 76
+_PROVIDER_LIMIT = ("rate limit", "rate_limit", "usage limit", "usage_limit", "429", "too many requests")
 STAGES = ("profile", "past", "days", "generations", "checks", "benchmark", "tidy")
 #: Extra simulated days generated beyond the run, for requests asked outside the stream (a night
 #: request while training, the asked-for trial).
@@ -751,6 +754,14 @@ class PersonRun:
                 record = self.ask(request, label="generations")
                 self.state.data["requests"].append(record)
                 self.save()
+                errors = " ".join(str(item.get("error") or "") for item in record["attempts"]).lower()
+                if any(marker in errors for marker in _PROVIDER_LIMIT):
+                    self.note("the ChatGPT lane answered with a usage or rate limit: stopping at once")
+                    raise SystemExit(EXIT_PROVIDER_LIMIT)
+            # The computer is on for quiet hours every ``night_every`` nights (fewer nights, the same work).
+            if (day - first + 1) % max(1, int(self.args.night_every)):
+                continue
+            self.check_cap()
             if str(day) not in self.state.data["nights"] or not self.state.data["nights"][str(day)].get("done"):
                 self.night(day)
             found["nights"][str(day)] = self._trial_night()
@@ -1616,6 +1627,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="L4a: inherited generations of how Row-Bot learns (trials), then the final set")
     parser.add_argument("--generation-days", type=int, default=0,
                         help="L4a: at most this many simulated days after the run for the generations")
+    parser.add_argument("--night-every", type=int, default=1,
+                        help="L4a: during the generations, quiet hours run every this many nights")
     parser.add_argument("--monthly-limit", type=int, default=MONTHLY_LIMIT,
                         help="L4a: the person's monthly Learning limit during the generations (trials get 20%%)")
     args = parser.parse_args(argv)

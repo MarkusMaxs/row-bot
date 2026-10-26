@@ -186,7 +186,8 @@ class ReleaseCheck:
             command.append("--pilot-compare")
         if self.args.generations:
             command += ["--generations", str(self.args.generations), "--generation-days",
-                        str(self.args.generation_days), "--monthly-limit", str(self.args.monthly_limit)]
+                        str(self.args.generation_days), "--monthly-limit", str(self.args.monthly_limit),
+                        "--night-every", str(self.args.night_every)]
         record: dict[str, Any] = {"exits": []}
         for attempt in range(MAX_RESTARTS + 1):
             started = time.monotonic()
@@ -323,6 +324,8 @@ def parse(argv: Sequence[str] | None = None) -> argparse.Namespace:
                         help="L4a: inherited generations of how Row-Bot learns in simulated time (3 for the gate)")
     parser.add_argument("--generation-days", type=int, default=120,
                         help="L4a: at most this many simulated days after the run for the generations")
+    parser.add_argument("--night-every", type=int, default=1,
+                        help="L4a: during the generations, quiet hours run every this many nights")
     parser.add_argument("--monthly-limit", type=int, default=100_000_000,
                         help="L4a: each person's monthly Learning limit during the generations (trials get 20%%)")
     parser.add_argument("--plan", action="store_true", help="print the plan and run nothing")

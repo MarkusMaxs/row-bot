@@ -52,8 +52,9 @@ TRIAL_SHARE = 0.20
 #: Runs per arm of every judged problem (pre-registration §4).
 REPEATS = 3
 CHALLENGERS = 1
-#: The changes an arm may accept in one trial (each is judged on every fresh problem).
-MAX_ACCEPTED = 2
+#: The changes an arm may accept in one trial: each is judged on every fresh problem, 3 runs each, so this bounds
+#: a trial's judging (with GPT-6.1 Sol about 1.8M tokens a change on 30 problems of S1's seeded work).
+MAX_ACCEPTED = 1
 #: Each arm's equal budget: at most this many tokens (cloud and local), and no trial when fewer would be left.
 ARM_TOKENS_MAX = 2_000_000
 ARM_TOKENS_MIN = 150_000
@@ -550,6 +551,10 @@ def run_trial(store: Any, *, night: str, client: Any, tester_factory: Callable[.
     judged = judge(store, state["id"], ordered, tester=tester, meter=trial_meter, client=client, should_stop=should_stop)
     if judged.get("stopped") == "stopped":
         return _note(store, TrialReport(night, "stopped", state["id"], int(state["problems"])))
+    if judged.get("stopped"):
+        # The trials' share ran out while judging: nothing is decided on part of the problems; the judging runs
+        # again when the share allows (the arms' work is kept).
+        return _note(store, TrialReport(night, "limit", state["id"], int(state["problems"])))
     report = _finish(store, state, ordered, judged, now=moment, night=night)
     _save_state(store, None)
     from row_bot.learning import changed
