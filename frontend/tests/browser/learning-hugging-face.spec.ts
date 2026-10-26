@@ -296,3 +296,34 @@ test('Settings › Learning shows the account, the model and the cap', async ({
   ).toHaveValue('20');
   await shoot(page, info, 'hf-settings');
 });
+
+test('Monitor shows a run on Hugging Face with its cost so far; its Cancel asks first', async ({
+  page,
+}, info) => {
+  await onHuggingFace(page, 'signed_in');
+  await c1(page, 'run', 'training');
+  await page.goto('/app-v2/?tab=monitor');
+  const row = page
+    .getByRole('listitem')
+    .filter({ hasText: /^Personal model v\d+/ });
+  await expect(
+    row.getByText(/^Training on Hugging Face · step 118 of \d+/),
+  ).toBeVisible();
+  await expect(row.getByText(/^\$\d+\.\d\d so far$/)).toBeVisible();
+  await row.evaluate((element) => element.scrollIntoView({ block: 'center' }));
+  await shoot(page, info, 'hf-monitor');
+  await row
+    .getByRole('button', {
+      name: /^Cancel the Hugging Face run of personal model v\d+$/,
+    })
+    .click();
+  const ask = page.getByRole('alertdialog', {
+    name: 'Cancel this run on Hugging Face?',
+  });
+  await expect(ask).toContainText(
+    /Billing stops now \(\$\d+\.\d\d so far\)\. What it trained so far is lost, and the uploaded examples are deleted from Hugging Face\. Earlier versions are kept\./,
+  );
+  await shoot(page, info, 'hf-monitor-cancel');
+  await ask.getByRole('button', { name: 'Keep running' }).click();
+  await expect(ask).toHaveCount(0);
+});

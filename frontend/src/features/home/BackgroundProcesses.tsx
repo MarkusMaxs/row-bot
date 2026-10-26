@@ -138,8 +138,9 @@ export default function BackgroundProcesses({
       overlay.open({
         kind: 'alert',
         title: 'Cancel this run on Hugging Face?',
-        description: `Billing stops now${spent > 0 ? ` ($${spent.toFixed(2)} so far)` : ''}. What it trained so far is lost, and the uploaded examples are deleted from Hugging Face.`,
+        description: `Billing stops now${spent > 0 ? ` ($${spent.toFixed(2)} so far)` : ''}. What it trained so far is lost, and the uploaded examples are deleted from Hugging Face. Earlier versions are kept.`,
         confirmLabel: 'Cancel the run',
+        cancelLabel: 'Keep running',
         onConfirm: () => {
           overlay.close();
           void cancelRemote();

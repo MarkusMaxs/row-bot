@@ -500,6 +500,7 @@ export function TrainingProgress({
         title: 'Cancel this run on Hugging Face?',
         description: `Billing stops now${spent > 0 ? ` (${moneyWords(spent)} so far)` : ''}. What it trained so far is lost, and the uploaded examples are deleted from Hugging Face. Earlier versions are kept.`,
         confirmLabel: 'Cancel the run',
+        cancelLabel: 'Keep running',
         returnFocusTo: opener,
         onConfirm: () => void run(item.action),
       });
