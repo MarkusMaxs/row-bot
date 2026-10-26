@@ -25,6 +25,10 @@ Stages:
   trial whenever 30 fresh hidden problems have built up: the method in use, a challenger and the frozen
   control at equal budget, the winner inherited by itself). After the third trial, once 30 more fresh problems
   have built up, the **final set** judges every generation and the frozen control. Counts only are kept.
+  With ``--main-model ollama:qwen3.8:27b`` (O140) the people's assistant (their turns, Dream, every test and
+  judging replay) runs on that local model while Learning's own calls that name no model (diagnosis, drafting,
+  a method's words) and the simulated person stay on the ChatGPT lane; the card is then booked per block of
+  days and their night, never into the person's quiet hours or while their own Row-Bot trains.
 - ``checks``: the survival checks that need the whole run and not the card (a negative result, a source
   deletion, app/engine version skew).
 - ``benchmark``: the card's work that needs the whole run, last (O116: the release check runs every person's
@@ -76,6 +80,10 @@ MONTHLY_LIMIT = 10_000_000
 PAUSE_PATIENCE_SECONDS = 600
 #: A training job's states once its training finished (a version is made of it, or was).
 TRAINED = ("evaluating", "ready", "trial", "in_use", "not_used")
+#: With a local assistant (``--main-model``): a first guess at a block of days and its night on the card, until
+#: one is measured, and the final set's room (it can't stop part-way).
+FIRST_BLOCK_SECONDS = 90 * 60.0
+FINAL_SET_SECONDS = 4 * 3600.0
 
 
 # ── State ────────────────────────────────────────────────────────────────────
@@ -221,6 +229,9 @@ class PersonRun:
                            label=f"S1 release check, {self.person_id}")
         self.sign_in: SignIn | None = None
         self.main_ref = ""
+        self.improver_ref = ""  # Learning's own calls that name no model (diagnosis, drafting, a method's words)
+        self._card_wanted_seen = False
+        self._card_checked: tuple[float, bool] = (0.0, False)
         self.tools: list[str] = []
         self.apps: Any = None
         self._runner: Any = None
@@ -291,14 +302,42 @@ class PersonRun:
         if not model:
             model = eval_profile.choose_model([item.model_id for item in codex.fetch_codex_model_infos()])
             self.state.data["model"] = model
-        self.main_ref = f"model:codex:{model}"
+        self.improver_ref = f"model:codex:{model}"
+        self.main_ref = self._main_model() or self.improver_ref
         models.adopt_saved_default(self.main_ref)
+        if self.main_ref != self.improver_ref:
+            learning_calls_on(self.improver_ref)
+            self.sim.model_ref = self.improver_ref  # the simulated person's words stay on the ChatGPT lane
         self._tools()
         # Which build of Row-Bot ran which days (a run that goes on after an update says so).
         builds = self.state.data.setdefault("builds", [])
         if not builds or builds[-1].get("build") != self.build:
             builds.append({"build": self.build, "from_day": self.clock.day, "at": time.strftime("%Y-%m-%d %H:%M")})
             self.save()
+
+    def _main_model(self) -> str:
+        """The seeded people's assistant from ``--main-model`` (O140: ``ollama:qwen3.8:27b``), as a model
+        reference; "" keeps GPT-6.1 Sol. A run keeps the main model it started its generations with."""
+
+        wanted = str(getattr(self.args, "main_model", "") or "").strip()
+        ref = f"model:{wanted}" if wanted and not wanted.startswith("model:") else wanted
+        kept = str(self.state.data.get("main_model") or "")
+        if kept and ref and kept != ref:
+            raise ScratchError(f"This run's assistant is {kept}; it can't go on with {ref} (start a fresh copy).")
+        if ref and not kept:
+            if (self.state.data.get("generations") or {}).get("nights"):
+                raise ScratchError(f"This run's generations began on {self.improver_ref}; it can't go on with {ref}.")
+            self.state.data["main_model"] = ref
+            self.save()
+        return kept or ref
+
+    @property
+    def local_main(self) -> bool:
+        """The assistant runs on this computer's card: every turn and replay books it."""
+
+        from row_bot.learning.lease import model_is_local
+
+        return self.main_ref != self.improver_ref and model_is_local(self.main_ref)
 
     def _tools(self) -> None:
         """The person's tools (and the fake apps behind their calendar, mail and tracker). Tools that
@@ -683,8 +722,96 @@ class PersonRun:
         from row_bot.learning.lease import ResourceLease
         from row_bot.learning.runner import NightLook
 
-        return NightLook(lease=ResourceLease(since_activity=self.clock.idle_seconds), root=self.data,
+        # With a local assistant the night's work shares the card: it stops at its next step when the person's
+        # own Row-Bot trains or their quiet hours come (the product's own stop, as for a chat), and goes on after.
+        probes = {"workflows": self._card_wanted} if self.local_main else {}
+        return NightLook(lease=ResourceLease(since_activity=self.clock.idle_seconds, **probes), root=self.data,
                          hours=clock_module.sim_quiet_hours(self.clock, self.data))
+
+    def _card_wanted(self) -> bool:
+        """The person's own Row-Bot is training, or it is their quiet hours from 00:43 (looked at every 15 s)."""
+
+        from tests.e2e.learning.seeded.scratch import QUIET_STOP, in_quiet_hours, person_is_training
+
+        now = time.monotonic()
+        at, wanted = self._card_checked
+        if now - at >= 15.0:
+            wanted = in_quiet_hours(start=QUIET_STOP) or person_is_training()
+            self._card_checked = (now, wanted)
+        self._card_wanted_seen = self._card_wanted_seen or wanted
+        return wanted
+
+    def _main_name(self) -> str:
+        from row_bot.providers.selection import parse_model_ref
+
+        parsed = parse_model_ref(self.main_ref)
+        return parsed[1] if parsed else self.main_ref
+
+    def _block_seconds(self) -> float:
+        """How long a block of days and its night takes on the card: the longest so far, else a first guess."""
+
+        seen = (self.state.data.get("generations") or {}).get("block_seconds") or []
+        return float(max(seen)) if seen else FIRST_BLOCK_SECONDS
+
+    def _hold_card(self, what: str, *, expect_seconds: float | None = None) -> None:
+        """With a local assistant every turn and replay uses the card: it is booked for a block of days and their
+        night, and never into the person's time. Nothing starts while their own Row-Bot trains or in their quiet
+        hours, and a block that wouldn't end before 00:40 waits until after them; when either comes while the
+        card is held, the booking ends and the model is unloaded first."""
+
+        if not self.local_main:
+            return
+        from tests.e2e.learning.seeded.scratch import minutes_until_quiet, person_is_training, quiet_reason
+
+        expect = float(expect_seconds or self._block_seconds())
+        said = ""
+        while True:
+            why = "the person's own Row-Bot is training" if person_is_training() else quiet_reason()
+            if not why and self.gpu.held is None and (left := minutes_until_quiet()) * 60 < expect:
+                why = f"the person's quiet hours begin in {left} min, before about {round(expect / 60)} min of work ends"
+            if not why:
+                break
+            if why != said:
+                self.note(f"{why}: waiting")
+                said = why
+            if self.gpu.held is not None:
+                self.gpu.release()
+                self._unload_main()
+            time.sleep(60.0)
+        if self.gpu.held is None:
+            self.gpu.acquire(what, expect=f"about {max(1, round(expect / 60))} min, 22 GB")
+            self._block_started = time.monotonic()
+
+    def _end_block(self) -> None:
+        """After a night: the booking ends (``night`` did), the model leaves the card, and the block's time is kept."""
+
+        if not self.local_main:
+            return
+        self.gpu.release()
+        self._unload_main()
+        started = getattr(self, "_block_started", None)
+        if started is not None:
+            seconds = round(time.monotonic() - started, 1)
+            found = self.state.data.setdefault("generations", {})
+            found.setdefault("block_seconds", []).append(seconds)
+            self._gpu_time(f"generations on {self._main_name()} (turns, nights, trials)", seconds)
+            self._block_started = None
+            self.save()
+
+    def _unload_main(self) -> None:
+        """The assistant's model leaves the card (Ollama), so the next lane finds it free."""
+
+        import subprocess
+
+        from row_bot.providers.selection import parse_model_ref
+
+        parsed = parse_model_ref(self.main_ref)
+        if not parsed or parsed[0] != "ollama":
+            return
+        try:
+            subprocess.run(["ollama", "stop", parsed[1]], capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.SubprocessError):
+            logger.debug("couldn't unload %s", parsed[1], exc_info=True)
 
     def _look(self) -> Any:
         """Tonight's look for things to improve (L3a) and its tests (L3b): counts only (drafts by kind of
@@ -692,7 +819,14 @@ class PersonRun:
         change that came out ready and Undoes it again (use → Undo survives, counted)."""
 
         look = self.night_look()
+        self._card_wanted_seen = False
         report = look.tick()
+        while self.local_main and self._card_wanted_seen and not look.done_tonight():
+            # It stopped for the person: once the card is theirs no more, the same night goes on where it stopped.
+            self.state.data["notes"].append({"yielded": "night's look", "at": time.strftime("%H:%M:%S")})
+            self._hold_card("the night's look, tests and trial (continued)")
+            self._card_wanted_seen, self._card_checked = False, (0.0, False)
+            report = look.tick() or report
         found = report.to_dict() if report is not None else None
         result: dict[str, Any] = {"ran": False} if found is None else {
             key: found[key] for key in ("state", "found", "diagnosed", "drafted", "refused", "needs_examples",
@@ -752,6 +886,8 @@ class PersonRun:
             for request in by_day.get(day, []):
                 if self.state.request_done(request.id):
                     continue
+                self._hold_card(f"generations, {self.person_id} on {self._main_name()}: days from {day} and their "
+                                "night (turns, Dream, the look, tests, a trial)")
                 self.clock.request_time(day, request.order)
                 record = self.ask(request, label="generations")
                 self.state.data["requests"].append(record)
@@ -765,12 +901,17 @@ class PersonRun:
                 continue
             self.check_cap()
             if str(day) not in self.state.data["nights"] or not self.state.data["nights"][str(day)].get("done"):
+                self._hold_card(f"generations, {self.person_id} on {self._main_name()}: the night after day {day}")
                 self.night(day)
             found["nights"][str(day)] = self._trial_night()
             if self._strategy_trials() >= int(self.args.generations) and "final" not in found:
+                # The final set can't stop part-way (a stopped one draws again), so it waits for room for itself.
+                self._hold_card(f"generations, {self.person_id} on {self._main_name()}: the final set",
+                                expect_seconds=FINAL_SET_SECONDS)
                 final = self._final_set(day)
                 if final.get("state") in ("done", "failed"):
                     found["final"] = final
+            self._end_block()
             self._record_generations(found)
             self.save()
             self.note(f"generations: day {day}, {self._strategy_trials()} trials, method v{found.get('method_version')}"
@@ -1525,10 +1666,32 @@ class PersonRun:
                        "cloud_total": self.cloud_tokens()},
             "refused_tool_calls": data.get("refused_tool_calls", 0), "builds": data.get("builds", []),
             "write_backs": list(self.sign_in.write_backs) if self.sign_in else [],
+            "main_model": self.main_ref or data.get("main_model") or None,
+            "improver_model": self.improver_ref or None,
         }
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
+
+def learning_calls_on(ref: str) -> Any:
+    """The seeded setting with a local assistant (O140): Learning's own calls that name no model (diagnosis,
+    drafting, a method's own words) go to ``ref``; a call that names its model (a test or a judging replay of
+    the assistant) and every other background call keep theirs. The product sends both to the default chat
+    model; only this harness splits them. Returns the function it put in place."""
+
+    from row_bot.providers import background
+
+    original = getattr(background.background_model_ref, "seeded_original", background.background_model_ref)
+
+    def chosen(purpose: str, *, thread_model: str | None = None, task_model: str | None = None) -> str:
+        if purpose in background.LEARNING_PURPOSES and not task_model:
+            return ref
+        return original(purpose, thread_model=thread_model, task_model=task_model)
+
+    chosen.seeded_original = original  # type: ignore[attr-defined]
+    background.background_model_ref = chosen
+    return chosen
 
 
 def _build() -> str:
@@ -1633,6 +1796,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="L4a: during the generations, quiet hours run every this many nights")
     parser.add_argument("--monthly-limit", type=int, default=MONTHLY_LIMIT,
                         help="L4a: the person's monthly Learning limit during the generations (trials get 20%%)")
+    parser.add_argument("--main-model", default="",
+                        help="the people's assistant for the generations, e.g. ollama:qwen3.8:27b (O140); Learning's "
+                             "own calls stay on the ChatGPT lane")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     check_scratch(Path(args.data), Path(args.eval_profile))
@@ -1651,6 +1817,10 @@ def main(argv: list[str] | None = None) -> int:
         if stop.code != EXIT_TOKEN_CAP:
             raise
         code = EXIT_TOKEN_CAP  # stopped cleanly at the cap: what was done is still reported
+    finally:
+        if run.local_main:  # however it ends, the card is free again
+            run.gpu.release()
+            run._unload_main()  # noqa: SLF001
     (run.run_dir / "result.json").write_text(json.dumps(run.result(), indent=1, sort_keys=True, default=str),
                                              encoding="utf-8")
     run.gpu.release()

@@ -360,3 +360,43 @@ def test_the_persons_words_come_from_the_model_and_a_template_stands_in_when_it_
     failing._llm = Model(fail=True)
     fallback = failing.react(request, "It's 12.", "expected 15", attempt)
     assert fallback.source == "template" and request.intent in fallback.text and failing.tokens.failures == 2
+
+
+def test_with_a_local_assistant_only_learnings_own_unnamed_calls_go_to_the_chatgpt_lane(monkeypatch):
+    """O140: the seeded people's assistant on a local model, Learning's diagnosis and drafting on the ChatGPT
+    lane. A test or judging replay names the assistant and keeps it; every other background call keeps its rule."""
+
+    from row_bot.providers import background
+    from tests.e2e.learning.seeded import live
+
+    def product_rule(purpose, *, thread_model=None, task_model=None):
+        return task_model or thread_model or "model:ollama:qwen3.8:27b"
+
+    monkeypatch.setattr(background, "background_model_ref", product_rule)
+    live.learning_calls_on("model:codex:gpt-6.1-sol")
+    choose = background.background_model_ref
+    assert choose("learning_diagnosis") == choose("learning_meta") == "model:codex:gpt-6.1-sol"
+    assert choose("learning_test", task_model="model:ollama:qwen3.8:27b") == "model:ollama:qwen3.8:27b"
+    assert choose("dream") == choose("extraction") == "model:ollama:qwen3.8:27b"
+    live.learning_calls_on("model:codex:gpt-6.1-sol")  # a second start doesn't wrap the rule twice
+    assert background.background_model_ref.seeded_original is product_rule
+
+
+def test_every_person_gets_the_local_assistant_and_its_blocks_never_reach_the_quiet_hours(tmp_path):
+    assert scratch.minutes_until_quiet(datetime(2026, 10, 26, 23, 0)) == 100
+    assert scratch.minutes_until_quiet(datetime(2026, 10, 26, 5, 0)) == 19 * 60 + 40
+    assert scratch.minutes_until_quiet(datetime(2026, 10, 27, 0, 40)) == 0
+    commands: list[list[str]] = []
+    fake = FakePerson()
+
+    def runner(command, env, log):
+        commands.append(command)
+        return fake(command, env, log)
+
+    (tmp_path / "eval-profile").mkdir()
+    check = release_check.ReleaseCheck(_args(tmp_path, tiers="8gb", people="mara", generations=3,
+                                             main_model="ollama:qwen3.8:27b"), runner=runner, say=lambda _text: None)
+    built = check.execute()
+    assert all(command[command.index("--main-model") + 1] == "ollama:qwen3.8:27b" for command in commands)
+    assert check.run["main_model"] == "ollama:qwen3.8:27b"
+    assert "assistant ollama:qwen3.8:27b (local)" in release_check.report_module.markdown(built)

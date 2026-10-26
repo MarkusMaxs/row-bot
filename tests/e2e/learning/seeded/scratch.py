@@ -149,6 +149,16 @@ def in_quiet_hours(now: datetime | None = None, *, start: tuple[int, int] = QUIE
     return _minutes(start) <= minute < _minutes(QUIET_END)
 
 
+def minutes_until_quiet(now: datetime | None = None) -> int:
+    """Minutes until the person's quiet hours begin (0 inside them): a block of work longer than this would
+    still hold the card at 00:40."""
+
+    current = now or datetime.now()
+    if in_quiet_hours(current):
+        return 0
+    return (_minutes(QUIET_START) - (current.hour * 60 + current.minute)) % (24 * 60)
+
+
 def card_memory_mib() -> int | None:
     """Graphics memory in use on the card now (nvidia-smi), or None when it can't be read."""
 

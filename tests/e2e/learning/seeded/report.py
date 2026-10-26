@@ -24,6 +24,8 @@ from typing import Any
 
 FORMAT = "row_bot.learning.release_check_report"
 VERSION = 1
+#: Providers on this computer (their tokens are the card's, not the ChatGPT lane's).
+LOCAL_PROVIDERS = ("ollama", "llama_cpp", "lmstudio", "vllm", "custom")
 Z95 = 1.959963984540054
 FAMILIES = ("document_lookups", "structured_transforms", "small_coding", "tool_workflows")
 LABELS = {"document_lookups": "Document lookups", "structured_transforms": "Structured transforms",
@@ -213,6 +215,9 @@ def person_report(result: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "person": result.get("person"), "name": result.get("name"), "tier": result.get("tier"),
         "days": result.get("days"), "history": result.get("history"), "model": result.get("model"),
+        "main_model": result.get("main_model"), "improver_model": result.get("improver_model"),
+        "local_tokens": sum(int(item.get("input", 0)) + int(item.get("output", 0)) for key, item in ledger.items()
+                            if key.split(":", 1)[1].startswith(LOCAL_PROVIDERS)),
         "stages": result.get("stages"), "past": result.get("past"), "live": live_work(result.get("requests") or ()),
         "container": (result.get("profile") or {}).get("container"),
         "builds": list(result.get("builds") or []),
@@ -433,8 +438,10 @@ def markdown(report: Mapping[str, Any]) -> str:
 
     run = report.get("run") or {}
     lines = ["# Learning release check", ""]
+    model = (f"assistant {run['main_model']} (local), Learning's own calls on {run.get('model', '?')}"
+             if run.get("main_model") else f"main model {run.get('model', '?')}")
     lines.append(f"Build `{run.get('build', '?')}` · seed {run.get('seed', '?')} · {run.get('days', '?')} simulated days · "
-                 f"main model {run.get('model', '?')} · started {run.get('started_at', '?')}")
+                 f"{model} · started {run.get('started_at', '?')}")
     lines.append("")
     lines.append("Rates: passed/total = rate [95% Wilson interval]. Differences: the product's paired analysis "
                  "against the starting model (95% cluster-bootstrap interval, permutation p, n problems).")
@@ -534,7 +541,9 @@ def markdown(report: Mapping[str, Any]) -> str:
         lines.append("- Survival: " + "; ".join(f"{name.replace('_', ' ')}: {check.get('state')}{_survival_note(check)}"
                                                for name, check in person["survival"].items()))
         lines.append("- Tokens: " + ", ".join(f"{key.replace('_', ' ')} {value:,}" for key, value in
-                                               person["tokens"].items()) + f"; GPU {person['gpu_hours']} h "
+                                               person["tokens"].items())
+                     + (f"; local tokens {person['local_tokens']:,}" if person.get("local_tokens") else "")
+                     + f"; GPU {person['gpu_hours']} h "
                      f"({', '.join(f'{name} {hours}' for name, hours in person['gpu_hours_by_phase'].items())}).")
         lines.append("")
     tokens = report.get("tokens") or {}

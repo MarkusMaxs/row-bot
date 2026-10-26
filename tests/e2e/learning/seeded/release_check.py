@@ -188,6 +188,8 @@ class ReleaseCheck:
             command += ["--generations", str(self.args.generations), "--generation-days",
                         str(self.args.generation_days), "--monthly-limit", str(self.args.monthly_limit),
                         "--night-every", str(self.args.night_every)]
+        if getattr(self.args, "main_model", ""):
+            command += ["--main-model", str(self.args.main_model)]
         record: dict[str, Any] = {"exits": []}
         for attempt in range(MAX_RESTARTS + 1):
             started = time.monotonic()
@@ -205,6 +207,8 @@ class ReleaseCheck:
         self.run.setdefault("started_at", time.strftime("%Y-%m-%d %H:%M"))
         self.run.update({"seed": self.args.seed, "days": self.args.days, "people": self.people,
                          "build": _build(), "cap_tokens": self.args.cap_tokens})
+        if getattr(self.args, "main_model", ""):
+            self.run["main_model"] = self.args.main_model
         self.run.setdefault("tiers", {})
         self.run.setdefault("people_runs", {})
         self.save_run()
@@ -328,6 +332,9 @@ def parse(argv: Sequence[str] | None = None) -> argparse.Namespace:
                         help="L4a: during the generations, quiet hours run every this many nights")
     parser.add_argument("--monthly-limit", type=int, default=100_000_000,
                         help="L4a: each person's monthly Learning limit during the generations (trials get 20%%)")
+    parser.add_argument("--main-model", default="",
+                        help="L4a: the people's assistant for the generations, e.g. ollama:qwen3.8:27b (O140); "
+                             "Learning's own calls stay on the ChatGPT lane")
     parser.add_argument("--plan", action="store_true", help="print the plan and run nothing")
     parser.add_argument("--report-only", action="store_true", help="write the report from the results so far")
     parser.add_argument("--archive", default="", help="keep a person's run as <person>@<label> and stop")
