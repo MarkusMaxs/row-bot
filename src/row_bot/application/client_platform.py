@@ -913,12 +913,12 @@ class ClientPlatformService:
             from row_bot.application.artifact_design_commands import execute_artifact_design_command
             return execute_artifact_design_command(self, command, target, owner_id=owner_id, key=idempotency_key,
                 validate=validate or (lambda: None), resolve_upload=resolve_upload, validate_confirmation=validate_approval)
-        if command["type"] in {"task.run", "task.stop", "task.approval"}:
+        if command["type"] in {"task.run", "task.stop"}:
             if target != "tasks":
                 raise ClientPlatformError("invalid_command")
             from row_bot.application.task_run_commands import execute_task_run_command
             return execute_task_run_command(owner_id=owner_id, key=idempotency_key, command=command,
-                                            validate=validate or (lambda: None), validate_approval=validate_approval)
+                                            validate=validate or (lambda: None))
         if command["type"] == "artifact.export":
             from row_bot.application.artifact_exports import execute_export
             return execute_export(self, command, target, owner_id=owner_id, key=idempotency_key,
@@ -936,7 +936,7 @@ class ClientPlatformService:
                 from row_bot.application.workspace_edit_commands import execute_workspace_edit
                 return execute_workspace_edit(self, command, target, owner_id=owner_id, key=idempotency_key,
                                               validate=validate or (lambda: None))
-            if command["type"] in {"task.create", "task.update", "task.delete", "task.duplicate", "task.delivery.update", "task.graph.update", "task.settings.update", "task.webhook.rotate"}:
+            if command["type"] in {"task.create", "task.update", "task.delete", "task.duplicate", "task.delivery.update", "task.settings.update", "task.webhook.rotate"}:
                 if target != "tasks":
                     raise ClientPlatformError("invalid_command")
                 from row_bot.application.task_commands import execute_task_command
@@ -1418,6 +1418,11 @@ class ClientPlatformService:
         if followup is not None:
             # Continues the conversation's own work; never routed as steering.
             config["configurable"]["internal_goal_continuation"] = True
+        from row_bot.workflow_turns import person_rules
+        # A workflow's "Always ask me" apps and tools wait for the person in every turn of its
+        # conversation, under every approval level (N9).
+        if rules := person_rules(conversation_id):
+            config["configurable"]["person_rules"] = rules
         from copy import deepcopy
         from row_bot.application.profile_controls import freeze_profile
         if frozen_context is not None:

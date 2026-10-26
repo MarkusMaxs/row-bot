@@ -27,7 +27,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import math
 import os
 import pathlib
 import re
@@ -42,7 +41,6 @@ from functools import wraps
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence, TypeVar
 
 from row_bot.approval_policy import (
-    DEFAULT_APPROVAL_MODE,
     legacy_safety_mode_to_approval_mode,
     normalize_approval_mode,
 )
@@ -56,8 +54,6 @@ logger = logging.getLogger(__name__)
 
 # ── Subtask Depth Tracking ───────────────────────────────────────────────────
 _subtask_depth_var: ContextVar[int] = ContextVar("subtask_depth", default=0)
-_MAX_SUBTASK_DEPTH = 2
-
 # ── Persistence ──────────────────────────────────────────────────────────────
 _DATA_DIR = get_row_bot_data_dir()
 _DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -66,23 +62,6 @@ _OLD_WF_DB = str(_DATA_DIR / "workflows.db")
 _TASK_CONFIG_PATH = str(_DATA_DIR / "task_config.json")
 _SCHEMA_VERSION = 1
 DEFAULT_WORKFLOW_AGENT_PROFILE_ID = "builtin:row_bot_default"
-WORKFLOW_PROFILE_MIGRATION_VERSION = "workflow_profile_v1"
-_WORKFLOW_READ_ONLY_DEFAULT_DENY_TOOLS = {
-    "calendar",
-    "custom_tool_builder",
-    "designer",
-    "gmail",
-    "goal",
-    "image_gen",
-    "outlook_calendar",
-    "outlook_mail",
-    "row_bot_updater",
-    "task",
-    "tracker",
-    "video_gen",
-    "x",
-}
-# What a scheduled time that fell while Row-Bot was closed does (N9): skipped, or run once on start.
 MISSED_RUN_RULES = ("skip", "run_once")
 _SCHEMA_LOCK = threading.RLock()
 _APPROVAL_CHANNEL_PUSH_LOCK = threading.RLock()
@@ -154,31 +133,6 @@ _CREATE_TABLE_SQL = {
             first_message_id TEXT DEFAULT '',
             actions_json    TEXT DEFAULT '[]',
             FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
-        )
-    """,
-    "pipeline_state": """
-        CREATE TABLE IF NOT EXISTS pipeline_state (
-            run_id              TEXT PRIMARY KEY,
-            task_id             TEXT NOT NULL,
-            thread_id           TEXT NOT NULL,
-            current_step_index  INTEGER DEFAULT 0,
-            step_outputs        TEXT DEFAULT '{}',
-            status              TEXT DEFAULT 'running',
-            resume_token        TEXT,
-            paused_at           TEXT,
-            config              TEXT DEFAULT '{}',
-            graph_interrupted   TEXT,
-            created_at          TEXT DEFAULT (datetime('now')),
-            updated_at          TEXT DEFAULT (datetime('now'))
-        )
-    """,
-    "workflow_drafts": """
-        CREATE TABLE IF NOT EXISTS workflow_drafts (
-            id          TEXT PRIMARY KEY,
-            task_id     TEXT,
-            mode        TEXT NOT NULL,
-            payload     TEXT NOT NULL,
-            updated_at  TEXT NOT NULL
         )
     """,
     "approval_requests": """
@@ -320,17 +274,6 @@ _COLUMN_MIGRATIONS = {
         # What the run did outside Row-Bot, from its tools' results: [{tool, title, result, link}] (F31).
         ("actions_json", "TEXT DEFAULT '[]'"),
     ],
-    "pipeline_state": [
-        ("current_step_index", "INTEGER DEFAULT 0"),
-        ("step_outputs", "TEXT DEFAULT '{}'"),
-        ("status", "TEXT DEFAULT 'running'"),
-        ("resume_token", "TEXT"),
-        ("paused_at", "TEXT"),
-        ("config", "TEXT DEFAULT '{}'"),
-        ("graph_interrupted", "TEXT"),
-        ("created_at", "TEXT DEFAULT ''"),
-        ("updated_at", "TEXT DEFAULT ''"),
-    ],
     # Other people share the channel conversation: it runs on Auto at most (full_autonomy).
     "channel_thread_refs": [
         ("shared", "INTEGER NOT NULL DEFAULT 0"),
@@ -366,12 +309,6 @@ _REQUIRED_COLUMNS = {
         "task_name", "task_icon", "workspace_id", "workspace_name", "late_for", "notice", "fix",
         "first_message_id", "actions_json",
     },
-    "pipeline_state": {
-        "run_id", "task_id", "thread_id", "current_step_index",
-        "step_outputs", "status", "resume_token", "paused_at", "config",
-        "graph_interrupted", "created_at", "updated_at",
-    },
-    "workflow_drafts": {"id", "task_id", "mode", "payload", "updated_at"},
     "approval_requests": {
         "id", "run_id", "task_id", "step_id", "resume_token", "message",
         "channel", "status", "requested_at", "responded_at", "timeout_at",
@@ -768,31 +705,6 @@ def _init_db() -> None:
         )
     """)
     conn.execute("""
-        CREATE TABLE IF NOT EXISTS pipeline_state (
-            run_id              TEXT PRIMARY KEY,
-            task_id             TEXT NOT NULL,
-            thread_id           TEXT NOT NULL,
-            current_step_index  INTEGER DEFAULT 0,
-            step_outputs        TEXT DEFAULT '{}',      -- JSON: {step_id: output_text}
-            status              TEXT DEFAULT 'running', -- running / paused / completed / failed / stopped
-            resume_token        TEXT,                   -- UUID for approval resumption
-            paused_at           TEXT,
-            config              TEXT DEFAULT '{}',      -- JSON: serialized run config
-            graph_interrupted   TEXT,                   -- 'true' if paused by LangGraph interrupt()
-            created_at          TEXT DEFAULT (datetime('now')),
-            updated_at          TEXT DEFAULT (datetime('now'))
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS workflow_drafts (
-            id          TEXT PRIMARY KEY,
-            task_id     TEXT,
-            mode        TEXT NOT NULL,
-            payload     TEXT NOT NULL,
-            updated_at  TEXT NOT NULL
-        )
-    """)
-    conn.execute("""
         CREATE TABLE IF NOT EXISTS approval_requests (
             id              TEXT PRIMARY KEY,
             run_id          TEXT NOT NULL,
@@ -884,16 +796,6 @@ def _init_db() -> None:
         try:
             conn.execute(f"ALTER TABLE task_runs ADD COLUMN {col} {defn}")
             logger.info("Migrated task_runs table: added '%s' column", col)
-        except Exception:
-            pass  # column already exists
-
-    # pipeline_state migrations
-    for col, defn in [
-        ("graph_interrupted", "TEXT"),
-    ]:
-        try:
-            conn.execute(f"ALTER TABLE pipeline_state ADD COLUMN {col} {defn}")
-            logger.info("Migrated pipeline_state table: added '%s' column", col)
         except Exception:
             pass  # column already exists
 
@@ -1077,453 +979,85 @@ def _json_list_value(value: Any) -> list[str] | None:
     return _ordered_text_list(value)
 
 
-def _default_task_skill_names_for_migration() -> set[str]:
-    defaults = {"proactive_agent"}
-    try:
-        from row_bot.skills import get_default_active_skill_names
-
-        defaults.update(get_default_active_skill_names("task"))
-    except Exception:
-        logger.debug("Could not load default task skills for workflow migration", exc_info=True)
-    return {name for name in defaults if name}
+# ── Workflows are messages (F31) ─────────────────────────────────────────────
 
 
-def _custom_legacy_skill_names(skills_override: Sequence[str] | None) -> list[str]:
-    names = _ordered_text_list(skills_override)
-    if not names:
+def _step_words(step: Mapping[str, Any], names: Mapping[str, str]) -> str:
+    """One old pipeline step in words, as part of a workflow's message."""
+    kind = str(step.get("type") or "prompt")
+    text = " ".join(str(step.get("prompt") or step.get("message") or "").split())
+    text = re.sub(r"\{\{\s*(prev_output|step\.[^}]+\.output)\s*\}\}", "(the result above)", text)
+    if kind == "condition":
+        check = str(step.get("condition") or "").strip()
+        words = check[len("llm:"):].strip() if check.startswith("llm:") else f"this check passes: {check}"
+        return f"Check whether {words}. If not, stop here and say why."
+    if kind == "notify":
+        return f"Tell me: {text}" if text else ""
+    if kind == "subtask":
+        name = names.get(str(step.get("task_id") or ""), "")
+        return f"Then run the workflow \u201c{name}\u201d." if name else ""
+    if kind == "delegate_agent":
+        return f"Hand this to a helper: {text}" if text else ""
+    if kind == "approval":
+        return ""  # The action's own card asks the person.
+    return text
+
+
+def messages_from_steps(steps: Sequence[Any], names: Mapping[str, str] | None = None) -> list[str]:
+    """An old step pipeline as messages (F31): prompt-only pipelines keep one message per prompt; any
+    other becomes one message that says the steps in order."""
+    items = [step for step in steps or [] if isinstance(step, Mapping)]
+    plain = [str(step) for step in steps or [] if isinstance(step, str) and step.strip()]
+    if plain and not items:
+        return plain
+    if all(str(step.get("type") or "prompt") == "prompt" for step in items):
+        return [words for step in items if (words := _step_words(step, names or {}))]
+    parts = [words for step in items if (words := _step_words(step, names or {}))]
+    if not parts:
         return []
-    default_names = _default_task_skill_names_for_migration()
-    custom = [name for name in names if name not in default_names]
-    if custom:
-        return custom
-    return []
+    return ["Do these in order:\n" + "\n".join(f"{index}. {part}" for index, part in enumerate(parts, 1))]
 
 
-def _workflow_policy_key(
-    *,
-    tools_override: Sequence[str] | None,
-    skills_override: Sequence[str] | None,
-) -> dict[str, list[str]]:
-    return {
-        "tools": sorted(_ordered_text_list(tools_override)),
-        "skills": sorted(_custom_legacy_skill_names(skills_override)),
-    }
-
-
-def _infer_migrated_profile_capability(tools: Sequence[str], skills: Sequence[str]) -> str:
-    if not tools:
-        return "orchestrator" if skills else "read_only"
-    write_or_delivery_tools = {
-        "calendar",
-        "custom_tool_builder",
-        "designer",
-        "gmail",
-        "goal",
-        "image_gen",
-        "outlook_calendar",
-        "outlook_mail",
-        "row_bot_updater",
-        "task",
-        "tracker",
-        "video_gen",
-        "x",
-    }
-    return "write_capable" if any(tool in write_or_delivery_tools for tool in tools) else "read_only"
-
-
-def _workflow_policy_signature(
-    *,
-    tools_override: Sequence[str] | None,
-    skills_override: Sequence[str] | None,
-) -> dict[str, Any]:
-    key = _workflow_policy_key(
-        tools_override=tools_override,
-        skills_override=skills_override,
-    )
-    return {
-        **key,
-        "capability": _infer_migrated_profile_capability(key["tools"], key["skills"]),
-    }
-
-
-def _profile_policy_key(profile: Mapping[str, Any]) -> dict[str, list[str]]:
-    tool_policy = profile.get("tool_policy_json") or {}
-    skill_policy = profile.get("skill_policy_json") or {}
-    if not isinstance(tool_policy, dict):
-        tool_policy = {}
-    if not isinstance(skill_policy, dict):
-        skill_policy = {}
-    return {
-        "tools": sorted(_ordered_text_list(tool_policy.get("allow_tools"))),
-        "skills": sorted(_ordered_text_list(skill_policy.get("skills_override"))),
-    }
-
-
-def _known_workflow_tool_ids() -> set[str]:
+def _convert_step_workflows() -> None:
+    """Once: saved step pipelines become messages, and one that had an approval step asks at least (F31)."""
+    conn = _get_conn()
     try:
-        from row_bot.agent_tool_catalog import list_agent_tool_catalog
-
-        return {
-            str(item.get("id") or "")
-            for item in list_agent_tool_catalog(include_unavailable=True)
-            if str(item.get("id") or "")
-        }
-    except Exception:
-        logger.debug("Could not load Agent Profile tool catalog for migration", exc_info=True)
-        return set()
-
-
-def _known_workflow_skill_names() -> set[str]:
-    try:
-        from row_bot.skills import get_all_skills, load_skills, skills_loaded
-
-        if not skills_loaded():
-            load_skills()
-        return {skill.name for skill in get_all_skills()}
-    except Exception:
-        logger.debug("Could not load skills for workflow migration", exc_info=True)
-        return set()
-
-
-def _missing_legacy_policy_items(
-    *,
-    tools_override: Sequence[str] | None,
-    skills_override: Sequence[str] | None,
-) -> dict[str, list[str]]:
-    missing: dict[str, list[str]] = {}
-    tools = _ordered_text_list(tools_override)
-    if tools:
-        known_tools = _known_workflow_tool_ids()
-        if known_tools:
-            missing_tools = sorted(tool for tool in tools if tool not in known_tools)
-            if missing_tools:
-                missing["tools"] = missing_tools
-    skills = _custom_legacy_skill_names(skills_override)
-    if skills:
-        known_skills = _known_workflow_skill_names()
-        if known_skills:
-            missing_skills = sorted(skill for skill in skills if skill not in known_skills)
-            if missing_skills:
-                missing["skills"] = missing_skills
-    return missing
-
-
-def _migration_profile_name(signature: Mapping[str, Any]) -> str:
-    tools = [str(item) for item in signature.get("tools") or []]
-    skills = [str(item) for item in signature.get("skills") or []]
-    if tools:
-        labels = [tool.replace("_", " ").replace("-", " ").title() for tool in tools[:3]]
-        joined = " + ".join(labels)
-        return f"Migrated {joined} Tools" if joined else "Migrated Workflow Profile"
-    if skills:
-        labels = [skill.replace("_", " ").replace("-", " ").title() for skill in skills[:3]]
-        joined = " + ".join(labels)
-        return f"Migrated {joined} Skills" if joined else "Migrated Workflow Profile"
-    return "Migrated Workflow Profile"
-
-
-def _find_matching_builtin_profile(policy_key: Mapping[str, list[str]]) -> dict[str, Any] | None:
-    try:
-        from row_bot.agent_profiles import list_agent_profiles
-
-        for profile in list_agent_profiles(enabled_only=True, include_builtins=True):
-            if profile.get("source") == "builtin" and _profile_policy_key(profile) == policy_key:
-                return profile
-    except Exception:
-        logger.debug("Could not match built-in Agent Profile for workflow migration", exc_info=True)
-    return None
-
-
-def _find_migration_profile(signature: Mapping[str, Any]) -> dict[str, Any] | None:
-    try:
-        from row_bot.agent_profiles import list_agent_profiles
-
-        for profile in list_agent_profiles(enabled_only=False, include_builtins=False):
-            provenance = profile.get("provenance_json") or {}
-            if not isinstance(provenance, dict):
-                continue
-            if provenance.get("migration") != WORKFLOW_PROFILE_MIGRATION_VERSION:
-                continue
-            if provenance.get("policy_signature") == dict(signature):
-                return profile
-    except Exception:
-        logger.debug("Could not find reusable migration profile", exc_info=True)
-    return None
-
-
-def _append_migration_profile_task_id(profile: Mapping[str, Any], task_id: str) -> None:
-    if not profile or str(profile.get("id") or "").startswith("builtin:"):
-        return
-    try:
-        from row_bot.agent_profiles import save_agent_profile
-
-        provenance = dict(profile.get("provenance_json") or {})
-        source_task_ids = _ordered_text_list(provenance.get("source_task_ids"))
-        if task_id not in source_task_ids:
-            provenance["source_task_ids"] = [*source_task_ids, task_id]
-            save_agent_profile({**dict(profile), "provenance_json": provenance})
-    except Exception:
-        logger.debug("Could not update migration profile provenance", exc_info=True)
-
-
-def _create_migration_profile(signature: Mapping[str, Any], task_id: str) -> dict[str, Any]:
-    from row_bot.agent_profiles import _unique_slug, normalize_profile_slug, save_agent_profile
-
-    name = _migration_profile_name(signature)
-    slug = _unique_slug(normalize_profile_slug(name) or "migrated_workflow_profile")
-    capability = str(signature.get("capability") or "read_only")
-    allow_tools = _ordered_text_list(signature.get("tools"))
-    skills = _ordered_text_list(signature.get("skills"))
-    return save_agent_profile(
-        slug=slug,
-        display_name=name,
-        description="Created by the workflow Agent Profile migration from legacy workflow policy.",
-        when_to_use="Use for workflows migrated from legacy tool or skill overrides with this policy.",
-        instructions=(
-            "Run the workflow using the migrated legacy workflow capability policy. "
-            "Review this profile before broad reuse."
-        ),
-        handoff_contract="Summarize workflow results, approvals, delivery status, and any follow-up needed.",
-        source="workflow_created",
-        tool_policy_json={
-            "capability": capability,
-            "allow_tools": allow_tools,
-            "allow_delegation": False,
-        },
-        skill_policy_json={"skills_override": skills},
-        context_policy_json={
-            "default_context_mode": "auto",
-            "include_parent_summary": True,
-            "include_selected_messages": False,
-            "include_workspace_context": True,
-            "max_context_tokens": 0,
-        },
-        workspace_policy_json={
-            "workspace_mode_default": "read_only" if capability == "read_only" else "auto",
-            "write_lock_required": capability in {"write_capable", "orchestrator"},
-            "worktree_allowed": False,
-            "developer_workspace_required": False,
-        },
-        approval_policy_json={"mode": "inherit"},
-        model_policy_json={"mode": "inherit"},
-        ui_json={"icon": "rule", "color": "blue-grey", "group": "Migrated"},
-        provenance_json={
-            "migration": WORKFLOW_PROFILE_MIGRATION_VERSION,
-            "source_task_ids": [task_id],
-            "policy_signature": dict(signature),
-        },
-    )
-
-
-def _resolve_workflow_profile_for_legacy_policy(
-    *,
-    task_id: str,
-    task_name: str = "",
-    agent_profile_id: str | None,
-    tools_override: Sequence[str] | None,
-    skills_override: Sequence[str] | None,
-    preserve_existing_profile: bool = False,
-) -> dict[str, Any]:
-    tools = _ordered_text_list(tools_override)
-    skills = _ordered_text_list(skills_override)
-    raw_policy_present = tools_override is not None or skills_override is not None
-    snapshot = {
-        "migration": WORKFLOW_PROFILE_MIGRATION_VERSION,
-        "task_id": task_id,
-        "task_name": task_name,
-        "old_tools_override": tools if tools_override is not None else None,
-        "old_skills_override": skills if skills_override is not None else None,
-    }
-
-    profile_ref = str(agent_profile_id or "").strip()
-    if preserve_existing_profile and profile_ref:
-        try:
-            from row_bot.agent_profiles import require_agent_profile
-
-            profile = require_agent_profile(profile_ref, enabled_only=True)
-            snapshot["selected_profile_id"] = profile["id"]
-            snapshot["selected_profile_slug"] = profile["slug"]
-            return {
-                "profile_id": profile["id"],
-                "status": "not_needed",
-                "note": "Workflow already had an Agent Profile; legacy overrides were retired.",
-                "snapshot": snapshot,
-                "clear_old_overrides": True,
-                "disable": False,
-            }
-        except Exception as exc:
-            snapshot["invalid_profile_reference"] = profile_ref
-            snapshot["invalid_profile_error"] = str(exc)
-
-    policy_key = _workflow_policy_key(
-        tools_override=tools,
-        skills_override=skills,
-    )
-    custom_policy = bool(policy_key["tools"] or policy_key["skills"])
-    if not custom_policy:
-        note = "Assigned Default Agent Profile."
-        status = "not_needed"
-        if raw_policy_present and skills:
-            note = "Ignored legacy task default skill snapshot and assigned Default Agent Profile."
-            status = "needs_review"
-        snapshot["policy_signature"] = _workflow_policy_signature(
-            tools_override=[],
-            skills_override=[],
-        )
-        return {
-            "profile_id": DEFAULT_WORKFLOW_AGENT_PROFILE_ID,
-            "status": status,
-            "note": note,
-            "snapshot": snapshot,
-            "clear_old_overrides": True,
-            "disable": False,
-        }
-
-    missing = _missing_legacy_policy_items(
-        tools_override=policy_key["tools"],
-        skills_override=policy_key["skills"],
-    )
-    if missing:
-        snapshot["missing_policy_items"] = missing
-        return {
-            "profile_id": profile_ref or "",
-            "status": "blocked",
-            "note": "Legacy workflow policy references missing tools or skills.",
-            "snapshot": snapshot,
-            "clear_old_overrides": False,
-            "disable": True,
-        }
-
-    builtin = _find_matching_builtin_profile(policy_key)
-    if builtin:
-        snapshot["policy_signature"] = _workflow_policy_signature(
-            tools_override=policy_key["tools"],
-            skills_override=policy_key["skills"],
-        )
-        snapshot["selected_profile_id"] = builtin["id"]
-        snapshot["selected_profile_slug"] = builtin["slug"]
-        return {
-            "profile_id": builtin["id"],
-            "status": "exact_profile",
-            "note": f"Legacy workflow policy matched built-in Agent Profile: {builtin['display_name']}.",
-            "snapshot": snapshot,
-            "clear_old_overrides": True,
-            "disable": False,
-        }
-
-    signature = _workflow_policy_signature(
-        tools_override=policy_key["tools"],
-        skills_override=policy_key["skills"],
-    )
-    profile = _find_migration_profile(signature)
-    if profile is None:
-        profile = _create_migration_profile(signature, task_id)
-    else:
-        _append_migration_profile_task_id(profile, task_id)
-    snapshot["policy_signature"] = signature
-    snapshot["selected_profile_id"] = profile["id"]
-    snapshot["selected_profile_slug"] = profile["slug"]
-    return {
-        "profile_id": profile["id"],
-        "status": "created_profile",
-        "note": f"Legacy workflow policy migrated to Agent Profile: {profile['display_name']}.",
-        "snapshot": snapshot,
-        "clear_old_overrides": True,
-        "disable": False,
-    }
-
-
-def _task_row_legacy_policy(row: sqlite3.Row | Mapping[str, Any]) -> tuple[list[str] | None, list[str] | None]:
-    raw = dict(row)
-    return (
-        _json_list_value(raw.get("tools_override")),
-        _json_list_value(raw.get("skills_override")),
-    )
-
-
-def migrate_workflow_profile_policies() -> dict[str, Any]:
-    """Migrate legacy workflow tool/skill overrides into Agent Profiles."""
-    ensure_task_schema()
-    conn = _raw_conn()
-    migrated = 0
-    blocked = 0
-    needs_review = 0
-    created_or_reused = 0
-    try:
+        names = {str(row["id"]): str(row["name"] or "") for row in conn.execute("SELECT id, name FROM tasks")}
         rows = conn.execute(
-            "SELECT id, name, agent_profile_id, tools_override, skills_override, "
-            "enabled, profile_migration_status FROM tasks"
+            "SELECT id, steps, safety_mode FROM tasks WHERE COALESCE(steps, '[]') NOT IN ('', '[]')"
         ).fetchall()
         for row in rows:
-            raw_tools, raw_skills = _task_row_legacy_policy(row)
-            profile_ref = str(row["agent_profile_id"] or "")
-            status = str(row["profile_migration_status"] or "")
-            if (
-                status
-                and profile_ref
-                and raw_tools is None
-                and raw_skills is None
-            ):
-                continue
-            conversion = _resolve_workflow_profile_for_legacy_policy(
-                task_id=str(row["id"]),
-                task_name=str(row["name"] or ""),
-                agent_profile_id=profile_ref,
-                tools_override=raw_tools,
-                skills_override=raw_skills,
-                preserve_existing_profile=True,
-            )
-            new_enabled = 0 if conversion["disable"] else int(bool(row["enabled"]))
-            if conversion["status"] == "blocked":
-                blocked += 1
-            if conversion["status"] == "needs_review":
-                needs_review += 1
-            if conversion["status"] == "created_profile":
-                created_or_reused += 1
-            clear_old = bool(conversion["clear_old_overrides"])
-            conn.execute(
-                "UPDATE tasks SET agent_profile_id = ?, "
-                "tools_override = CASE WHEN ? THEN NULL ELSE tools_override END, "
-                "skills_override = CASE WHEN ? THEN NULL ELSE skills_override END, "
-                "enabled = ?, profile_migration_status = ?, "
-                "profile_migration_note = ?, profile_migration_snapshot_json = ? "
-                "WHERE id = ?",
-                (
-                    str(conversion["profile_id"] or profile_ref or DEFAULT_WORKFLOW_AGENT_PROFILE_ID),
-                    1 if clear_old else 0,
-                    1 if clear_old else 0,
-                    new_enabled,
-                    conversion["status"],
-                    conversion["note"],
-                    json.dumps(conversion["snapshot"], sort_keys=True),
-                    row["id"],
-                ),
-            )
-            conn.commit()
-            migrated += 1
+            try:
+                steps = json.loads(row["steps"] or "[]")
+            except (TypeError, ValueError):
+                steps = []
+            asked = any(isinstance(step, Mapping) and step.get("type") == "approval" for step in steps)
+            mode = legacy_safety_mode_to_approval_mode(row["safety_mode"])
+            if asked and mode in {"auto", "full"}:
+                mode = "approve"
+            conn.execute("UPDATE tasks SET prompts = ?, steps = '[]', safety_mode = ?, advanced_mode = 0 WHERE id = ?",
+                         (json.dumps(messages_from_steps(steps, names)), mode, row["id"]))
+        conn.execute("DROP TABLE IF EXISTS pipeline_state")
+        conn.execute("DROP TABLE IF EXISTS workflow_drafts")
+        # Approvals of the old pipeline can no longer resume anything.
+        conn.execute("UPDATE approval_requests SET status = 'cancelled', responded_at = ? "
+                     "WHERE status = 'pending' AND COALESCE(resume_kind, '') IN ('', 'workflow')",
+                     (datetime.now().isoformat(),))
         conn.commit()
     finally:
         conn.close()
-    return {
-        "migrated": migrated,
-        "blocked": blocked,
-        "needs_review": needs_review,
-        "created_or_reused_profiles": created_or_reused,
-    }
 
 
-def _migrate_workflow_profile_policies_best_effort() -> None:
+def _convert_step_workflows_best_effort() -> None:
     try:
-        result = migrate_workflow_profile_policies()
-        if result.get("migrated"):
-            logger.info("Workflow Agent Profile migration result: %s", result)
-    except Exception as exc:
-        logger.warning("Workflow Agent Profile migration failed (non-fatal): %s", exc)
+        _convert_step_workflows()
+    except Exception:
+        logger.warning("Saved workflows could not be converted to messages", exc_info=True)
 
 
 _init_db()
 _migrate_from_workflows()
-_migrate_workflow_profile_policies_best_effort()
+_convert_step_workflows_best_effort()
 
 
 # ── Template Variables ───────────────────────────────────────────────────────
@@ -1550,7 +1084,6 @@ def expand_template_vars(
     }
     if task_id:
         replacements["task_id"] = task_id
-    import re
 
     # "{{ date }}" and "{{date}}" alike: the step editor accepts both.
     result = re.sub(
@@ -1584,34 +1117,6 @@ def _canonicalize_workflow_model_override(value: str | None) -> str | None:
     return canonical.ref or None
 
 
-def _approval_detail(intr: dict) -> str:
-    """One step's approval in words, as the chat's approval card reads; never a dump of its arguments (B312).
-
-    The words a Row-Bot gate wrote for its card ("Run shell command: mkdir reports", which starts with
-    its label) come first (U19); any other tool's arguments in words, since an app's own description
-    can be a dump of them.
-    """
-    from row_bot.approval_messages import plain_tool_call, reviewer_note
-
-    tool_name = intr.get("tool", "unknown tool")
-    description = " ".join(str(intr.get("description") or "").split())
-    label = str(intr.get("label") or "").strip()
-    if label and description.startswith(label):
-        detail = description if len(description) <= 220 else description[:217].rstrip() + "..."
-    elif isinstance(intr.get("args"), dict) and intr["args"]:
-        detail = plain_tool_call(tool_name, intr["args"], label=label)
-    else:
-        detail = description or f"Tool '{tool_name}' needs approval"
-    if intr.get("person_only"):
-        # The person's own rule (Always ask me): it says so, never as the reviewer's question.
-        review = intr.get("review") if isinstance(intr.get("review"), dict) else {}
-        note = str(review.get("reason") or "")
-    else:
-        # Under Auto, why the reviewer asked rather than approving it.
-        note = reviewer_note(intr)
-    return f"{detail} ({note})" if note else detail
-
-
 def _canonicalize_agent_profile_reference(value: str | None) -> str:
     raw = str(value or "").strip()
     if not raw:
@@ -1620,109 +1125,6 @@ def _canonicalize_agent_profile_reference(value: str | None) -> str:
 
     profile = require_agent_profile(raw, enabled_only=True)
     return str(profile["id"])
-
-
-def _canonicalize_workflow_steps(steps: list[dict] | None) -> list[dict] | None:
-    if not steps:
-        return steps
-    for step in steps:
-        if not isinstance(step, dict):
-            continue
-        if "model_override" in step:
-            canonical = _canonicalize_workflow_model_override(step.get("model_override"))
-            if canonical:
-                step["model_override"] = canonical
-            else:
-                step.pop("model_override", None)
-        # Workflow prompt runtime policy is selected at the workflow level.
-        # Delegate steps are explicit child-Agent calls and may choose a helper.
-        if step.get("type") != "delegate_agent":
-            step.pop("agent_profile_id", None)
-    return steps
-
-
-CONDITION_SYNTAX = (
-    "contains:<text>, not_contains:<text>, equals:<text>, matches:<regex>, gt:/lt:/gte:/lte:<number>, "
-    "length_gt:/length_lt:<count>, empty, not_empty, true, false, json:<path>:<condition>, "
-    "llm:<a yes/no question about the previous output>, and:[<condition>, ...], or:[<condition>, ...]"
-)
-_CONDITION_LITERALS = {"true", "false", "empty", "not_empty"}
-_CONDITION_OPERATORS = {"contains", "not_contains", "equals", "llm", "matches", "gt", "lt", "gte", "lte",
-                        "length_gt", "length_lt", "json", "and", "or"}
-_REQUIRED_STEP_TEXT = {"prompt": "prompt", "condition": "condition", "approval": "message", "notify": "message",
-                       "delegate_agent": "objective", "subtask": "task_id"}
-
-
-class ConditionSyntaxError(ValueError):
-    """A workflow condition that can't be read."""
-
-
-def check_condition(value: str, depth: int = 0) -> None:
-    """Check a condition's syntax without evaluating it; raises ConditionSyntaxError."""
-    if depth > 16:
-        raise ConditionSyntaxError(value)
-    if value in _CONDITION_LITERALS:
-        return
-    operator, separator, argument = value.partition(":")
-    if not separator or operator not in _CONDITION_OPERATORS:
-        raise ConditionSyntaxError(value)
-    if operator == "matches":
-        try:
-            re.compile(argument)
-        except re.error as error:
-            raise ConditionSyntaxError(value) from error
-    elif operator in {"gt", "lt", "gte", "lte", "length_gt", "length_lt"}:
-        try:
-            number = int(argument) if operator.startswith("length_") else float(argument)
-        except ValueError as error:
-            raise ConditionSyntaxError(value) from error
-        if not math.isfinite(number):
-            raise ConditionSyntaxError(value)
-    elif operator == "json":
-        path, separator, child = argument.partition(":")
-        if not separator or not path:
-            raise ConditionSyntaxError(value)
-        check_condition(child, depth + 1)
-    elif operator in {"and", "or"}:
-        if not (argument.startswith("[") and argument.endswith("]")):
-            raise ConditionSyntaxError(value)
-        children = _split_compound(argument[1:-1])
-        if not children or len(children) > 100:
-            raise ConditionSyntaxError(value)
-        for child in children:
-            check_condition(child, depth + 1)
-
-
-def validate_workflow_steps(steps: list[dict] | None) -> list[dict] | None:
-    """Refuse steps that can't run as written, before they are saved (B311, B314).
-
-    A step without its text (an empty prompt sends a blank message) is refused. A condition written in plain
-    words, with no operator, becomes an ``llm:`` question; a condition with an operator must parse."""
-    if not steps:
-        return steps
-    for number, step in enumerate(steps, start=1):
-        if not isinstance(step, dict):
-            continue
-        kind = str(step.get("type") or "prompt")
-        field = _REQUIRED_STEP_TEXT.get(kind)
-        if field and not str(step.get(field) or "").strip():
-            hint = " To tell the person something, use a notify step with a message." if kind == "prompt" else ""
-            raise ValueError(f"Step {number} ({kind}) needs a {field}.{hint}")
-        if kind != "condition":
-            continue
-        condition = str(step["condition"]).strip()
-        operator = condition.partition(":")[0]
-        if condition not in _CONDITION_LITERALS and operator not in _CONDITION_OPERATORS:
-            step["condition"] = f"llm:{condition}"
-            continue
-        try:
-            check_condition(condition)
-        except ConditionSyntaxError:
-            raise ValueError(
-                f"Step {number}'s condition can't be read: {condition!r}. Supported: {CONDITION_SYNTAX}."
-            ) from None
-        step["condition"] = condition
-    return steps
 
 
 def _workflow_model_failure_message(model_ref: str | None, exc: Exception) -> str:
@@ -1795,21 +1197,6 @@ def diagnose_legacy_model_overrides() -> list[dict]:
             item = _diagnose_model_override_value(model_override, "workflow")
             item.update({"scope": "task", "task_id": task_id, "task_name": task_name})
             diagnostics.append(item)
-        for index, step in enumerate(task.get("steps") or []):
-            if not isinstance(step, dict):
-                continue
-            step_override = str(step.get("model_override") or "")
-            if not step_override or step_override.startswith("model:"):
-                continue
-            item = _diagnose_model_override_value(step_override, "workflow")
-            item.update({
-                "scope": "task_step",
-                "task_id": task_id,
-                "task_name": task_name,
-                "step_index": index,
-                "step_id": str(step.get("id") or ""),
-            })
-            diagnostics.append(item)
     try:
         from row_bot.threads import _list_threads
 
@@ -1875,7 +1262,6 @@ def create_task(
         raise ValueError(
             "Only one of schedule, at, or delay_minutes may be set."
         )
-    validate_workflow_steps(steps)
     from row_bot import schedule_zones
 
     if timezone and not schedule_zones.is_zone(timezone):
@@ -1903,7 +1289,6 @@ def create_task(
     if advanced_mode is None:
         advanced_mode = bool(steps)
     model_override = _canonicalize_workflow_model_override(model_override)
-    legacy_policy_input = tools_override is not None or skills_override is not None
     agent_profile_id = _canonicalize_agent_profile_reference(
         agent_profile_id or DEFAULT_WORKFLOW_AGENT_PROFILE_ID
     )
@@ -1911,35 +1296,17 @@ def create_task(
     profile_migration_status = "not_needed"
     profile_migration_note = "Profile-first workflow."
     profile_migration_snapshot: dict[str, Any] = {}
-    if notify_only:
-        skills_override = None
-        tools_override = None
-    elif legacy_policy_input:
-        conversion = _resolve_workflow_profile_for_legacy_policy(
-            task_id=task_id,
-            task_name=name,
-            agent_profile_id=agent_profile_id,
-            tools_override=tools_override,
-            skills_override=skills_override,
-            preserve_existing_profile=False,
-        )
-        agent_profile_id = str(conversion["profile_id"] or agent_profile_id)
-        profile_migration_status = str(conversion["status"] or "not_needed")
-        profile_migration_note = str(conversion["note"] or "")
-        profile_migration_snapshot = dict(conversion["snapshot"] or {})
-        if conversion["clear_old_overrides"]:
-            tools_override = None
-            skills_override = None
-        if conversion["disable"]:
-            enabled = False
-    else:
-        skills_override = None
-        tools_override = None
-    # If steps provided, also sync prompts for backward compat
+    # A workflow is what it sends and its approval level (F31): no tool or skill lists of its own.
+    skills_override = None
+    tools_override = None
+    concurrency_group = None
+    advanced_mode = False
     if steps:
-        assign_step_ids(steps)
-        _canonicalize_workflow_steps(steps)
-        prompts = _steps_to_prompts(steps) or prompts
+        if any(isinstance(step, Mapping) and step.get("type") == "approval" for step in steps) \
+                and safety_mode in {"auto", "full"}:
+            safety_mode = "approve"
+        prompts = messages_from_steps(steps) or prompts
+        steps = None
     conn = _get_conn()
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -2103,68 +1470,7 @@ def read_task_for_edit(task_id: str) -> tuple[dict, str] | None:
         row = _task_editor_row(conn, task_id)
         if row is None:
             return None
-        task = _row_to_dict(row)
-        # The compatibility reader synthesizes steps from simple prompts.
-        # Editing needs to distinguish those from authoritative stored graphs.
-        task["_stored_steps"] = bool(json.loads(row["steps"] or "[]"))
-        return task, _task_row_revision(row)
-    finally:
-        conn.close()
-
-
-@_schema_retry
-def update_task_graph(
-    task_id: str, *, expected_revision: str, steps: list[dict],
-    validate: Callable[[], None],
-    record_commit: Callable[[sqlite3.Connection, str], None] | None = None,
-) -> None:
-    """Save a reviewed graph without renumbering stable IDs or running it."""
-    conn = _get_conn()
-    try:
-        conn.execute("BEGIN IMMEDIATE")
-        validate()
-        row = _task_editor_row(conn, task_id)
-        if row is None:
-            raise TaskMutationError("task_not_found", task_id)
-        if _task_row_revision(row) != expected_revision:
-            raise TaskMutationError("task_revision_conflict", task_id)
-        # Inspect subtask dependencies in this same writer snapshot. A changed
-        # dependency cannot introduce recursion between validation and commit.
-        pending = [(str(s.get("task_id") or ""), False)
-                   for s in steps if s.get("type") == "subtask"]
-        visited: set[str] = set()
-        active: set[str] = set()
-        while pending:
-            dependency, leaving = pending.pop()
-            if leaving:
-                active.remove(dependency)
-                visited.add(dependency)
-                continue
-            if dependency == task_id or dependency in active:
-                raise TaskMutationError("task_graph_cycle", task_id)
-            if dependency in visited:
-                continue
-            if len(visited) + len(active) >= 1000:
-                raise TaskMutationError("task_graph_too_large", task_id)
-            active.add(dependency)
-            child = _task_editor_row(conn, dependency)
-            if child is None:
-                raise TaskMutationError("task_graph_missing_subtask", task_id)
-            child_steps = _row_to_dict(child).get("steps") or []
-            if len(child_steps) > 100:
-                raise TaskMutationError("task_graph_too_large", task_id)
-            pending.append((dependency, True))
-            pending.extend((str(s.get("task_id") or ""), False) for s in child_steps
-                           if isinstance(s, dict) and s.get("type") == "subtask")
-        conn.execute(
-            "UPDATE tasks SET steps = ?, prompts = ?, advanced_mode = 1 WHERE id = ?",
-            (json.dumps(steps), json.dumps(_steps_to_prompts(steps)), task_id),
-        )
-        _task_editor_row(conn, task_id)  # Preserve the same full-row envelope on write.
-        if record_commit is not None:
-            record_commit(conn, task_id)
-        validate()
-        conn.commit()
+        return _row_to_dict(row), _task_row_revision(row)
     finally:
         conn.close()
 
@@ -2218,9 +1524,8 @@ def update_task_settings(
     record_commit: Callable[[sqlite3.Connection, str], None] | None = None,
 ) -> None:
     """Publish reviewed settings in their existing task row; never execute."""
-    allowed = {"concurrency_group", "trigger", "model_override", "agent_profile_id",
-               "safety_mode", "persistent_thread_id", "workspace_id", "workspace_name",
-               "missed_runs", "always_ask"}
+    allowed = {"trigger", "model_override", "agent_profile_id", "safety_mode", "workspace_id",
+               "workspace_name", "missed_runs", "always_ask"}
     if set(values) - allowed:
         raise TaskMutationError("invalid_task_settings", task_id)
     conn = _get_conn()
@@ -2320,33 +1625,14 @@ def update_task(
         # The reviewed editor does not run legacy profile conversion or graph
         # rewrites before CAS. Existing unreviewed callers retain their API.
         raise TaskMutationError("task_review_unsupported_fields", task_id)
-    if isinstance(kwargs.get("steps"), list):
-        validate_workflow_steps(kwargs["steps"])
-
-    # ── Validate delivery if either field is being changed ───────────
-    if {"tools_override", "skills_override"} & set(kwargs):
-        current = get_task(task_id) or {}
-        conversion = _resolve_workflow_profile_for_legacy_policy(
-            task_id=task_id,
-            task_name=str(kwargs.get("name") or current.get("name") or ""),
-            agent_profile_id=str(kwargs.get("agent_profile_id") or current.get("agent_profile_id") or ""),
-            tools_override=kwargs.get("tools_override", current.get("tools_override")),
-            skills_override=kwargs.get("skills_override", current.get("skills_override")),
-            preserve_existing_profile=False,
-        )
-        kwargs["agent_profile_id"] = str(
-            conversion["profile_id"]
-            or current.get("agent_profile_id")
-            or DEFAULT_WORKFLOW_AGENT_PROFILE_ID
-        )
-        kwargs["profile_migration_status"] = str(conversion["status"] or "not_needed")
-        kwargs["profile_migration_note"] = str(conversion["note"] or "")
-        kwargs["profile_migration_snapshot_json"] = dict(conversion["snapshot"] or {})
-        if conversion["clear_old_overrides"]:
-            kwargs["tools_override"] = None
-            kwargs["skills_override"] = None
-        if conversion["disable"]:
-            kwargs["enabled"] = False
+    # A workflow is what it sends and its approval level (F31): old step lists become messages,
+    # and tool, skill and queue settings are no longer kept.
+    for retired in ("tools_override", "skills_override", "concurrency_group", "advanced_mode"):
+        kwargs.pop(retired, None)
+    if "steps" in kwargs:
+        steps = kwargs.pop("steps") or []
+        if steps:
+            kwargs["prompts"] = messages_from_steps(steps)
 
     if "delivery_channel" in kwargs or "delivery_target" in kwargs:
         # Merge with existing values to get full picture
@@ -2377,9 +1663,6 @@ def update_task(
                 value = legacy_safety_mode_to_approval_mode(value)
             if key == "agent_profile_id":
                 value = _canonicalize_agent_profile_reference(value or DEFAULT_WORKFLOW_AGENT_PROFILE_ID)
-            if key == "steps" and isinstance(value, list):
-                assign_step_ids(value)
-                _canonicalize_workflow_steps(value)
             if key == "timezone":
                 from row_bot import schedule_zones
 
@@ -2456,7 +1739,6 @@ def sync_task_schedule(task_id: str, *, validate: Callable[[], None] | None = No
         conn.close()
 
 
-
 @_publishes_live("runs", "approvals", "conversations")
 @_schema_retry
 def delete_task(task_id: str, *, expected_revision: str | None = None,
@@ -2498,11 +1780,9 @@ def delete_task(task_id: str, *, expected_revision: str | None = None,
         return
     _remove_job(task_id)
     conn = _get_conn()
-    # Clean up pipeline_state and cancel pending approval_requests up-front
-    # so the cleanup is co-located with the DELETE that removes the task row.
-    # Task runs are preserved for audit history (get_recent_runs handles
-    # orphaned runs via COALESCE to "(deleted)").
-    conn.execute("DELETE FROM pipeline_state WHERE task_id = ?", (task_id,))
+    # Cancel pending approval_requests up-front, co-located with the DELETE that removes the task
+    # row. Task runs are preserved for audit history (get_recent_runs handles orphaned runs via
+    # COALESCE to "(deleted)").
     conn.execute(
         "UPDATE approval_requests SET status = 'cancelled', responded_at = ? "
         "WHERE task_id = ? AND status = 'pending'",
@@ -2573,12 +1853,8 @@ def duplicate_task(task_id: str, *, new_task_id: str | None = None,
         delivery_channel=task.get("delivery_channel"),
         delivery_target=task.get("delivery_target"),
         model_override=task.get("model_override"),
-        skills_override=task.get("skills_override"),
-        steps=task.get("steps"),
         safety_mode=task.get("safety_mode") or "block",
-        concurrency_group=task.get("concurrency_group"),
         channels=task.get("channels"),
-        advanced_mode=bool(task.get("advanced_mode")),
         agent_profile_id=task.get("agent_profile_id"),
         apply_default_skills=False,
         enabled=False,
@@ -2599,12 +1875,7 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
     d["allowed_recipients"] = json.loads(d.get("allowed_recipients") or "[]")
     raw_skills = d.get("skills_override")
     d["skills_override"] = json.loads(raw_skills) if raw_skills else None
-    # Pipeline fields
-    raw_steps = d.get("steps") or "[]"
-    d["steps"] = json.loads(raw_steps)
-    # Guard: if steps contains bare strings (malformed), convert them
-    if d["steps"] and isinstance(d["steps"][0], str):
-        d["steps"] = _prompts_to_steps(d["steps"])
+    d.pop("steps", None)  # Workflows are messages (F31).
     raw_trigger = d.get("trigger")
     d["trigger"] = json.loads(raw_trigger) if raw_trigger else None
     raw_tools = d.get("tools_override")
@@ -2630,37 +1901,7 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
     except (TypeError, ValueError):
         raw_ask = []
     d["always_ask"] = [str(item) for item in raw_ask if isinstance(item, str)] if isinstance(raw_ask, list) else []
-    # Auto-convert: if steps is empty but prompts exist, synthesize steps
-    if not d["steps"] and d["prompts"]:
-        d["steps"] = _prompts_to_steps(d["prompts"])
     return d
-
-
-def _prompts_to_steps(prompts: list[str]) -> list[dict]:
-    """Convert a flat list of prompt strings to typed step dicts."""
-    steps = []
-    for i, prompt in enumerate(prompts):
-        steps.append({
-            "id": f"step_{i + 1}",
-            "type": "prompt",
-            "label": "",
-            "prompt": prompt,
-        })
-    return steps
-
-
-def _steps_to_prompts(steps: list[dict]) -> list[str]:
-    """Extract prompt strings from steps (for backward compat).
-
-    Only works when ALL steps are type 'prompt' with linear flow.
-    Returns empty list if steps contain non-prompt types.
-    """
-    prompts = []
-    for step in steps:
-        if step.get("type") != "prompt":
-            return []  # Can't flatten to simple prompts
-        prompts.append(step.get("prompt", ""))
-    return prompts
 
 
 # ── Run History ──────────────────────────────────────────────────────────────
@@ -2672,68 +1913,6 @@ def _workflow_agent_profile_ref(task: dict | None) -> str:
     if profile_ref:
         return profile_ref
     return DEFAULT_WORKFLOW_AGENT_PROFILE_ID
-
-
-def _workflow_agent_profile_snapshot(task: dict | None) -> dict[str, Any]:
-    profile_ref = _workflow_agent_profile_ref(task)
-    try:
-        from row_bot.agent_profiles import snapshot_agent_profile
-
-        return snapshot_agent_profile(profile_ref)
-    except Exception:
-        logger.debug("Could not snapshot workflow Agent Profile %s", profile_ref, exc_info=True)
-        return {}
-
-
-def _workflow_profile_tool_allowlist(profile_snapshot: Mapping[str, Any]) -> list[str]:
-    tool_policy = profile_snapshot.get("tool_policy_json") or {}
-    if not isinstance(tool_policy, dict):
-        return []
-    return _ordered_text_list(tool_policy.get("allow_tools"))
-
-
-def _workflow_default_task_skills() -> list[str]:
-    try:
-        from row_bot.skills import get_default_active_skill_names
-
-        return _ordered_text_list(get_default_active_skill_names("task"))
-    except Exception:
-        logger.debug("Could not load default task skills for workflow runtime", exc_info=True)
-        return []
-
-
-def _workflow_profile_skills(profile_snapshot: Mapping[str, Any]) -> list[str]:
-    skill_policy = profile_snapshot.get("skill_policy_json") or {}
-    if not isinstance(skill_policy, dict):
-        return []
-    base = _ordered_text_list(skill_policy.get("skills_override"))
-    if not base:
-        base = _workflow_default_task_skills()
-    deny = set(_ordered_text_list(skill_policy.get("deny_skills")))
-    return [name for name in base if name not in deny]
-
-
-def _filter_workflow_tools_for_profile(
-    enabled_tool_names: Sequence[str],
-    profile_snapshot: Mapping[str, Any],
-) -> list[str]:
-    requested = _ordered_text_list(enabled_tool_names)
-    tool_policy = profile_snapshot.get("tool_policy_json") or {}
-    if not isinstance(tool_policy, dict):
-        tool_policy = {}
-    allow = set(_ordered_text_list(tool_policy.get("allow_tools")))
-    capability = str(tool_policy.get("capability") or "read_only")
-    filtered = list(requested)
-    if capability == "read_only":
-        filtered = [name for name in filtered if name not in _WORKFLOW_READ_ONLY_DEFAULT_DENY_TOOLS]
-    if allow:
-        mcp_allowed = "mcp" in allow or any(name.startswith("mcp_") for name in allow)
-        filtered = [
-            name
-            for name in filtered
-            if name in allow or (name == "mcp" and mcp_allowed)
-        ]
-    return filtered
 
 
 def _workflow_profile_runtime_policy(
@@ -2754,7 +1933,6 @@ def _workflow_profile_runtime_policy(
         **options,
     )
     profile_snapshot = dict(resolved["profile_snapshot"])
-    tool_allowlist = _workflow_profile_tool_allowlist(profile_snapshot)
     return {
         "agent_profile_id": str(resolved["profile_id"] or DEFAULT_WORKFLOW_AGENT_PROFILE_ID),
         "agent_profile_slug": str(resolved["profile_slug"] or ""),
@@ -2763,12 +1941,7 @@ def _workflow_profile_runtime_policy(
             str(resolved["effective_approval_mode"] or parent_approval),
             parent_approval,
         ),
-        "skills_override": _workflow_profile_skills(profile_snapshot),
-        "tool_allowlist": tool_allowlist,
-        "effective_tool_names": _filter_workflow_tools_for_profile(
-            enabled_tool_names,
-            profile_snapshot,
-        ),
+        "model_override": str(task.get("model_override") or ""),
         "warnings": list(resolved.get("warnings") or []),
     }
 
@@ -2828,28 +2001,21 @@ def claim_reviewed_task_run(
         policy = _workflow_profile_runtime_policy(task, enabled_tool_names, single_snapshot=True, profile_connection=conn)
         if _reviewed_policy_revision(policy) != expected_policy_revision:
             raise TaskMutationError("task_policy_revision_conflict", task_id)
-        if not task.get("notify_only") and not task.get("steps"):
+        if not task.get("notify_only") and not task.get("prompts"):
             raise TaskMutationError("task_has_no_steps", task_id)
         captured = {
             "v": 1, "task": task, "policy": policy,
             "task_revision": expected_task_revision, "policy_revision": expected_policy_revision,
             "run_id": run_id, "thread_id": thread_id,
         }
-        from row_bot.runtime.executions import generation_registry
-        captured["server_epoch"] = generation_registry.server_epoch
-        config_json = json.dumps({"_reviewed_task_run": captured}, ensure_ascii=False)
-        if len(config_json.encode()) > 4 * 1024 * 1024:
+        if len(json.dumps(captured, ensure_ascii=False).encode()) > 4 * 1024 * 1024:
             raise TaskMutationError("task_metadata_too_large", task_id)
         now = datetime.now().isoformat()
         conn.execute(
             "INSERT INTO task_runs (id,task_id,thread_id,started_at,status,steps_total,steps_done,task_name,task_icon) "
             "VALUES (?,?,?,?,'starting',?,0,?,?)",
-            (run_id, task_id, thread_id, now, 0 if task.get("notify_only") else len(task["steps"]), task["name"], task["icon"]),
-        )
-        conn.execute(
-            "INSERT INTO pipeline_state (run_id,task_id,thread_id,current_step_index,step_outputs,status,config,created_at,updated_at) "
-            "VALUES (?,?,?,0,'{}','starting',?,?,?)",
-            (run_id, task_id, thread_id, config_json, now, now),
+            (run_id, task_id, thread_id, now, 0 if task.get("notify_only") else len(task["prompts"]),
+             task["name"], task["icon"]),
         )
         if record_commit is not None:
             record_commit(conn, run_id)
@@ -2866,7 +2032,7 @@ _RUN_SUMMARY_COLUMNS = (
     "substr(started_at,1,80) AS started_at,substr(finished_at,1,80) AS finished_at,steps_total,steps_done,"
     "substr(COALESCE(workspace_id,''),1,128) AS workspace_id,substr(COALESCE(workspace_name,''),1,256) AS workspace_name,"
     "substr(COALESCE(late_for,''),1,80) AS late_for,substr(COALESCE(notice,''),1,512) AS notice,"
-    "substr(COALESCE(fix,''),1,32) AS fix"
+    "substr(COALESCE(fix,''),1,32) AS fix,substr(COALESCE(actions_json,'[]'),1,65536) AS actions_json"
 )
 
 
@@ -2918,15 +2084,6 @@ def _reviewed_run_enter(
         conn.commit()
     finally:
         conn.close()
-    from row_bot.agent_runs import mirror_workflow_run_start
-    task, policy = captured["task"], captured["policy"]
-    mirror_workflow_run_start(
-        run_id, task_id=task_id, thread_id=thread_id, display_name=task["name"],
-        steps_total=0 if task.get("notify_only") else len(task["steps"]),
-        profile_id=policy["agent_profile_id"], profile_snapshot_json=policy["agent_profile_snapshot"],
-        approval_mode=policy["approval_mode"], model_override=task.get("model_override") or "",
-        tools_override=policy["tool_allowlist"] or None, skills_override=policy["skills_override"],
-    )
 
 
 def iter_task_run_snapshot(task_id: str) -> Iterator[dict]:
@@ -2946,105 +2103,21 @@ def iter_task_run_snapshot(task_id: str) -> Iterator[dict]:
 
 @_publishes_live("runs", "approvals", "conversations")
 def stop_reviewed_task_run(task_id: str, run_id: str, *, validate: Callable[[], None]) -> tuple[bool, bool]:
-    """Request cancellation only for this durable run and its exact producers."""
-    from row_bot.runtime.executions import generation_registry
+    """Stop this run: its turn stops and the card it waits on is withdrawn. (stop requested, quiesced)."""
+    from row_bot.application.client_platform import client_platform_service
 
+    validate()
     conn = _get_conn()
     try:
-        conn.execute("BEGIN IMMEDIATE")
-        validate()
-        row = conn.execute("SELECT task_id,thread_id,status FROM task_runs WHERE id=?", (run_id,)).fetchone()
-        if row is None or row["task_id"] != task_id:
-            raise TaskMutationError("task_run_not_found", task_id)
-        handles = tuple(h for h in generation_registry.active(row["thread_id"])
-                        if h.domain == "workflow" and h.domain_id == run_id)
-        if row["status"] in {"completed", "completed_delivery_failed", "failed", "stopped", "blocked"}:
-            return False, bool(handles) and all(handle.producer_done.is_set() for handle in handles)
-        captured = conn.execute("SELECT config FROM pipeline_state WHERE run_id=?", (run_id,)).fetchone()
-        capture = json.loads(captured[0] or "{}").get("_reviewed_task_run") if captured else None
-        if not capture:
-            raise TaskMutationError("task_run_owner_required", task_id)
-        paused_here = (row["status"] == "paused" and not handles
-                       and capture.get("server_epoch") == generation_registry.server_epoch)
-        conn.execute("UPDATE task_runs SET status='stopping' WHERE id=?", (run_id,))
-        conn.execute("UPDATE approval_requests SET status='cancelled',responded_at=? WHERE run_id=? AND status='pending'",
-                     (datetime.now().isoformat(), run_id))
-        validate()
-        conn.commit()
+        row = conn.execute("SELECT id,task_id,thread_id,status FROM task_runs WHERE id=?", (run_id,)).fetchone()
     finally:
         conn.close()
-    for handle in handles:
-        generation_registry.cancel(handle, reason="user")
-    if paused_here:
-        _finish_run(run_id, "stopped", status_message="Stopped while waiting for approval")
-        return True, True
-    # Absence from this process is not proof that an interrupted or remote
-    # producer returned. Only actual handles provide quiescence evidence.
-    return True, bool(handles) and all(handle.producer_done.is_set() for handle in handles)
-
-
-def _mirror_workflow_agent_run_start(
-    run_id: str,
-    *,
-    task_id: str,
-    thread_id: str,
-    steps_total: int,
-    task_name: str = "",
-) -> None:
-    try:
-        task = get_task(task_id)
-        from row_bot.agent_runs import mirror_workflow_run_start
-        profile_snapshot = _workflow_agent_profile_snapshot(task)
-
-        mirror_workflow_run_start(
-            run_id,
-            task_id=task_id,
-            thread_id=thread_id,
-            display_name=task_name or (task or {}).get("name", ""),
-            steps_total=steps_total,
-            profile_id=_workflow_agent_profile_ref(task),
-            profile_snapshot_json=profile_snapshot,
-            approval_mode=get_task_approval_mode(task) if task else DEFAULT_APPROVAL_MODE,
-            model_override=str((task or {}).get("model_override") or ""),
-            tools_override=_workflow_profile_tool_allowlist(profile_snapshot) or None,
-            skills_override=_workflow_profile_skills(profile_snapshot),
-        )
-    except Exception:
-        logger.debug("Workflow agent-run mirror start failed for %s", run_id, exc_info=True)
-
-
-def _mirror_workflow_agent_run_progress(
-    run_id: str,
-    steps_done: int,
-    *,
-    steps_total: int = 0,
-    label: str = "",
-) -> None:
-    try:
-        from row_bot.agent_runs import mirror_workflow_progress
-
-        mirror_workflow_progress(
-            run_id,
-            steps_done,
-            steps_total=steps_total,
-            label=label,
-        )
-    except Exception:
-        logger.debug("Workflow agent-run mirror progress failed for %s", run_id, exc_info=True)
-
-
-def _mirror_workflow_agent_run_finish(
-    run_id: str,
-    status: str,
-    status_message: str = "",
-    terminal_reason: str = "",
-) -> None:
-    try:
-        from row_bot.agent_runs import mirror_workflow_finish
-
-        mirror_workflow_finish(run_id, status, status_message, terminal_reason)
-    except Exception:
-        logger.debug("Workflow agent-run mirror finish failed for %s", run_id, exc_info=True)
+    if row is None or row["task_id"] != task_id:
+        raise TaskMutationError("task_run_not_found", task_id)
+    if row["status"] in TERMINAL_RUN_STATUSES:
+        return False, not client_platform_service.registry.active(row["thread_id"])
+    stop_workflow_run(dict(row))
+    return True, not client_platform_service.registry.active(row["thread_id"])
 
 
 @_publishes_live("runs", "conversations")
@@ -3062,13 +2135,6 @@ def _record_run_start(task_id: str, thread_id: str, steps_total: int,
     )
     conn.commit()
     conn.close()
-    _mirror_workflow_agent_run_start(
-        run_id,
-        task_id=task_id,
-        thread_id=thread_id,
-        steps_total=steps_total,
-        task_name=task_name,
-    )
     return run_id
 
 
@@ -3081,7 +2147,6 @@ def _update_run_progress(run_id: str, steps_done: int) -> None:
     )
     conn.commit()
     conn.close()
-    _mirror_workflow_agent_run_progress(run_id, steps_done)
 
 
 _MEMORY_FALLBACK_STATUS_PREFIX = "Memory search is limited"
@@ -3170,14 +2235,10 @@ def _finish_run(run_id: str, status: str = "completed",
         # A finished run is done, however it got there: a last notify step, "next": "end", a condition that
         # ended early or a resumed approval all used to leave it at "2 of 3 steps" (B313).
         conn.execute("UPDATE task_runs SET steps_done = steps_total WHERE id = ?", (run_id,))
-    # Clean up pipeline_state for terminal statuses (no longer needed)
-    if status in TERMINAL_RUN_STATUSES:
-        conn.execute("DELETE FROM pipeline_state WHERE run_id = ?", (run_id,))
     conn.commit()
     conn.close()
     if status in ("failed", "blocked", "completed_delivery_failed"):
         _publish_live("monitor")  # A run that went wrong is one of Monitor's problems.
-    _mirror_workflow_agent_run_finish(run_id, status, status_message, terminal_reason)
 
 
 def _emit_buddy_workflow_event(
@@ -3310,7 +2371,6 @@ def _workflow_entry_failed(run_id: str, thread_id: str, exc: BaseException) -> N
     stopped = isinstance(exc, InterruptedError) or bool(scope and scope.is_cancelled())
     status = "stopped" if stopped else "failed"
     try:
-        _update_pipeline_status(run_id, status)
         _finish_run(run_id, status, status_message=("Stop requested before dispatch" if stopped else "Execution resources are unavailable"))
     finally:
         with _active_lock:
@@ -3378,6 +2438,19 @@ def note_run_retry(run_id: str, notice: str) -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+def pending_approval_id(thread_id: str) -> str | None:
+    """The approval card a workflow's conversation waits on, if any."""
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT id FROM approval_requests WHERE source_thread_id = ? AND status = 'pending' "
+            "ORDER BY requested_at DESC LIMIT 1", (thread_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    return str(row[0]) if row else None
 
 
 def _pending_question(thread_id: str) -> str:
@@ -3489,7 +2562,6 @@ def cleanup_thread_state(thread_id: str) -> dict[str, int]:
 
     clean_thread_id = str(thread_id or "").strip()
     stats = {
-        "pipeline_state": 0,
         "approvals": 0,
         "channel_refs": 0,
         "notifications": 0,
@@ -3500,21 +2572,8 @@ def cleanup_thread_state(thread_id: str) -> dict[str, int]:
     now = datetime.now().isoformat()
     conn = _get_conn()
     try:
-        pipeline_run_ids = [
-            str(row[0])
-            for row in conn.execute(
-                "SELECT run_id FROM pipeline_state WHERE thread_id = ?",
-                (clean_thread_id,),
-            ).fetchall()
-            if str(row[0] or "")
-        ]
         approval_clauses = ["source_thread_id = ?", "parent_thread_id = ?"]
         approval_params: list[Any] = [clean_thread_id, clean_thread_id]
-        if pipeline_run_ids:
-            approval_clauses.append(
-                f"run_id IN ({', '.join('?' for _ in pipeline_run_ids)})"
-            )
-            approval_params.extend(pipeline_run_ids)
         approvals = conn.execute(
             "SELECT id, COALESCE(task_id, '') FROM approval_requests WHERE "
             + " OR ".join(approval_clauses),
@@ -3551,10 +2610,6 @@ def cleanup_thread_state(thread_id: str) -> dict[str, int]:
         stats["approvals"] = max(0, conn.total_changes - before)
 
         before = conn.total_changes
-        conn.execute("DELETE FROM pipeline_state WHERE thread_id = ?", (clean_thread_id,))
-        stats["pipeline_state"] = max(0, conn.total_changes - before)
-
-        before = conn.total_changes
         conn.execute("DELETE FROM channel_thread_refs WHERE thread_id = ?", (clean_thread_id,))
         # The chat keeps its place, so its next message starts a fresh
         # conversation instead of falling back to one it moved away from.
@@ -3574,10 +2629,6 @@ def cleanup_thread_state(thread_id: str) -> dict[str, int]:
         before = conn.total_changes
         conn.execute(
             "UPDATE tasks SET persistent_thread_id = NULL WHERE persistent_thread_id = ?",
-            (clean_thread_id,),
-        )
-        conn.execute(
-            "UPDATE task_runs SET pipeline_state_id = NULL WHERE thread_id = ?",
             (clean_thread_id,),
         )
         stats["task_links"] = max(0, conn.total_changes - before)
@@ -4816,57 +3867,6 @@ def _prepare_task_thread(task: dict) -> str:
     return thread_id
 
 
-def _run_waiting_for_approval(task_id: str) -> dict | None:
-    """This workflow's run that waits on an unanswered approval, if any."""
-    conn = _get_conn()
-    try:
-        row = conn.execute(
-            "SELECT r.thread_id, r.started_at FROM task_runs r "
-            "JOIN approval_requests a ON a.run_id = r.id "
-            "WHERE r.task_id = ? AND r.status IN ('paused', 'waiting_approval') "
-            "AND a.status = 'pending' AND (a.timeout_at IS NULL OR a.timeout_at >= ?) "
-            "ORDER BY r.started_at LIMIT 1",
-            (task_id, datetime.now().isoformat()),
-        ).fetchone()
-    finally:
-        conn.close()
-    return dict(row) if row else None
-
-
-@_publishes_live("runs", "conversations")
-def _skip_scheduled_run(task: dict, waiting: dict) -> None:
-    """Record and announce a scheduled run skipped behind a waiting one (B255).
-
-    The skipped run points at the waiting run's conversation, where its
-    approval is answered.
-    """
-    now = datetime.now()
-    started = datetime.fromisoformat(waiting["started_at"])
-    if started.date() == now.date():
-        earlier = f"the {started.hour}:{started.minute:02d} run"
-    elif started.date() == (now - timedelta(days=1)).date():
-        earlier = "yesterday's run"
-    else:
-        earlier = f"the run from {started:%b} {started.day}"
-    message = f"Skipped {now.hour}:{now.minute:02d} run: {earlier} still waits for your approval"
-    conn = _get_conn()
-    try:
-        conn.execute(
-            "INSERT INTO task_runs (id, task_id, thread_id, started_at, finished_at, status, "
-            "status_message, steps_total, steps_done, task_name, task_icon) "
-            "VALUES (?, ?, ?, ?, ?, 'skipped', ?, ?, 0, ?, ?)",
-            (uuid.uuid4().hex[:12], task["id"], waiting["thread_id"], now.isoformat(), now.isoformat(),
-             message, 0 if task.get("notify_only") else len(task.get("steps") or []),
-             task.get("name", ""), task.get("icon", "")),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-    logger.info("Skipped scheduled run of '%s': an earlier run waits for approval", task["name"])
-    from row_bot.notifications import notify
-    notify(title=task["name"], message=message, sound="none", toast_type="warning", source="workflow")
-
-
 def _on_task_fire(task_id: str, late_for: str = "") -> None:
     """Callback invoked by APScheduler when a task's trigger fires.
 
@@ -4881,10 +3881,6 @@ def _on_task_fire(task_id: str, late_for: str = "") -> None:
         return
     if not task.get("enabled", True):
         return
-    waiting = None if task.get("at") else _run_waiting_for_approval(task_id)
-    if waiting:
-        _skip_scheduled_run(task, waiting)
-        return
 
     logger.info("Scheduler firing task: %s", task["name"])
     update_task(task_id, last_run=datetime.now().isoformat())
@@ -4892,7 +3888,8 @@ def _on_task_fire(task_id: str, late_for: str = "") -> None:
     thread_id = _prepare_task_thread(task)
     enabled = [t.name for t in tool_registry.get_enabled_tools()]
 
-    run_task_background(task_id, thread_id, enabled, notification=True, late_for=late_for)
+    run_task_background(task_id, thread_id, enabled, notification=True, late_for=late_for,
+                        trigger="Scheduled run")
 
     # Auto-remove one-shot `at` tasks after firing
     if task.get("at") and task.get("delete_after_run"):
@@ -5201,80 +4198,10 @@ def generate_webhook_secret() -> str:
     return secrets.token_urlsafe(24)
 
 
-# ── Concurrency Groups ──────────────────────────────────────────────────────
-
-def get_concurrency_group(task: dict) -> str | None:
-    """Return the effective concurrency group for a task.
-
-    Auto-assigns 'local_gpu' for tasks using local models.
-    """
-    explicit = task.get("concurrency_group")
-    if explicit:
-        return explicit
-
-    # Auto-detect local model usage
-    model = task.get("model_override", "")
-    if model and any(local in model.lower() for local in
-                     ("ollama", "llama", "local", "lmstudio", "localhost")):
-        return "local_gpu"
-    return None
-
-
-def check_concurrency_group(task: dict) -> bool:
-    """Check if a task can run given its concurrency group.
-
-    Returns True if the task can proceed, False if another task in the
-    same group is already running.
-    """
-    group = get_concurrency_group(task)
-    if not group:
-        return True  # no group — always allowed
-
-    with _active_lock:
-        for tid, info in _active_runs.items():
-            if tid == task.get("persistent_thread_id"):
-                continue  # same task re-running
-            running_task = get_task(info.get("task_id", ""))
-            if running_task and get_concurrency_group(running_task) == group:
-                logger.info(
-                    "Concurrency group '%s': task '%s' blocked by running '%s'",
-                    group, task["name"], running_task["name"],
-                )
-                return False
-    return True
-
-
-# ── Global Retry Config ──────────────────────────────────────────────────────
-
-_RETRY_CONFIG_PATH = _TASK_CONFIG_PATH
-
-
-def get_retry_max() -> int:
-    """Return the global max retries (default 1 = no retry)."""
-    try:
-        with open(_RETRY_CONFIG_PATH) as f:
-            return json.load(f).get("retry_max", 1)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return 1
-
-
-def set_retry_max(value: int) -> None:
-    """Save the global retry setting."""
-    data = {}
-    try:
-        with open(_RETRY_CONFIG_PATH) as f:
-            data = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        pass
-    data["retry_max"] = max(1, value)
-    with open(_RETRY_CONFIG_PATH, "w") as f:
-        json.dump(data, f, indent=2)
-
-
 # ── Global Safety Mode ──────────────────────────────────────────────────────
 
 _VALID_APPROVAL_MODES = ("block", "approve", "auto", "full")
-_VALID_SAFETY_MODES = _VALID_APPROVAL_MODES
+_RETRY_CONFIG_PATH = _TASK_CONFIG_PATH
 
 
 def get_global_approval_mode() -> str:
@@ -5315,457 +4242,7 @@ def get_task_approval_mode(task: dict) -> str:
     return get_global_approval_mode()
 
 
-def get_global_safety_mode() -> str:
-    """Compatibility alias for old workflow settings."""
-    return get_global_approval_mode()
-
-
-def set_global_safety_mode(mode: str) -> None:
-    """Compatibility alias for old workflow settings."""
-    set_global_approval_mode(mode)
-
-
-def get_task_safety_mode(task: dict) -> str:
-    """Compatibility alias for old workflow settings."""
-    return get_task_approval_mode(task)
-
-
 # ── Pipeline State Persistence (for approval pause/resume) ──────────────────
-
-@_schema_retry
-def _save_pipeline_state(
-    run_id: str,
-    task_id: str,
-    thread_id: str,
-    current_step_index: int,
-    step_outputs: dict,
-    config: dict,
-    resume_token: str | None = None,
-    status: str = "running",
-    graph_interrupted: bool | str = False,
-) -> None:
-    """Persist pipeline state to the DB for later resumption."""
-    conn = _get_conn()
-    now = datetime.now().isoformat()
-    extra_cols = ""
-    extra_placeholders = ""
-    extra_vals: list = []
-    if status == "paused":
-        extra_cols += ", paused_at"
-        extra_placeholders += ", ?"
-        extra_vals.append(now)
-    if graph_interrupted:
-        extra_cols += ", graph_interrupted"
-        extra_placeholders += ", ?"
-        extra_vals.append("true" if graph_interrupted is True else str(graph_interrupted))
-    conn.execute(
-        "INSERT OR REPLACE INTO pipeline_state "
-        "(run_id, task_id, thread_id, current_step_index, step_outputs, "
-        "status, resume_token, config, created_at, updated_at"
-        + extra_cols + ") "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?"
-        + extra_placeholders + ")",
-        (
-            run_id, task_id, thread_id, current_step_index,
-            json.dumps(step_outputs), status, resume_token,
-            json.dumps(config, default=str, ensure_ascii=not bool(config.get("_reviewed_task_run"))), now, now,
-            *extra_vals,
-        ),
-    )
-    conn.commit()
-    conn.close()
-
-
-@_schema_retry
-def _load_pipeline_state(resume_token: str) -> dict | None:
-    """Load pipeline state by resume token."""
-    conn = _get_conn()
-    row = conn.execute(
-        "SELECT * FROM pipeline_state WHERE resume_token = ?",
-        (resume_token,),
-    ).fetchone()
-    conn.close()
-    if not row:
-        return None
-    d = dict(row)
-    d["step_outputs"] = json.loads(d.get("step_outputs") or "{}")
-    d["config"] = json.loads(d.get("config") or "{}")
-    return d
-
-
-@_publishes_live("runs", "conversations")
-@_schema_retry
-def _update_pipeline_status(run_id: str, status: str) -> None:
-    """Update the status of a pipeline state entry."""
-    conn = _get_conn()
-    conn.execute(
-        "UPDATE pipeline_state SET status = ?, updated_at = ? WHERE run_id = ?",
-        (status, datetime.now().isoformat(), run_id),
-    )
-    conn.commit()
-    conn.close()
-
-
-@_schema_retry
-def _clear_graph_interrupted(run_id: str) -> None:
-    """Clear the graph_interrupted flag after a successful resume."""
-    conn = _get_conn()
-    conn.execute(
-        "UPDATE pipeline_state SET graph_interrupted = NULL, updated_at = ? "
-        "WHERE run_id = ?",
-        (datetime.now().isoformat(), run_id),
-    )
-    conn.commit()
-    conn.close()
-
-
-_CHILD_AGENT_WAIT_STATUS = "waiting_child_agent"
-_CHILD_AGENT_WAIT_TYPE = "child_agent_wait"
-_ORCHESTRATION_WAIT_TYPE = "agent_orchestration_wait"
-_CHILD_AGENT_SUCCESS_STATUSES = {"completed", "completed_delivery_failed"}
-_CHILD_AGENT_STOP_STATUSES = {"stopped", "cancelled"}
-_CHILD_AGENT_SETUP_FAILURE_FRAGMENTS = (
-    "Worktree requires a git-backed Developer workspace",
-    "Worktree requires a git repository",
-    "Worktree requires a git repository root",
-    "Cannot create Worktree:",
-    "Failed to create Worktree",
-    "Worktree did not return a usable workspace",
-)
-
-
-def _is_child_agent_setup_failure(
-    exc: Exception,
-    *,
-    child_run_id: str = "",
-    use_worktree: bool = False,
-) -> bool:
-    """Return whether a delegate failure happened before a usable child run."""
-    if child_run_id:
-        return False
-    try:
-        from row_bot.agent_runner import AgentRunnerError
-
-        if isinstance(exc, AgentRunnerError):
-            return True
-    except Exception:
-        if exc.__class__.__name__ == "AgentRunnerError":
-            return True
-    if use_worktree:
-        message = str(exc)
-        return any(fragment in message for fragment in _CHILD_AGENT_SETUP_FAILURE_FRAGMENTS)
-    return False
-
-
-def _child_agent_output(run: dict | None) -> dict[str, str]:
-    return {
-        "agent_run_id": str((run or {}).get("id") or ""),
-        "status": str((run or {}).get("status") or ""),
-        "summary": str((run or {}).get("summary") or ""),
-        "thread_id": str((run or {}).get("thread_id") or ""),
-        "workspace_id": str((run or {}).get("workspace_id") or ""),
-        "workspace_path": str((run or {}).get("workspace_path") or ""),
-        "workspace_mode": str((run or {}).get("workspace_mode") or ""),
-    }
-
-
-def _child_agent_failure_message(child_output: dict[str, str]) -> str:
-    run_id = child_output.get("agent_run_id") or "unknown"
-    status = child_output.get("status") or "unknown"
-    return f"Child Agent {run_id} finished with status: {status}."
-
-
-def _child_agent_parent_terminal_status(child_status: str) -> str:
-    if child_status in _CHILD_AGENT_STOP_STATUSES:
-        return "stopped"
-    return "failed"
-
-
-def _child_agent_wait_payload(child_run_id: str, step_id: str) -> str:
-    return json.dumps(
-        {
-            "type": _CHILD_AGENT_WAIT_TYPE,
-            "child_agent_run_id": child_run_id,
-            "step_id": step_id,
-        },
-        sort_keys=True,
-    )
-
-
-def _orchestration_wait_payload(orchestration_id: str, step_id: str) -> str:
-    return json.dumps(
-        {
-            "type": _ORCHESTRATION_WAIT_TYPE,
-            "orchestration_id": orchestration_id,
-            "step_id": step_id,
-        },
-        sort_keys=True,
-    )
-
-
-def _parse_orchestration_wait_payload(raw: str | None) -> dict[str, str] | None:
-    if not raw:
-        return None
-    try:
-        payload = json.loads(raw)
-    except Exception:
-        return None
-    if not isinstance(payload, dict) or payload.get("type") != _ORCHESTRATION_WAIT_TYPE:
-        return None
-    return {
-        "orchestration_id": str(payload.get("orchestration_id") or ""),
-        "step_id": str(payload.get("step_id") or ""),
-    }
-
-
-def _parse_child_agent_wait_payload(raw: str | None) -> dict[str, str] | None:
-    if not raw:
-        return None
-    try:
-        payload = json.loads(raw)
-    except Exception:
-        return None
-    if not isinstance(payload, dict) or payload.get("type") != _CHILD_AGENT_WAIT_TYPE:
-        return None
-    return {
-        "child_agent_run_id": str(payload.get("child_agent_run_id") or ""),
-        "step_id": str(payload.get("step_id") or ""),
-    }
-
-
-@_schema_retry
-def _load_pipeline_states_waiting_for_child_agent(child_run_id: str) -> list[dict]:
-    conn = _get_conn()
-    rows = conn.execute(
-        "SELECT * FROM pipeline_state WHERE status = ?",
-        (_CHILD_AGENT_WAIT_STATUS,),
-    ).fetchall()
-    conn.close()
-    states: list[dict] = []
-    for row in rows:
-        state = dict(row)
-        payload = _parse_child_agent_wait_payload(state.get("graph_interrupted"))
-        if not payload or payload.get("child_agent_run_id") != child_run_id:
-            continue
-        state["step_outputs"] = json.loads(state.get("step_outputs") or "{}")
-        state["config"] = json.loads(state.get("config") or "{}")
-        state["child_agent_wait"] = payload
-        states.append(state)
-    return states
-
-
-@_schema_retry
-def _claim_child_agent_wait_state(run_id: str) -> bool:
-    conn = _get_conn()
-    try:
-        cur = conn.execute(
-            "UPDATE pipeline_state SET status = ?, updated_at = ? "
-            "WHERE run_id = ? AND status = ?",
-            (
-                "running",
-                datetime.now().isoformat(),
-                run_id,
-                _CHILD_AGENT_WAIT_STATUS,
-            ),
-        )
-        conn.commit()
-        return cur.rowcount > 0
-    finally:
-        conn.close()
-
-
-@_schema_retry
-def _load_pipeline_states_waiting_for_orchestration(
-    orchestration_id: str,
-) -> list[dict]:
-    conn = _get_conn()
-    rows = conn.execute(
-        "SELECT * FROM pipeline_state WHERE status = ?",
-        (_CHILD_AGENT_WAIT_STATUS,),
-    ).fetchall()
-    conn.close()
-    states: list[dict] = []
-    for row in rows:
-        state = dict(row)
-        payload = _parse_orchestration_wait_payload(state.get("graph_interrupted"))
-        if not payload or payload.get("orchestration_id") != orchestration_id:
-            continue
-        state["step_outputs"] = json.loads(state.get("step_outputs") or "{}")
-        state["config"] = json.loads(state.get("config") or "{}")
-        state["orchestration_wait"] = payload
-        states.append(state)
-    return states
-
-
-def resume_workflows_waiting_for_orchestration(orchestration_id: str) -> int:
-    """Resume workflow steps only after their durable required barrier."""
-
-    if not orchestration_id:
-        return 0
-    from row_bot.agent_orchestrator import (
-        list_members,
-        list_messages,
-        get_orchestration,
-    )
-    from row_bot.tools import registry as tool_registry
-
-    orchestration = get_orchestration(orchestration_id)
-    if not orchestration or orchestration.get("status") not in {
-        "completed",
-        "completed_partial",
-        "failed",
-        "stopped",
-    }:
-        return 0
-    final_messages = list_messages(
-        orchestration_id,
-        kinds=["parent_final", "final"],
-    )
-    final_text = str(final_messages[-1].get("content") or "") if final_messages else ""
-    continuation = orchestration.get("continuation_state_json") or {}
-    members = [
-        member for member in list_members(orchestration_id) if member.get("required")
-    ]
-    failed_members = [
-        member
-        for member in members
-        if str(member.get("status") or "")
-        in {"failed", "stopped", "blocked", "timed_out", "cancelled"}
-    ]
-    resumed = 0
-    for state in _load_pipeline_states_waiting_for_orchestration(orchestration_id):
-        run_id = str(state.get("run_id") or "")
-        if not run_id or not _claim_child_agent_wait_state(run_id):
-            continue
-        task_id = str(state.get("task_id") or "")
-        task = get_task(task_id)
-        if not task:
-            _finish_run(run_id, "failed", status_message=f"Task {task_id} not found")
-            continue
-        steps = task.get("steps") or []
-        step_index = int(state.get("current_step_index") or 0)
-        step = steps[step_index] if step_index < len(steps) else {}
-        step_id = str(
-            (state.get("orchestration_wait") or {}).get("step_id")
-            or step.get("id")
-            or f"step_{step_index + 1}"
-        )
-        step_outputs = dict(state.get("step_outputs") or {})
-        step_outputs[step_id] = final_text
-        if (
-            failed_members
-            and str(step.get("type") or "prompt") == "delegate_agent"
-            and str(step.get("on_error") or "stop") != "skip"
-        ):
-            failed_run = (failed_members[0].get("run") or {}) if failed_members else {}
-            message = _child_agent_failure_message(_child_agent_output(failed_run))
-            if final_text:
-                message = f"{message} {final_text}"
-            parent_status = (
-                "stopped"
-                if all(
-                    str(member.get("status") or "") in _CHILD_AGENT_STOP_STATUSES
-                    for member in failed_members
-                )
-                else "failed"
-            )
-            _update_pipeline_status(run_id, parent_status)
-            _finish_run(run_id, parent_status, status_message=message)
-            resumed += 1
-            continue
-        _clear_graph_interrupted(run_id)
-        if "enabled_tool_names" in continuation:
-            enabled = [
-                str(name)
-                for name in (continuation.get("enabled_tool_names") or [])
-                if str(name)
-            ]
-        else:
-            # Compatibility for pre-orchestration pipeline rows only.
-            enabled = [tool.name for tool in tool_registry.get_enabled_tools()]
-        run_task_background(
-            task_id,
-            str(state.get("thread_id") or ""),
-            enabled,
-            start_step=step_index + 1,
-            notification=True,
-            resume_step_outputs=step_outputs,
-            resume_run_id=run_id,
-        )
-        resumed += 1
-    return resumed
-
-
-def resume_workflows_waiting_for_child_agent(child_run_id: str) -> int:
-    """Resume paused workflows whose waited child Agent has reached terminal."""
-    if not child_run_id:
-        return 0
-    from row_bot.agent_runner import agent_run_is_terminal
-    from row_bot.agent_runs import get_agent_run
-    from row_bot.tools import registry as tool_registry
-    from row_bot.threads import _list_threads, _save_thread_meta
-
-    child_run = get_agent_run(child_run_id)
-    if not agent_run_is_terminal(child_run):
-        return 0
-    child_output = _child_agent_output(child_run)
-    child_status = child_output["status"]
-    resumed = 0
-    for state in _load_pipeline_states_waiting_for_child_agent(child_run_id):
-        run_id = str(state.get("run_id") or "")
-        if not run_id or not _claim_child_agent_wait_state(run_id):
-            continue
-        task_id = str(state.get("task_id") or "")
-        task = get_task(task_id)
-        if not task:
-            _finish_run(run_id, "failed", status_message=f"Task {task_id} not found")
-            continue
-        thread_id = str(state.get("thread_id") or "")
-        steps = task.get("steps") or []
-        step_index = int(state.get("current_step_index") or 0)
-        step = steps[step_index] if step_index < len(steps) else {}
-        step_id = str(
-            (state.get("child_agent_wait") or {}).get("step_id")
-            or step.get("id")
-            or f"step_{step_index + 1}"
-        )
-        step_outputs = dict(state.get("step_outputs") or {})
-        step_outputs[step_id] = json.dumps(child_output, sort_keys=True)
-        if child_status not in _CHILD_AGENT_SUCCESS_STATUSES:
-            parent_status = _child_agent_parent_terminal_status(child_status)
-            message = _child_agent_failure_message(child_output)
-            _update_pipeline_status(run_id, parent_status)
-            _finish_run(run_id, parent_status, status_message=message)
-            _emit_buddy_workflow_event(
-                "cancelled" if parent_status == "stopped" else "error",
-                task_id=task_id,
-                thread_id=thread_id,
-                label="Workflow stopped" if parent_status == "stopped" else "Workflow error",
-                error=message,
-            )
-            if any(t[0] == thread_id for t in _list_threads()):
-                suffix = "stopped" if parent_status == "stopped" else "failed"
-                thread_name = (
-                    f"{task['name']} ({suffix}) - "
-                    f"{datetime.now().strftime('%b %d, %I:%M %p')}"
-                )
-                _save_thread_meta(thread_id, thread_name)
-            resumed += 1
-            continue
-        _clear_graph_interrupted(run_id)
-        enabled = [t.name for t in tool_registry.get_enabled_tools()]
-        run_task_background(
-            task_id,
-            thread_id,
-            enabled,
-            start_step=step_index + 1,
-            notification=True,
-            resume_step_outputs=step_outputs,
-            resume_run_id=run_id,
-        )
-        resumed += 1
-    return resumed
-
 
 # ── Approval Request Management ─────────────────────────────────────────────
 
@@ -5784,20 +4261,6 @@ def _person_only_interrupt(interrupts: Sequence[Any]) -> dict | None:
                  if isinstance(item, Mapping) and item.get("person_only") and item.get("binding")), None)
 
 
-def _person_payload(binding: str, card: Mapping[str, Any]) -> dict[str, Any]:
-    from row_bot.tools.approval_gate import PERSON_RULE_REASON
-
-    return {"person_only": True, "binding": str(binding), "card": dict(card), "reason": PERSON_RULE_REASON}
-
-
-def _person_approval_terms(held: Mapping[str, Any] | None, step: Mapping[str, Any]) -> dict[str, Any]:
-    """create_approval_request terms for a person-only card: its details, binding and expiry."""
-    if not held:
-        return {}
-    return {"timeout_minutes": int(step.get("timeout_minutes") or PERSON_APPROVAL_TIMEOUT_MINUTES),
-            "approval_payload_json": _person_payload(str(held["binding"]), held.get("card") or {})}
-
-
 def _person_payload_of(approval: Mapping[str, Any] | None) -> dict | None:
     """The person-only terms an approval request was made with, or None."""
     if not approval:
@@ -5807,76 +4270,6 @@ def _person_payload_of(approval: Mapping[str, Any] | None) -> dict | None:
     except (TypeError, ValueError):
         return None
     return payload if isinstance(payload, dict) and payload.get("person_only") and payload.get("binding") else None
-
-
-@_schema_retry
-def _approval_for_token(resume_token: str) -> dict | None:
-    conn = _get_conn()
-    try:
-        row = conn.execute("SELECT * FROM approval_requests WHERE resume_token = ?", (resume_token,)).fetchone()
-    finally:
-        conn.close()
-    return dict(row) if row else None
-
-
-@_publishes_live("approvals", "conversations")
-@_schema_retry
-def _claim_person_approval(run_id: str, step_id: str, binding: str) -> bool:
-    """Use, once, the person's approval of exactly *binding* for this step of this run."""
-    conn = _get_conn()
-    try:
-        conn.execute("BEGIN IMMEDIATE")
-        rows = conn.execute(
-            "SELECT id, approval_payload_json FROM approval_requests WHERE run_id = ? AND step_id = ? "
-            "AND status = 'approved' AND COALESCE(response_note, '') != 'used' ORDER BY responded_at DESC",
-            (run_id, step_id),
-        ).fetchall()
-        for row in rows:
-            held = _person_payload_of(dict(row))
-            if held and held["binding"] == binding:
-                conn.execute("UPDATE approval_requests SET response_note = 'used' WHERE id = ?", (row["id"],))
-                conn.commit()
-                return True
-        conn.rollback()
-        return False
-    finally:
-        conn.close()
-
-
-def _delivery_card(task: Mapping[str, Any], channel: str, text: str) -> dict:
-    from row_bot.tools.action_card import describe_delivery
-
-    if channel == "desktop":
-        return describe_delivery("This computer", "", text, account="Row-Bot")
-    target = ""
-    try:
-        from row_bot.channels import registry as channel_registry
-
-        adapter = channel_registry.get(channel)
-        label = str(getattr(adapter, "display_name", "") or getattr(adapter, "name", "") or channel)
-    except Exception:
-        label = channel
-    if task.get("delivery_channel") == channel:
-        target = str(task.get("delivery_target") or "")
-    return describe_delivery(label, target, text, account=label)
-
-
-def _stop_unapproved_run(state: Mapping[str, Any], task: Mapping[str, Any], enabled_tool_names: list[str],
-                         *, timed_out: bool) -> None:
-    """Stop a run whose person-only approval was denied or not given in time."""
-    run_id = str(state["run_id"])
-    if state.get("graph_interrupted") == "true":
-        try:  # The tool call that waited is settled, so the conversation can go on later.
-            from row_bot.agent import repair_orphaned_tool_calls
-
-            repair_orphaned_tool_calls(enabled_tool_names, state.get("config") or {})
-        except Exception:
-            logger.debug("Could not settle the tool call of run %s", run_id, exc_info=True)
-    notice = NOT_APPROVED_IN_TIME if timed_out else NOT_APPROVED
-    _update_pipeline_status(run_id, "stopped")
-    _finish_run(run_id, "stopped", status_message=notice, terminal_reason="not_approved", notice=notice)
-    _emit_buddy_workflow_event("cancelled", task_id=str(state.get("task_id") or ""),
-                               thread_id=str(state.get("thread_id") or ""), label=notice)
 
 
 @_publishes_live("approvals", "conversations")
@@ -6059,7 +4452,6 @@ def respond_to_approval(resume_token: str, approved: bool,
     Row-Bot's question (N4) takes ``answer`` instead (``questions.answer`` or ``questions.skipped``); a denial
     skips it. An approval never answers a question and an answer never approves an action: either is refused.
     """
-    resume_pipeline = _resume_pipeline
     conn = _get_conn()
     row = conn.execute(
         "SELECT * FROM approval_requests WHERE resume_token = ? AND status = 'pending'",
@@ -6100,21 +4492,8 @@ def respond_to_approval(resume_token: str, approved: bool,
         except ClientPlatformError:
             return False
     if str(r.get("resume_kind") or "") in {"", "workflow"}:
-        state_row = conn.execute("SELECT thread_id,substr(config,1,4194304) AS config,length(CAST(config AS BLOB)) AS size "
-                                 "FROM pipeline_state WHERE run_id=?", (r["run_id"],)).fetchone()
-        try:
-            if state_row and state_row["size"] and state_row["size"] > 4 * 1024 * 1024:
-                raise ValueError("approval review is oversized")
-            captured = json.loads(state_row["config"] or "{}").get("_reviewed_task_run") if state_row else None
-        except (ValueError, AttributeError):
-            conn.close()
-            return False
-        if captured:
-            from row_bot.runtime.executions import generation_registry
-            if any(h.domain == "workflow" and h.domain_id == r["run_id"]
-                   for h in generation_registry.active(state_row["thread_id"])):
-                conn.close()
-                return False  # Keep the pending decision until its worker quiesces.
+        conn.close()
+        return False  # A step pipeline's approval: nothing it could resume runs any more (F31).
     # Check if the approval has expired
     timeout_at = r.get("timeout_at")
     if timeout_at and timeout_at < datetime.now().isoformat():
@@ -6203,8 +4582,6 @@ def respond_to_approval(resume_token: str, approved: bool,
         from row_bot.integrations import views
 
         views.decided(approval_id, approved)  # A tool call from an app's view waits for this.
-    else:
-        resume_pipeline(resume_token, approved=approved)
     return True
 
 
@@ -6231,129 +4608,6 @@ def claim_conversation_approval(approval_id: str, approved: bool, *, expected_pa
         return dict(row) if changed else None
     finally:
         conn.close()
-
-
-def _reviewed_task_approval_state(
-    conn: sqlite3.Connection, task_id: str, run_id: str, approval_id: str,
-) -> tuple[dict, dict, str]:
-    terms = []
-    for table, alias in (("approval_requests", "a"), ("pipeline_state", "p")):
-        for column in conn.execute(f"PRAGMA table_info({table})"):
-            quoted = str(column[1]).replace('"', '""')
-            terms.append(f'COALESCE(length(CAST({alias}."{quoted}" AS BLOB)),0)')
-    sizes = conn.execute(
-        "SELECT " + " + ".join(terms) + " "
-        "FROM approval_requests a JOIN pipeline_state p ON p.run_id=a.run_id "
-        "WHERE a.id=? AND a.task_id=? AND a.run_id=? AND p.task_id=?",
-        (approval_id, task_id, run_id, task_id),
-    ).fetchone()
-    if sizes is None:
-        raise TaskMutationError("task_approval_not_found", task_id)
-    if sizes[0] > 4 * 1024 * 1024:
-        raise TaskMutationError("task_metadata_too_large", task_id)
-    approval = dict(conn.execute("SELECT * FROM approval_requests WHERE id=?", (approval_id,)).fetchone())
-    state = dict(conn.execute("SELECT * FROM pipeline_state WHERE run_id=?", (run_id,)).fetchone())
-    revision = hashlib.sha256((_task_row_revision(approval) + "\n" + _task_row_revision(state)).encode()).hexdigest()
-    state["config"] = json.loads(state.get("config") or "{}")
-    state["step_outputs"] = json.loads(state.get("step_outputs") or "{}")
-    return approval, state, revision
-
-
-def read_task_approval_review(task_id: str, run_id: str, approval_id: str) -> tuple[dict, dict, str]:
-    conn = _get_conn()
-    try:
-        conn.execute("BEGIN")
-        return _reviewed_task_approval_state(conn, task_id, run_id, approval_id)
-    finally:
-        conn.close()
-
-
-def iter_task_approval_snapshot(task_id: str, run_id: str) -> Iterator[tuple[dict, dict, str]]:
-    conn = _get_conn()
-    try:
-        conn.execute("BEGIN")
-        state = None
-        state_revision = ""
-        state_size = 0
-        terms = []
-        for column in conn.execute("PRAGMA table_info(approval_requests)"):
-            quoted = str(column[1]).replace('"', '""')
-            terms.append(f'COALESCE(length(CAST("{quoted}" AS BLOB)),0)')
-        rows = conn.execute(
-            "SELECT id," + " + ".join(terms) + " AS size "
-            "FROM approval_requests WHERE task_id=? AND run_id=? AND status='pending' "
-            "ORDER BY requested_at,id", (task_id, run_id),
-        )
-        while batch := rows.fetchmany(128):
-            for identity in batch:
-                if identity["size"] + state_size > 4 * 1024 * 1024:
-                    raise TaskMutationError("task_metadata_too_large", task_id)
-                if state is None:
-                    approval, state, revision = _reviewed_task_approval_state(conn, task_id, run_id, str(identity["id"]))
-                    raw_state = dict(conn.execute("SELECT * FROM pipeline_state WHERE run_id=?", (run_id,)).fetchone())
-                    state_revision = _task_row_revision(raw_state)
-                    state_size = sum(len(str(value).encode()) for value in raw_state.values() if value is not None)
-                else:
-                    approval = dict(conn.execute("SELECT * FROM approval_requests WHERE id=?", (identity["id"],)).fetchone())
-                    revision = hashlib.sha256((_task_row_revision(approval) + "\n" + state_revision).encode()).hexdigest()
-                yield approval, state, revision
-    finally:
-        conn.close()
-
-
-@_publishes_live("approvals", "conversations")
-def claim_reviewed_task_approval(
-    task_id: str, run_id: str, approval_id: str, *, expected_revision: str,
-    approved: bool, validate: Callable[[], None],
-    record_commit: Callable[[sqlite3.Connection, str], None] | None = None,
-) -> tuple[dict, dict]:
-    conn = _get_conn()
-    try:
-        conn.execute("BEGIN IMMEDIATE")
-        validate()
-        approval, state, revision = _reviewed_task_approval_state(conn, task_id, run_id, approval_id)
-        if expected_revision != revision or approval["status"] != "pending" or state["status"] != "paused":
-            raise TaskMutationError("task_approval_revision_conflict", task_id)
-        capture = state["config"].get("_reviewed_task_run")
-        if not capture or approval.get("resume_kind") not in {None, "", "workflow"}:
-            raise TaskMutationError("task_approval_owner_required", task_id)
-        from row_bot.questions import stored_question
-        if stored_question(approval.get("approval_payload_json")) is not None:
-            # Row-Bot's question is answered on its card; Approve and Reject never answer it (N4).
-            raise TaskMutationError("task_approval_owner_required", task_id)
-        from row_bot.runtime.executions import generation_registry
-        if any(h.domain == "workflow" and h.domain_id == run_id
-               for h in generation_registry.active(state["thread_id"])):
-            raise TaskMutationError("task_run_draining", task_id)
-        if (capture.get("run_id") != run_id or capture.get("thread_id") != state["thread_id"]
-                or capture.get("task", {}).get("id") != task_id
-                or state.get("resume_token") != approval.get("resume_token")):
-            raise TaskMutationError("task_approval_revision_conflict", task_id)
-        if approval.get("timeout_at") and approval["timeout_at"] <= datetime.now().isoformat():
-            raise TaskMutationError("task_approval_expired", task_id)
-        if len(approval.get("message") or "") > 16384:
-            raise TaskMutationError("task_approval_review_incomplete", task_id)
-        conn.execute(
-            "UPDATE approval_requests SET status=?,responded_at=? WHERE id=? AND status='pending'",
-            ("approved" if approved else "denied", datetime.now().isoformat(), approval_id),
-        )
-        conn.execute("UPDATE pipeline_state SET status='resuming' WHERE run_id=?", (run_id,))
-        if record_commit is not None:
-            record_commit(conn, approval_id)
-        validate()
-        conn.commit()
-        return approval, state
-    finally:
-        conn.close()
-
-
-def resume_reviewed_task_approval(
-    approval: dict, state: dict, *, approved: bool, validate: Callable[[], None],
-) -> None:
-    validate()
-    _resolve_approval_on_channels(approval["id"], "approved" if approved else "denied", source_channel="web", validate=validate)
-    validate()
-    _resume_pipeline(approval["resume_token"], approved=approved, reviewed_state=state, validate=validate)
 
 
 def _check_approval_timeouts() -> None:
@@ -6417,8 +4671,6 @@ def _apply_approval_timeout(r: dict) -> None:
         # Nobody answered Row-Bot's question (N4): it goes on with its recommendation; with none, the run stops.
         if questions.has_recommendation(asked):
             _answer_question(r, questions.timed_out())
-        elif str(r.get("resume_kind") or "") in {"", "workflow"}:
-            _stop_unanswered_run(r)
         logger.info("Question %s timed out for task %s", r["id"], r["task_id"])
         return
     if str(r.get("resume_kind") or "") == "agent_run":
@@ -6441,8 +4693,6 @@ def _apply_approval_timeout(r: dict) -> None:
         from row_bot.integrations import views
 
         views.decided(str(r["id"]), False)
-    elif str(r.get("resume_kind") or "") != "conversation":
-        _resume_pipeline(r["resume_token"], approved=False)
     logger.info("Approval request %s timed out for task %s",
                  r["id"], r["task_id"])
 
@@ -6475,529 +4725,6 @@ def _answer_question(r: dict, answer: dict) -> None:
 
         resume_parent_orchestration(str(r.get("step_id") or "").removeprefix("orchestration:"),
                                     resume_token=str(r.get("resume_token") or ""), approved=True, answer=answer)
-    elif kind in {"", "workflow"}:
-        _resume_pipeline(str(r["resume_token"]), approved=True, resume_values=values)
-
-
-def _stop_unanswered_run(r: dict) -> None:
-    """A workflow's question had no recommended option and nobody answered in time: the run stops."""
-    from row_bot import questions
-
-    run_id = str(r.get("run_id") or "")
-    state = _load_pipeline_state(str(r.get("resume_token") or "")) or {}
-    _update_pipeline_status(run_id, "stopped")
-    _finish_run(run_id, "stopped", status_message=questions.NO_ANSWER_IN_TIME)
-    _emit_buddy_workflow_event(
-        "cancelled",
-        task_id=str(r.get("task_id") or ""),
-        thread_id=str(state.get("thread_id") or ""),
-        label=questions.NO_ANSWER_IN_TIME,
-    )
-
-
-def _pause_for_question(
-    *,
-    task: dict,
-    run_id: str,
-    thread_id: str,
-    step: dict,
-    step_id: str,
-    step_index: int,
-    total: int,
-    step_outputs: dict,
-    config: dict,
-    interrupts: list,
-    asked: dict,
-    validate: Callable[[], None] | None = None,
-) -> None:
-    """An unattended run waits on Row-Bot's question like an approval step (N4).
-
-    Every approval level asks: a question is not a permission, so neither Hands-off nor Block decides it. It
-    shows in Needs you, goes to the run's channels and waits until the step's timeout (24 hours by default).
-    """
-    from row_bot import questions
-
-    question = asked["questions"][0]["question"]
-    message = f"Step {step_index + 1}/{total}: Row-Bot has a question: {question}"
-    resume_token, approval_id = create_approval_request(
-        run_id=run_id, task_id=str(task.get("id") or ""), step_id=step_id, message=message,
-        timeout_minutes=int(step.get("timeout_minutes") or 0) or questions.DEFAULT_TIMEOUT_MINUTES,
-        approval_payload_json={"interrupt": interrupts},
-    )
-    _save_pipeline_state(
-        run_id=run_id, task_id=str(task.get("id") or ""), thread_id=thread_id,
-        current_step_index=step_index, step_outputs=step_outputs, config=config,
-        resume_token=resume_token, status="paused", graph_interrupted=True,
-    )
-    logger.info("Task '%s' paused at step %d/%d for a question", task.get("name", ""), step_index + 1, total)
-    _push_approval_to_channels(task, approval_id, resume_token, message, question=asked,
-                               **({"validate": validate} if validate is not None else {}))
-    from row_bot.notifications import notify
-
-    _check_workflow_effect(validate)
-    notify(title="Row-Bot has a question", message=f"{task.get('name', '')}: {question}", sound="workflow",
-           toast_type="warning", source="workflow", in_app=False)
-
-
-def _resume_graph_interrupted(
-    state: dict,
-    task: dict,
-    thread_id: str,
-    enabled_tool_names: list[str],
-    paused_step_index: int,
-    approved: bool = True,
-    validate: Callable[[], None] | None = None,
-    resume_values: dict | None = None,
-) -> None:
-    """Resume a graph-interrupted pipeline step in a background thread.
-
-    Calls ``resume_invoke_agent()`` with ``Command(resume=<approved>)``
-    to continue the LangGraph graph from where the interrupt paused it.
-    When *approved* is False the tool returns a cancellation message
-    and the LLM can still finish the step normally.
-    If the result is another interrupt, pauses again with a new approval.
-    If the result is text, continues pipeline with remaining steps.
-    """
-    from row_bot.agent import (
-        resume_invoke_agent, TaskStoppedError,
-        _approval_mode_var, _background_workflow_var, _persistent_thread_var,
-    )
-
-    run_id = state["run_id"]
-    task_id = state["task_id"]
-    config = state.get("config", {})
-    reviewed_capture = config.get("_reviewed_task_run")
-    reviewed_policy = reviewed_capture["policy"] if reviewed_capture else None
-    config = {
-        **config,
-        "configurable": {
-            **(config.get("configurable") or {}),
-            "runtime_surface": "workflow",
-            "runtime_mode": "agent",
-            "approval_mode": reviewed_policy["approval_mode"] if reviewed_policy else get_task_approval_mode(task),
-        },
-    }
-    step_outputs = state.get("step_outputs", {})
-    steps = task.get("steps") or []
-    total = len(steps)
-    paused_step = steps[paused_step_index] if paused_step_index < total else {}
-    step_id = paused_step.get("id", f"step_{paused_step_index + 1}")
-    approval_mode = reviewed_policy["approval_mode"] if reviewed_policy else get_task_approval_mode(task)
-    effective_tool_names = list(reviewed_policy["effective_tool_names"]) if reviewed_policy else enabled_tool_names
-
-    # Clear the "(paused)" suffix from the thread name
-    from row_bot.threads import _save_thread_meta, _list_threads as _lt
-    if any(t[0] == thread_id for t in _lt()):
-        _ts = datetime.now().strftime('%b %d, %I:%M %p')
-        _save_thread_meta(thread_id, f"⚡ {task['name']} — {_ts}")
-
-    def _run():
-        if reviewed_capture:
-            try:
-                _reviewed_run_enter(run_id, task_id, thread_id, reviewed_capture, validate)
-            except BaseException as exc:
-                _workflow_entry_failed(run_id, thread_id, exc)
-                raise
-        _background_workflow_var.set(True)
-        _approval_mode_var.set(approval_mode)
-        _persistent_thread_var.set(bool(task.get("persistent_thread_id")))
-
-        from row_bot.cancellation import current_cancellation_scope
-        scope = current_cancellation_scope()
-        _stop_event = scope.stop_event if scope else threading.Event()
-        try:
-            result = resume_invoke_agent(
-                effective_tool_names, config, approved=approved, stop_event=_stop_event,
-                # A question's answer goes to its own interrupt only (N4).
-                **({"resume_values": resume_values} if resume_values else {}),
-            )
-        except TaskStoppedError:
-            _update_pipeline_status(run_id, "stopped")
-            _finish_run(run_id, "stopped",
-                        status_message="Stopped during graph resume")
-            _emit_buddy_workflow_event(
-                "cancelled",
-                task_id=task_id,
-                thread_id=thread_id,
-                label="Workflow stopped",
-            )
-            return
-        except Exception as exc:
-            exc_str = str(exc).lower()
-            if "checkpoint" in exc_str or "no state" in exc_str or "not found" in exc_str:
-                err_msg = "Graph checkpoint was lost — cannot resume (task may need to re-run)"
-            else:
-                err_msg = f"Graph resume error: {exc}"
-            logger.error("Graph resume failed for task '%s': %s",
-                         task["name"], exc)
-            _update_pipeline_status(run_id, "failed")
-            _finish_run(run_id, "failed",
-                        status_message=err_msg)
-            _emit_buddy_workflow_event(
-                "error",
-                task_id=task_id,
-                thread_id=thread_id,
-                label="Workflow error",
-                error=err_msg,
-            )
-            return
-
-        # ── Chained interrupt: agent hit another dangerous tool ─────
-        if isinstance(result, dict) and result.get("type") == "terminal":
-            terminal_reason = str(result.get("terminal_reason") or "")
-            message = str(result.get("message") or "Workflow step stopped incomplete.")
-            step_outputs[step_id] = message
-            _update_pipeline_status(run_id, "blocked")
-            _finish_run(
-                run_id,
-                "blocked",
-                status_message=message,
-                terminal_reason=terminal_reason,
-            )
-            _emit_buddy_workflow_event(
-                "error",
-                task_id=task_id,
-                thread_id=thread_id,
-                label="Workflow needs attention",
-                error=message,
-            )
-            return
-        if isinstance(result, dict) and result.get("type") == "interrupt":
-            interrupts = result.get("interrupts", [])
-            from row_bot.questions import question_item
-
-            asked = question_item(interrupts)
-            if asked is not None:
-                # Row-Bot asks the person; no approval level answers for them (N4).
-                _pause_for_question(
-                    task=task, run_id=run_id, thread_id=thread_id, step=paused_step, step_id=step_id,
-                    step_index=paused_step_index, total=total, step_outputs=step_outputs, config=config,
-                    interrupts=interrupts, asked=asked, validate=validate,
-                )
-                return
-            person_held = _person_only_interrupt(interrupts)
-
-            # Empty interrupts — auto-continue
-            if not interrupts:
-                logger.warning(
-                    "Task '%s' graph resume: empty interrupt — auto-continuing",
-                    task["name"],
-                )
-                # Treat as success — result is empty, keep going
-                pass  # fall through to success path below
-            elif approval_mode == "block" and not person_held:
-                # Block mode — refuse the chained interrupt
-                logger.info(
-                    "Task '%s' graph resume: chained interrupt in block mode — refusing",
-                    task["name"],
-                )
-                try:
-                    result = resume_invoke_agent(
-                        effective_tool_names, config,
-                        approved=False, stop_event=_stop_event,
-                    )
-                except Exception as exc2:
-                    logger.error("Block-mode resume denial failed: %s", exc2)
-                # Fall through to success path
-            elif approval_mode == "full" and not person_held:
-                # Hands-off approves the chained interrupt; under Auto it waits for the person.
-                # The person's own "Always ask me" card always waits for them (N9).
-                logger.info(
-                    "Task '%s' graph resume: chained interrupt under Hands-off — approving",
-                    task["name"],
-                )
-                try:
-                    result = resume_invoke_agent(
-                        effective_tool_names, config,
-                        approved=True, stop_event=_stop_event,
-                    )
-                except Exception as exc2:
-                    logger.error("Hands-off auto-resume failed: %s", exc2)
-                # Fall through to success path
-            else:
-                # Approve mode — create a new approval request
-                details = [_approval_detail(intr) for intr in interrupts]
-                approval_msg = (
-                    f"Step {paused_step_index + 1}/{total}: "
-                    + "; ".join(details)
-                )
-                resume_token, approval_req_id = create_approval_request(
-                    run_id=run_id,
-                    task_id=task_id,
-                    step_id=step_id,
-                    message=approval_msg,
-                    **_person_approval_terms(person_held, paused_step),
-                )
-                _save_pipeline_state(
-                    run_id=run_id,
-                    task_id=task_id,
-                    thread_id=thread_id,
-                    current_step_index=paused_step_index,
-                    step_outputs=step_outputs,
-                    config=config,
-                    resume_token=resume_token,
-                    status="paused",
-                    graph_interrupted=True,
-                )
-                logger.info(
-                    "Task '%s' paused again at step %d/%d — chained interrupt: %s",
-                    task["name"], paused_step_index + 1, total, approval_msg,
-                )
-                _push_approval_to_channels(
-                    task, approval_req_id, resume_token, approval_msg,
-                    **({"validate": validate} if validate is not None else {}),
-                )
-                from row_bot.notifications import notify
-                _check_workflow_effect(validate)
-                notify(
-                    title="⏸️ Approval Required",
-                    message=f"{task['name']}: {approval_msg}",
-                    sound="workflow",
-                    toast_type="warning",
-                    source="workflow",
-                    in_app=False,  # the app lists pending approvals itself
-                )
-                return
-
-        if isinstance(result, dict) and result.get("type") == "terminal":
-            terminal_reason = str(result.get("terminal_reason") or "")
-            message = str(result.get("message") or "Workflow step stopped incomplete.")
-            step_outputs[step_id] = message
-            _update_pipeline_status(run_id, "blocked")
-            _finish_run(
-                run_id,
-                "blocked",
-                status_message=message,
-                terminal_reason=terminal_reason,
-            )
-            _emit_buddy_workflow_event(
-                "error",
-                task_id=task_id,
-                thread_id=thread_id,
-                label="Workflow needs attention",
-                error=message,
-            )
-            return
-
-        # ── Success: graph finished the step ────────────────────────
-        # Clear the graph_interrupted flag now that the resume succeeded
-        _clear_graph_interrupted(run_id)
-
-        if result:
-            step_outputs[step_id] = result if isinstance(result, str) else str(result)
-
-        next_step = paused_step_index + 1
-        if next_step >= total:
-            # Pipeline complete — deliver to channels
-            last_output = step_outputs.get(step_id, "") or ""
-            deliver_text = last_output or f"✅ Task '{task['name']}' completed."
-            delivery_status, delivery_detail = _deliver_to_channels(
-                task, deliver_text,
-            )
-            final_status = _workflow_final_status_for_delivery(delivery_status)
-            _update_pipeline_status(run_id, final_status)
-            _finish_run(run_id, final_status,
-                        status_message=delivery_detail or "Completed after graph resume")
-            _emit_buddy_workflow_event(
-                "done",
-                task_id=task_id,
-                thread_id=thread_id,
-                label=task.get("name", "Workflow done"),
-            )
-            update_task(task_id, last_run=datetime.now().isoformat())
-            # Fire completion triggers
-            try:
-                _fire_completion_triggers(task_id)
-            except Exception as exc:
-                logger.error("Completion trigger error: %s", exc)
-            return
-
-        # More steps remain — continue pipeline
-        run_task_background(
-            task_id, thread_id, enabled_tool_names,
-            start_step=next_step,
-            notification=True,
-            resume_step_outputs=step_outputs,
-            resume_run_id=run_id,
-            reviewed_capture=reviewed_capture, validate=validate,
-        )
-
-    from row_bot.runtime.executions import generation_registry
-    t = generation_registry.thread(target=_run, conversation_id=thread_id,
-                                   stop_event=threading.Event(), domain="workflow",
-                                   domain_id=run_id if reviewed_capture else str(uuid.uuid4()), name=f"graph-resume-{task['name']}", resource_context=True,
-                                   on_entry_failure=lambda exc: _workflow_entry_failed(run_id, thread_id, exc))
-    t.start()
-
-
-def _resume_pipeline(resume_token: str, approved: bool = True, *,
-                     reviewed_state: dict | None = None, validate: Callable[[], None] | None = None,
-                     resume_values: dict | None = None) -> None:
-    """Resume a paused pipeline from saved state.
-
-    *approved* is ``False`` when the user denied the approval.  For
-    graph-interrupted prompt steps the graph is resumed with
-    ``approved=False`` so the tool returns a cancellation message and
-    the step (and remaining steps) can still complete.  For explicit
-    approval-type steps, denial stops the entire pipeline.
-    """
-    from row_bot.tools import registry as tool_registry
-    from row_bot.threads import _save_thread_meta, _list_threads
-
-    state = reviewed_state if reviewed_state is not None else _load_pipeline_state(resume_token)
-    if not state:
-        logger.error("Cannot resume: no pipeline state for token %s", resume_token)
-        return
-
-    reviewed_capture = state.get("config", {}).get("_reviewed_task_run")
-    task = json.loads(json.dumps(reviewed_capture["task"])) if reviewed_capture else get_task(state["task_id"])
-    if reviewed_capture and validate is not None:
-        validate()
-    if not task:
-        logger.error("Cannot resume: task %s not found", state["task_id"])
-        return
-
-    thread_id = state["thread_id"]
-    enabled = list(reviewed_capture["policy"]["effective_tool_names"]) if reviewed_capture else [t.name for t in tool_registry.get_enabled_tools()]
-
-    steps = task["steps"]
-    paused_step_index = state["current_step_index"]
-    paused_step = steps[paused_step_index] if paused_step_index < len(steps) else {}
-    paused_step_type = paused_step.get("type", "prompt")
-
-    asked = _approval_for_token(resume_token)
-    held = _person_payload_of(asked)
-    timed_out = bool(asked and asked.get("status") == "timed_out")
-    if held and not approved and (timed_out or state.get("graph_interrupted") != "true"):
-        # The person's own approval (N9) not given: the action never runs and the run stops here.
-        _stop_unapproved_run(state, task, enabled, timed_out=timed_out)
-        return
-    if held:
-        # The answer is bound to exactly what the card showed; the tool runs only with that.
-        from row_bot.tools.approval_gate import bound_answer
-
-        approved = bound_answer(approved, held["binding"])
-
-    if state.get("graph_interrupted") == "true":
-        _update_pipeline_status(state["run_id"], "running")
-        _resume_graph_interrupted(
-            state=state,
-            task=task,
-            thread_id=thread_id,
-            enabled_tool_names=enabled,
-            paused_step_index=paused_step_index,
-            approved=approved,
-            validate=validate,
-            resume_values=resume_values,
-        )
-        return
-
-    # For explicit approval steps, denial stops the pipeline
-    # unless an if_denied jump target is configured.
-    if paused_step_type == "approval" and not approved:
-        denied_target = paused_step.get("if_denied", "")
-        if denied_target and denied_target != "end":
-            # Jump to the specified step
-            resolved = _resolve_step_index(steps, denied_target)
-            if resolved is not None:
-                _update_pipeline_status(state["run_id"], "running")
-                logger.info(
-                    "Task '%s' approval denied → jumping to '%s'",
-                    task["name"], denied_target,
-                )
-                step_outputs = state.get("step_outputs", {})
-                step_outputs[paused_step.get("id", f"step_{paused_step_index+1}")] = "denied"
-                run_task_background(
-                    state["task_id"], thread_id, enabled,
-                    start_step=resolved,
-                    notification=True,
-                    resume_step_outputs=step_outputs,
-                    resume_run_id=state["run_id"],
-                    reviewed_capture=reviewed_capture, validate=validate,
-                )
-                return
-        # No target or "end" — stop the pipeline
-        _update_pipeline_status(state["run_id"], "stopped")
-        _finish_run(state["run_id"], "stopped",
-                    status_message="Approval timed out" if timed_out else "Approval denied by user",
-                    **({"notice": NOT_APPROVED_IN_TIME} if timed_out else {}))
-        _emit_buddy_workflow_event(
-            "cancelled",
-            task_id=state["task_id"],
-            thread_id=thread_id,
-            label="Workflow denied",
-        )
-        if any(t[0] == thread_id for t in _list_threads()):
-            thread_name = (f"⚡ {task['name']} (denied) — "
-                           f"{datetime.now().strftime('%b %d, %I:%M %p')}")
-            _save_thread_meta(thread_id, thread_name)
-        from row_bot.notifications import notify
-        notify(title="❌ Task Denied",
-               message=f"{task['name']}: approval denied by user",
-               sound="workflow", source="workflow")
-        return
-
-    _update_pipeline_status(state["run_id"], "running")
-
-    # For explicit approval steps, resume at the NEXT step
-    # or jump to the if_approved target if configured.
-    # For graph-interrupted prompt steps (approve mode), use
-    # resume_invoke_agent() to continue from the checkpoint (F12).
-    if paused_step_type == "approval":
-        approved_target = paused_step.get("if_approved", "")
-        if approved_target == "end":
-            _update_pipeline_status(state["run_id"], "completed")
-            _finish_run(state["run_id"], "completed",
-                        status_message="Completed (approved → end)")
-            _emit_buddy_workflow_event(
-                "done",
-                task_id=state["task_id"],
-                thread_id=thread_id,
-                label=task.get("name", "Workflow done"),
-            )
-            return
-        if approved_target:
-            resolved = _resolve_step_index(steps, approved_target)
-            next_step = resolved if resolved is not None else paused_step_index + 1
-        else:
-            next_step = paused_step_index + 1
-        # Store approval result in step outputs
-        step_outputs = state.get("step_outputs", {})
-        step_outputs[paused_step.get("id", f"step_{paused_step_index+1}")] = "approved"
-        resume_run = state["run_id"]
-    else:
-        next_step = paused_step_index
-        step_outputs = state.get("step_outputs", {})
-        resume_run = state["run_id"]
-
-    if next_step >= len(steps):
-        # No more steps — just finish
-        _update_pipeline_status(state["run_id"], "completed")
-        _finish_run(state["run_id"], "completed",
-                    status_message="Completed after approval")
-        _emit_buddy_workflow_event(
-            "done",
-            task_id=state["task_id"],
-            thread_id=thread_id,
-            label=task.get("name", "Workflow done"),
-        )
-        return
-
-    # Clear the "(paused)" suffix from the thread name
-    from row_bot.threads import _save_thread_meta, _list_threads
-    if any(t[0] == thread_id for t in _list_threads()):
-        _ts = datetime.now().strftime('%b %d, %I:%M %p')
-        _save_thread_meta(thread_id, f"⚡ {task['name']} — {_ts}")
-
-    # Use step_outputs if set by approval branch, otherwise from state
-    run_task_background(
-        state["task_id"], thread_id, enabled,
-        start_step=next_step,
-        resume_run_id=resume_run,
-        notification=True,
-        resume_step_outputs=step_outputs,
-        reviewed_capture=reviewed_capture, validate=validate,
-    )
 
 
 # ── Approval Timeout Monitor ────────────────────────────────────────────────
@@ -7032,746 +4759,18 @@ def start_approval_monitor() -> None:
     logger.info("Approval timeout monitor started")
 
 
-# ── Subtask Execution ────────────────────────────────────────────────────────
-
-def _run_subtask_sync(
-    child_task: dict,
-    thread_id: str,
-    tool_names: list[str],
-    parent_config: dict,
-    stop_event: threading.Event,
-    parent_output: str = "",
-    depth: int = 1,
-    *, validate: Callable[[], None] | None = None,
-) -> str | None:
-    """Run a subtask synchronously and return its final output.
-
-    Executes inline (not in a new thread) so the parent can wait for the
-    result and use it as ``step_outputs``.
-    """
-    from row_bot.agent import invoke_agent, TaskStoppedError
-
-    token = _subtask_depth_var.set(depth)
-    try:
-        steps = child_task.get("steps") or _prompts_to_steps(
-            child_task.get("prompts") or []
-        )
-        if not steps:
-            return None
-
-        # Apply child task's approval mode
-        child_approval = get_task_approval_mode(child_task)
-        effective_tools = tool_names
-
-        config = {
-            "configurable": {
-                "thread_id": thread_id,
-                "runtime_surface": "workflow",
-                "runtime_mode": "agent",
-                "approval_mode": child_approval,
-            },
-        }
-        if child_task.get("model_override"):
-            config["configurable"]["model_override"] = child_task["model_override"]
-
-        last_output = parent_output
-        step_outputs: dict[str, str] = {}
-
-        i = 0
-        while i < len(steps):
-            _check_workflow_effect(validate)
-            if stop_event.is_set():
-                return None
-
-            step = steps[i]
-            step_id = step.get("id", f"child_step_{i + 1}")
-            step_type = step.get("type", "prompt")
-
-            if step_type == "prompt":
-                prompt = step.get("prompt", "")
-                prompt = expand_template_vars(
-                    prompt, task_id=child_task["id"],
-                    prev_output=last_output,
-                    step_outputs=step_outputs,
-                )
-                # Inject parent output
-                prompt = prompt.replace("{{parent_output}}", parent_output)
-
-                try:
-                    _use_step_apps(config, step)
-                    result = invoke_agent(prompt, effective_tools, config,
-                                         stop_event=stop_event)
-                    if isinstance(result, dict) and result.get("type") == "terminal":
-                        logger.warning(
-                            "Subtask '%s' step %d stopped incomplete: %s",
-                            child_task["name"],
-                            i + 1,
-                            result.get("terminal_reason") or "terminal",
-                        )
-                        return None
-                    # Subtasks do not support approval flow — if the
-                    # agent triggered an interrupt(), handle it inline.
-                    if isinstance(result, dict) and result.get("type") == "interrupt":
-                        child_approval = get_task_approval_mode(child_task)
-                        if child_approval == "full":
-                            from row_bot.agent import resume_invoke_agent
-                            _check_workflow_effect(validate)
-                            result = resume_invoke_agent(
-                                effective_tools, config,
-                                approved=True, stop_event=stop_event,
-                            )
-                            if isinstance(result, str) and result:
-                                last_output = result
-                                step_outputs[step_id] = result
-                        else:
-                            # Block, Ask, or Auto when the reviewer asked: refuse,
-                            # since subtasks can't surface approval UI to the user.
-                            from row_bot.agent import resume_invoke_agent
-                            _check_workflow_effect(validate)
-                            denied_result = resume_invoke_agent(
-                                effective_tools, config,
-                                approved=False, stop_event=stop_event,
-                            )
-                            logger.warning(
-                                "Subtask '%s' step %d: interrupt denied "
-                                "(subtasks cannot surface approvals)",
-                                child_task["name"], i + 1,
-                            )
-                            # Preserve the LLM's actual response if available
-                            if isinstance(denied_result, str) and denied_result:
-                                last_output = denied_result
-                            else:
-                                last_output = (
-                                    "⚠️ A tool required approval but subtasks "
-                                    "cannot surface approval requests. The "
-                                    "tool call was denied."
-                                )
-                            step_outputs[step_id] = last_output
-                    elif result:
-                        last_output = result if isinstance(result, str) else str(result)
-                        step_outputs[step_id] = last_output
-                except TaskStoppedError:
-                    return None
-                except _WorkflowEffectDenied:
-                    raise
-                except Exception as exc:
-                    logger.error(
-                        "Subtask '%s' step %d failed: %s",
-                        child_task["name"], i + 1, exc,
-                    )
-                    on_err = step.get("on_error", "stop")
-                    if on_err == "stop":
-                        return None
-
-            elif step_type == "condition":
-                cond_expr = step.get("condition", "true")
-                cond_ctx = {
-                    "prev_output": last_output,
-                    "step_outputs": step_outputs,
-                    "task_id": child_task["id"],
-                    "thread_id": thread_id,
-                    "model_override": child_task.get("model_override") or "",
-                }
-                result = evaluate_condition(cond_expr, cond_ctx)
-                step_outputs[step_id] = str(result)
-                target = step.get("if_true") if result else step.get("if_false")
-                logger.info(
-                    "Subtask '%s' condition step %d: '%s' → %s → jump to %s",
-                    child_task["name"], i + 1, cond_expr, result, target,
-                )
-                if target:
-                    resolved = _resolve_step_index(steps, target)
-                    if resolved is None:
-                        break  # target is "end"
-                    if resolved == i:
-                        logger.error(
-                            "Subtask '%s' condition step %d would jump to itself — stopping",
-                            child_task["name"], i + 1,
-                        )
-                        break
-                    i = resolved
-                    continue  # jump — skip the i += 1 below
-
-            elif step_type == "notify":
-                msg = step.get("message", "")
-                msg = expand_template_vars(
-                    msg, task_id=child_task["id"],
-                    prev_output=last_output,
-                    step_outputs=step_outputs,
-                )
-                notify_channel = step.get("channel", "desktop")
-                if notify_channel == "desktop":
-                    from row_bot.notifications import notify as _notify
-                    _check_workflow_effect(validate)
-                    _notify(
-                        title=f"📋 {child_task['name']}",
-                        message=msg,
-                        sound="workflow",
-                        source="workflow",
-                        requested=True,
-                    )
-                else:
-                    try:
-                        _deliver_to_channel(
-                            {**child_task, "delivery_channel": notify_channel},
-                            msg,
-                            **({"validate": validate} if validate is not None else {}),
-                        )
-                    except _WorkflowEffectDenied:
-                        raise
-                    except Exception as exc:
-                        logger.error(
-                            "Subtask '%s' step %d notify failed: %s",
-                            child_task["name"], i + 1, exc,
-                        )
-                step_outputs[step_id] = msg
-
-            else:
-                logger.warning(
-                    "Subtask '%s' step %d: unsupported step type '%s' — skipping",
-                    child_task["name"], i + 1, step_type,
-                )
-
-            # ── Optional "next" override on any step ─────────────
-            next_target = step.get("next")
-            if next_target:
-                resolved = _resolve_step_index(steps, next_target)
-                if resolved is None:
-                    break  # "end"
-                i = resolved
-                continue  # skip the default i += 1
-
-            i += 1
-
-        return last_output
-    finally:
-        _subtask_depth_var.reset(token)
-
-
-def detect_circular_subtasks(task_id: str, steps: list[dict]) -> list[str]:
-    """Check for circular subtask references. Returns cycle path if found."""
-    def _dfs(tid: str, visited: set[str], path: list[str]) -> list[str] | None:
-        if tid in visited:
-            return path + [tid]
-        visited.add(tid)
-        t = get_task(tid)
-        if not t:
-            return None
-        child_steps = t.get("steps") or []
-        # If checking the task being saved, use the provided steps
-        if tid == task_id:
-            child_steps = steps
-        for s in child_steps:
-            if s.get("type") == "subtask":
-                child_id = s.get("task_id", "")
-                result = _dfs(child_id, visited.copy(), path + [tid])
-                if result:
-                    return result
-        return None
-
-    for s in steps:
-        if s.get("type") == "subtask":
-            cycle = _dfs(s.get("task_id", ""), set(), [task_id])
-            if cycle:
-                return cycle
-    return []
-
-
-# ── Condition Evaluator ──────────────────────────────────────────────────────
-
-def evaluate_condition(expr: str, context: dict) -> bool:
-    """Evaluate a condition expression against a context dict.
-
-    *context* typically contains::
-
-        {
-            "prev_output": str,          # output of the previous step
-            "step_outputs": dict,        # all step outputs so far
-            "task_id": str,
-        }
-
-    Supported operators::
-
-        contains:<text>         — case-insensitive substring check
-        not_contains:<text>     — negation of contains
-        equals:<text>           — exact string match
-        matches:<regex>         — Python re.search
-        gt:<n>  lt:<n>  gte:<n>  lte:<n>  — first number comparison
-        length_gt:<n>  length_lt:<n>      — character count
-        empty / not_empty
-        true / false                      — forced branching
-        json:<path>:<op>:<value>          — nested JSON field check
-        llm:<prompt>                      — LLM evaluation (yes/no)
-        and:[cond1,cond2,...]             — all must be true
-        or:[cond1,cond2,...]              — any must be true
-    """
-    expr = expr.strip()
-    prev = context.get("prev_output", "")
-
-    # ── Boolean literals ─────────────────────────────────────────────
-    if expr == "true":
-        return True
-    if expr == "false":
-        return False
-
-    # ── Empty / not_empty ────────────────────────────────────────────
-    if expr == "empty":
-        return not prev.strip()
-    if expr == "not_empty":
-        return bool(prev.strip())
-
-    # ── contains / not_contains ──────────────────────────────────────
-    if expr.startswith("contains:"):
-        needle = expr[len("contains:"):]
-        return needle.lower() in prev.lower()
-    if expr.startswith("not_contains:"):
-        needle = expr[len("not_contains:"):]
-        return needle.lower() not in prev.lower()
-
-    # ── equals ───────────────────────────────────────────────────────
-    if expr.startswith("equals:"):
-        return prev == expr[len("equals:"):]
-
-    # ── matches (regex) ──────────────────────────────────────────────
-    if expr.startswith("matches:"):
-        import re as _re
-        pattern = expr[len("matches:"):]
-        try:
-            return bool(_re.search(pattern, prev))
-        except _re.error:
-            raise _unreadable_condition(expr) from None
-
-    # ── Numeric comparisons ──────────────────────────────────────────
-    _numeric_ops = {"gt:": ">", "lt:": "<", "gte:": ">=", "lte:": "<="}
-    for prefix, _op in _numeric_ops.items():
-        if expr.startswith(prefix):
-            import re as _re
-            threshold = expr[len(prefix):]
-            try:
-                threshold_val = float(threshold)
-            except ValueError:
-                raise _unreadable_condition(expr) from None
-            # Extract first number from prev_output
-            match = _re.search(r"-?\d+\.?\d*", prev)
-            if not match:
-                return False
-            actual_val = float(match.group())
-            if _op == ">":
-                return actual_val > threshold_val
-            if _op == "<":
-                return actual_val < threshold_val
-            if _op == ">=":
-                return actual_val >= threshold_val
-            if _op == "<=":
-                return actual_val <= threshold_val
-
-    # ── Length comparisons ───────────────────────────────────────────
-    if expr.startswith("length_gt:"):
-        try:
-            return len(prev) > int(expr[len("length_gt:"):])
-        except ValueError:
-            return False
-    if expr.startswith("length_lt:"):
-        try:
-            return len(prev) < int(expr[len("length_lt:"):])
-        except ValueError:
-            return False
-
-    # ── JSON field check ─────────────────────────────────────────────
-    if expr.startswith("json:"):
-        return _eval_json_condition(expr[len("json:"):], prev, context)
-
-    # ── LLM evaluation ───────────────────────────────────────────────
-    if expr.startswith("llm:"):
-        return _eval_llm_condition(expr[len("llm:"):], context)
-
-    # ── Compound: and / or ───────────────────────────────────────────
-    if expr.startswith("and:[") and expr.endswith("]"):
-        sub_exprs = _split_compound(expr[len("and:["):-1])
-        return all(evaluate_condition(s, context) for s in sub_exprs)
-    if expr.startswith("or:[") and expr.endswith("]"):
-        sub_exprs = _split_compound(expr[len("or:["):-1])
-        return any(evaluate_condition(s, context) for s in sub_exprs)
-
-    raise _unreadable_condition(expr)
-
-
-def _unreadable_condition(expr: str) -> ConditionSyntaxError:
-    """A condition that can't be read fails its step; it never quietly counts as false (B311)."""
-    return ConditionSyntaxError(f"The workflow condition {expr!r} can't be read. Supported: {CONDITION_SYNTAX}.")
-
-
-def _split_compound(inner: str) -> list[str]:
-    """Split comma-separated condition expressions, respecting nested brackets."""
-    parts: list[str] = []
-    depth = 0
-    current: list[str] = []
-    for ch in inner:
-        if ch == "[":
-            depth += 1
-            current.append(ch)
-        elif ch == "]":
-            depth -= 1
-            current.append(ch)
-        elif ch == "," and depth == 0:
-            parts.append("".join(current).strip())
-            current = []
-        else:
-            current.append(ch)
-    if current:
-        parts.append("".join(current).strip())
-    return [p for p in parts if p]
-
-
-def _eval_json_condition(expr: str, prev_output: str, context: dict | None = None) -> bool:
-    """Evaluate json:<path>:<op>:<value> against prev_output parsed as JSON."""
-    parts = expr.split(":", 2)
-    if len(parts) < 2:
-        logger.warning("Invalid json condition: %s", expr)
-        return False
-    json_path = parts[0]
-    op_and_val = parts[1] if len(parts) == 2 else f"{parts[1]}:{parts[2]}"
-
-    try:
-        data = json.loads(prev_output)
-    except (json.JSONDecodeError, TypeError):
-        return False
-
-    # Navigate JSON path (dot-separated)
-    for key in json_path.split("."):
-        if isinstance(data, dict):
-            data = data.get(key)
-        elif isinstance(data, list):
-            try:
-                data = data[int(key)]
-            except (ValueError, IndexError):
-                return False
-        else:
-            return False
-        if data is None:
-            return False
-
-    # Evaluate the sub-condition against the extracted value,
-    # preserving step_outputs and task_id from the parent context.
-    sub_context = {
-        "prev_output": str(data),
-        "step_outputs": (context or {}).get("step_outputs", {}),
-        "task_id": (context or {}).get("task_id", ""),
-        "thread_id": (context or {}).get("thread_id", ""),
-        "model_override": (context or {}).get("model_override", ""),
-    }
-    return evaluate_condition(op_and_val, sub_context)
-
-
-def _llm_condition_verdict(text: str) -> bool:
-    """Yes from a ``{"answer": "yes"}`` schema reply, else from a reply starting with "yes"."""
-    from row_bot.providers.background import parse_json_object
-
-    parsed = parse_json_object(text)
-    if parsed is not None and "answer" in parsed:
-        return str(parsed.get("answer") or "").strip().lower() == "yes"
-    return str(text or "").strip().lower().startswith("yes")
-
-
-def _eval_llm_condition(prompt: str, context: dict) -> bool:
-    """Use the LLM to evaluate a condition. Expects yes/no response.
-
-    A background call (WP C1): the task's model override, else the workflow
-    thread's model, at the lowest reasoning effort with a few output tokens.
-    """
-    try:
-        from langchain_core.messages import HumanMessage, SystemMessage
-        from row_bot.providers.background import invoke_background, structured_answer, thread_model_for
-
-        prev = context.get("prev_output", "")
-        step_outputs = context.get("step_outputs", {})
-
-        # Build context section with all available step outputs
-        context_parts = []
-        if prev:
-            context_parts.append(f"Previous step output:\n{prev}")
-        if step_outputs:
-            context_parts.append("All step outputs:")
-            for sid, sout in step_outputs.items():
-                context_parts.append(f"  [{sid}]: {sout}")
-
-        context_text = "\n".join(context_parts) if context_parts else "(no outputs yet)"
-
-        # Guard against excessively large context blowing past token limits
-        _MAX_COND_CONTEXT = 32000
-        if len(context_text) > _MAX_COND_CONTEXT:
-            context_text = context_text[:_MAX_COND_CONTEXT] + "\n[... truncated ...]"  # noqa: E501
-
-        full_prompt = (
-            f"Answer ONLY 'yes' or 'no' to the following question.\n\n"
-            f"Context:\n{context_text}\n\n"
-            f"Question: {prompt}"
-        )
-        # This is a bounded classification call, not a full agent loop.
-        thread_id = str(context.get("thread_id") or "")
-        answer = invoke_background(
-            "condition",
-            [
-                SystemMessage(content="Answer only yes or no. Do not call tools."),
-                HumanMessage(content=full_prompt),
-            ],
-            answer=structured_answer("condition", {"answer": {"type": "string", "enum": ["yes", "no"]}}),
-            task_model=str(context.get("model_override") or "") or None,
-            thread_model=thread_model_for(thread_id),
-            thread_id=thread_id,
-        )
-        return _llm_condition_verdict(answer)
-    except Exception as exc:
-        logger.error("LLM condition evaluation failed: %s", exc)
-    return False
-
-
-def _use_step_apps(config: dict, step: dict) -> None:
-    """A prompt step that names its apps uses only those, as an @mention would; its profile and every
-    approval still apply. A step that names none uses every app the workflow may."""
-    from row_bot.integrations.scope import step_scope
-    scope = step_scope(step.get("apps") if isinstance(step.get("apps"), list) else None)
-    if scope:
-        config["configurable"]["app_scope"] = scope
-    else:
-        config["configurable"].pop("app_scope", None)
-
-
-def _use_person_rules(config: dict, task: Mapping[str, Any], step: Mapping[str, Any]) -> None:
-    """A step's "Always ask me", and the workflow's apps and tools that always ask (N9): an
-    action they cover waits for the person under every approval level."""
-    rules = {"step": bool(step.get("always_ask")), "items": [str(item) for item in task.get("always_ask") or []]}
-    if rules["step"] or rules["items"]:
-        config["configurable"]["person_rules"] = rules
-    else:
-        config["configurable"].pop("person_rules", None)
-
-
-def _resolve_step_index(steps: list[dict], target: str) -> int | None:
-    """Resolve a step ID or 'end' to an index. Returns None for 'end'."""
-    if target == "end":
-        return None  # signals end of pipeline
-    for i, s in enumerate(steps):
-        if s.get("id") == target:
-            return i
-    # Try numeric index as fallback
-    try:
-        idx = int(target)
-        if 0 <= idx < len(steps):
-            return idx
-    except ValueError:
-        pass
-    logger.warning("Cannot resolve step target '%s' — treating as end", target)
-    return None
-
-
-def assign_step_ids(steps: list[dict]) -> None:
-    """Assign {type}_{counter} IDs to steps and update cross-references.
-
-    Mutates the list in-place.  Safe to call repeatedly — existing IDs
-    are remapped when they change.
-    """
-    if not steps:
-        return
-    type_counters: dict[str, int] = {}
-    old_to_new: dict[str, str] = {}
-    for s in steps:
-        stype = s.get("type", "prompt")
-        type_counters[stype] = type_counters.get(stype, 0) + 1
-        new_id = f"{stype}_{type_counters[stype]}"
-        old_id = s.get("id", "")
-        if old_id and old_id != new_id:
-            old_to_new[old_id] = new_id
-        s["id"] = new_id
-    # Remap cross-references (condition branches, approval branches, next)
-    if old_to_new:
-        for s in steps:
-            for field in ("if_true", "if_false", "if_approved", "if_denied", "next"):
-                ref = s.get(field)
-                if ref and ref in old_to_new:
-                    s[field] = old_to_new[ref]
-
-
-# ── Mermaid diagram generation ───────────────────────────────────────────────
-
-_STEP_ICONS = {
-    "prompt": "💬", "condition": "🔀", "approval": "✋",
-    "subtask": "🔁", "notify": "📢",
-}
-
-
-_STEP_ICONS["delegate_agent"] = "Agent"
-_STEP_ICONS["wait_for_agents"] = "Wait"
-
-
-def generate_pipeline_mermaid(steps: list[dict]) -> str:
-    """Generate a Mermaid flowchart string from pipeline steps."""
-    if not steps:
-        return ""
-    lines = ["graph TD"]
-    # Nodes
-    for j, s in enumerate(steps):
-        sid = s.get("id", f"step_{j+1}")
-        stype = s.get("type", "prompt")
-        icon = _STEP_ICONS.get(stype, "❓")
-        if stype == "prompt":
-            txt = (s.get("prompt") or "")[:25]
-            label = f"{icon} {txt}" if txt else f"{icon} Prompt"
-        elif stype == "condition":
-            txt = (s.get("condition") or "")[:25]
-            label = f"{icon} {txt}" if txt else f"{icon} Condition"
-        elif stype == "approval":
-            label = f"{icon} Approval"
-        elif stype == "subtask":
-            label = f"{icon} Run Workflow"
-        elif stype == "delegate_agent":
-            txt = (s.get("objective") or s.get("prompt") or "")[:25]
-            label = f"{icon} {txt}" if txt else f"{icon} Child Agent"
-        elif stype == "wait_for_agents":
-            label = "Wait for Agents"
-        elif stype == "notify":
-            ch = s.get("channel", "")
-            label = f"{icon} Notify ({ch})" if ch else f"{icon} Notify"
-        else:
-            label = f"{icon} {sid}"
-        safe = (label.replace('"', "'")
-                .replace("<", "&lt;").replace(">", "&gt;")
-                .replace("{", "(").replace("}", ")")
-                .replace("[", "(").replace("]", ")"))
-        if stype in ("condition", "approval"):
-            lines.append(f'    {sid}{{{{"{safe}"}}}}')
-        else:
-            lines.append(f'    {sid}["{safe}"]')
-    # Edges
-    for j, s in enumerate(steps):
-        sid = s.get("id", f"step_{j+1}")
-        stype = s.get("type", "prompt")
-        if stype == "condition":
-            if_true = s.get("if_true", "")
-            if_false = s.get("if_false", "")
-            t_target = if_true if if_true else (
-                steps[j+1].get("id") if j+1 < len(steps) else None
-            )
-            f_target = if_false if if_false else (
-                steps[j+1].get("id") if j+1 < len(steps) else None
-            )
-            if t_target and t_target != "end":
-                lines.append(f'    {sid} -->|"Yes"| {t_target}')
-            elif t_target == "end":
-                lines.append(f'    {sid} -->|"Yes"| END_NODE["🛑 End"]')
-            if f_target and f_target != "end" and f_target != t_target:
-                lines.append(f'    {sid} -->|"No"| {f_target}')
-            elif f_target == "end":
-                lines.append(f'    {sid} -->|"No"| END_NODE["🛑 End"]')
-        elif stype == "approval":
-            if_appr = s.get("if_approved", "")
-            if_deny = s.get("if_denied", "")
-            a_target = if_appr if if_appr else (
-                steps[j+1].get("id") if j+1 < len(steps) else None
-            )
-            d_target = if_deny if if_deny else "end"
-            if a_target and a_target != "end":
-                lines.append(f'    {sid} -->|"Approved"| {a_target}')
-            elif a_target == "end":
-                lines.append(f'    {sid} -->|"Approved"| END_NODE["🛑 End"]')
-            if d_target != "end":
-                if d_target and d_target != a_target:
-                    lines.append(f'    {sid} -->|"Denied"| {d_target}')
-            else:
-                lines.append(f'    {sid} -->|"Denied"| END_NODE["🛑 End"]')
-        else:
-            # Check for explicit "next" override
-            next_target = s.get("next")
-            if next_target:
-                if next_target == "end":
-                    lines.append(f'    {sid} --> END_NODE["🛑 End"]')
-                else:
-                    lines.append(f'    {sid} --> {next_target}')
-            elif j + 1 < len(steps):
-                next_sid = steps[j+1].get("id")
-                lines.append(f'    {sid} --> {next_sid}')
-    return "\n".join(lines)
-
-
 # ── Default Templates ────────────────────────────────────────────────────────
-
-_LEGACY_DEFAULT_TASKS = [
-    {
-        "name": "Morning Briefing",
-        "description": "News, weather, and today's calendar — delivered every morning",
-        "icon": "🌅",
-        "prompts": [
-            "Give me a brief summary of the top 5 news stories today.",
-            "What's the weather forecast for today and tomorrow?",
-            "What events do I have on my calendar for {{date}}?",
-            "Now combine everything above into a single morning briefing. "
-            "Start with the weather, then calendar, then news headlines.",
-        ],
-        "schedule": "daily:08:00",
-    },
-    {
-        "name": "Research Digest",
-        "description": "Weekly AI research roundup with sources",
-        "icon": "🔬",
-        "prompts": [
-            "Search the web for the latest developments in artificial intelligence this week. "
-            "Find at least 5 notable stories, papers, or breakthroughs.",
-            "Now summarize your findings into a well-structured weekly digest with bullet points "
-            "and source citations for each item. Group by category (models, applications, policy).",
-        ],
-        "schedule": "weekly:fri:17:00",
-    },
-    {
-        "name": "Inbox Zero",
-        "description": "Check and triage unread emails",
-        "icon": "📧",
-        "prompts": [
-            "Check my Gmail inbox for any unread or recent emails from today.",
-            "Summarize each email in 1-2 sentences, grouped by priority "
-            "(action required vs. informational). List the sender and subject for each.",
-        ],
-        "schedule": "daily:09:00",
-    },
-    {
-        "name": "Weekly Review",
-        "description": "Recap of the past week's events and priorities",
-        "icon": "📋",
-        "prompts": [
-            "What events did I have on my calendar this past week (last 7 days)?",
-            "Based on these events, write a short weekly review summarizing what I was busy "
-            "with this week. Highlight any patterns and suggest priorities for next week.",
-        ],
-        "schedule": "weekly:sun:18:00",
-    },
-    {
-        "name": "Stand-Up Reminder",
-        "description": "Gentle reminder to stand up and stretch",
-        "icon": "🧘",
-        "notify_only": True,
-        "notify_label": "Time to stand up and stretch! 🧘",
-        "prompts": [],
-        "schedule": "interval:2",
-    },
-]
-
 
 _DEFAULT_TASKS = [
     {
         "name": "Daily Operating Brief",
         "description": "Manual daily planning brief across calendar, weather, news, and priorities",
         "icon": "🌅",
-        "complexity": "simple",
-        "steps": [
-            {
-                "type": "prompt",
-                "prompt": "Collect today's planning context. Check calendar, weather, and current news if those tools/accounts are configured. "
-                "Also consider any known priorities from memory. If something is not configured, mark it as unavailable and continue.",
-            },
-            {
-                "type": "prompt",
-                "prompt": "Create a concise daily operating brief from the collected context. Include: schedule, weather, important external context, "
-                "top 3 priorities, risks, and a recommended first action.\n\nCollected context:\n{{prev_output}}",
-            },
+        "prompts": [
+            "Collect today's planning context: my calendar, the weather and current news, where those are set up, "
+            "and any known priorities from memory. Mark anything not set up as unavailable and go on. Then write a "
+            "concise daily operating brief: schedule, weather, important outside context, top 3 priorities, risks "
+            "and a recommended first action.",
         ],
         "schedule": None,
         "enabled": False,
@@ -7780,19 +4779,11 @@ _DEFAULT_TASKS = [
         "name": "Document Decision Brief",
         "description": "Manual document review for a chosen topic, decision, or question",
         "icon": "📄",
-        "complexity": "simple",
-        "steps": [
-            {
-                "type": "prompt",
-                "prompt": "Search uploaded documents and the knowledge base for material related to <topic-or-decision>. "
-                "Extract the most relevant facts, quotes or source names, open questions, and contradictions. "
-                "Before enabling this workflow, replace <topic-or-decision> with the decision or question to investigate.",
-            },
-            {
-                "type": "prompt",
-                "prompt": "Turn the extracted material into a decision brief. Include: answer/recommendation, supporting evidence, risks, "
-                "open questions, and next actions.\n\nExtracted material:\n{{prev_output}}",
-            },
+        "prompts": [
+            "Search my uploaded documents and knowledge base for material on <topic-or-decision> (replace this "
+            "before enabling the workflow). Pull out the most relevant facts, quotes or source names, open questions "
+            "and contradictions, then turn them into a decision brief: answer or recommendation, supporting "
+            "evidence, risks, open questions and next actions.",
         ],
         "schedule": None,
         "enabled": False,
@@ -7801,85 +4792,39 @@ _DEFAULT_TASKS = [
         "name": "Launch Content Pack",
         "description": "Manual content pack for a product, project, or announcement",
         "icon": "✍️",
-        "complexity": "simple",
-        "steps": [
-            {
-                "type": "prompt",
-                "prompt": "Create a positioning brief for <product-or-project> aimed at <audience>. "
-                "Before enabling this workflow, replace the placeholders with the product/project and audience. "
-                "Include core value proposition, proof points, objections, and tone guidance.",
-            },
-            {
-                "type": "prompt",
-                "prompt": "Using the positioning brief, draft a reusable launch content pack: short announcement, email draft, social post, "
-                "landing page hero copy, and 5 FAQ bullets.\n\nPositioning brief:\n{{prev_output}}",
-            },
+        "prompts": [
+            "Write a positioning brief for <product-or-project> aimed at <audience> (replace both before enabling "
+            "the workflow): core value proposition, proof points, objections and tone. Then use it to draft a "
+            "launch content pack: a short announcement, an email draft, a social post, landing page hero copy and "
+            "5 FAQ bullets. Draft only: don't post or send anything.",
         ],
         "schedule": None,
         "enabled": False,
     },
     {
-        "name": "Research Pipeline With Review",
-        "description": "Advanced manual research pipeline with source extraction and approval",
+        "name": "Research Brief",
+        "description": "Manual research with sources, ending in a shareable brief",
         "icon": "🔬",
-        "complexity": "advanced",
+        "prompts": [
+            "Research <topic> for <audience> (replace both before enabling the workflow). Find credible, recent "
+            "sources and capture the strongest facts, disagreements and source links. Then write a shareable "
+            "brief: executive summary, key evidence, risks and unknowns, and recommended next steps, with sources.",
+        ],
         "schedule": None,
         "enabled": False,
-        "steps": [
-            {
-                "type": "prompt",
-                "prompt": "Research <topic> for <audience>. Before enabling this workflow, replace <topic> and <audience>. "
-                "Find credible, recent sources and capture the strongest facts, disagreements, and source links.",
-            },
-            {
-                "type": "prompt",
-                "prompt": "Turn the research into a structured brief: executive summary, key evidence, "
-                "risks/unknowns, and recommended next steps. Include citations or source names where available.\n\n"
-                "Prior research:\n{{prev_output}}",
-            },
-            {
-                "type": "approval",
-                "message": "Review the research brief before Row-Bot prepares the final shareable report.",
-            },
-            {
-                "type": "prompt",
-                "prompt": "Prepare the final shareable research report based on the approved brief. "
-                "Keep it concise, practical, and source-aware.\n\nApproved brief:\n{{prev_output}}",
-            },
-        ],
     },
     {
         "name": "Opportunity Monitor",
-        "description": "Advanced manual scan with relevance gate and notification step",
+        "description": "Manual scan for actionable opportunities, ranked",
         "icon": "📣",
-        "complexity": "advanced",
+        "prompts": [
+            "Scan for opportunities related to <market-or-customer-segment> (replace this before enabling the "
+            "workflow): leads, partnership openings, product ideas, grants, hiring signals, events or customer pain "
+            "points. If none look actionable, say so in one line and stop. Otherwise rank them by relevance, "
+            "urgency and effort, with the next action and why each matters.",
+        ],
         "schedule": None,
         "enabled": False,
-        "steps": [
-            {
-                "type": "prompt",
-                "prompt": "Scan for opportunities related to <market-or-customer-segment>. Before enabling this workflow, replace the placeholder. "
-                "Look for leads, partnership openings, product ideas, grants, hiring signals, events, or customer pain points. "
-                "Return only opportunities that look actionable. If there are no actionable opportunities, say exactly: NO_ACTIONABLE_OPPORTUNITIES.",
-            },
-            {
-                "type": "condition",
-                "condition": "not_contains:NO_ACTIONABLE_OPPORTUNITIES",
-                "if_true": "",
-                "if_false": "end",
-            },
-            {
-                "type": "prompt",
-                "prompt": "Act as a specialist analyst and score the opportunities from the scan. For each one, "
-                "estimate relevance, urgency, effort, next action, and why it matters.\n\n"
-                "Scan output:\n{{prev_output}}",
-            },
-            {
-                "type": "notify",
-                "channel": "desktop",
-                "message": "Opportunity Monitor found actionable items. Open the workflow run to review the ranked opportunities.",
-            },
-        ],
     },
 ]
 
@@ -7899,7 +4844,6 @@ def add_default_workflow_templates() -> int:
             schedule=t.get("schedule"),
             notify_only=t.get("notify_only", False),
             notify_label=t.get("notify_label", ""),
-            steps=t.get("steps"),
             enabled=t.get("enabled", False),
             channels=t.get("channels"),
             agent_profile_id=DEFAULT_WORKFLOW_AGENT_PROFILE_ID,
@@ -7933,7 +4877,6 @@ def seed_default_tasks() -> None:
             schedule=t.get("schedule"),
             notify_only=t.get("notify_only", False),
             notify_label=t.get("notify_label", ""),
-            steps=t.get("steps"),
             enabled=t.get("enabled", False),
             channels=t.get("channels"),
             agent_profile_id=DEFAULT_WORKFLOW_AGENT_PROFILE_ID,
@@ -7946,24 +4889,6 @@ def seed_default_tasks() -> None:
 # Backward-compat aliases for legacy transition
 seed_default_workflows = seed_default_tasks
 list_workflows = list_tasks
-
-
-def create_workflow(
-    name: str,
-    prompts: list[str],
-    description: str = "",
-    icon: str = "\u26a1",
-    schedule: str | None = None,
-) -> str:
-    return create_task(
-        name=name,
-        prompts=prompts,
-        description=description,
-        icon=icon,
-        schedule=schedule,
-        agent_profile_id=DEFAULT_WORKFLOW_AGENT_PROFILE_ID,
-        apply_default_skills=False,
-    )
 
 
 update_workflow = update_task

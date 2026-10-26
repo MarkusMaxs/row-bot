@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import hashlib
 import sqlite3
 import uuid
 from collections.abc import Callable
@@ -19,21 +18,14 @@ def enabled_tools() -> list[str]:
     return [tool.name for tool in get_enabled_tools()]
 
 
-def approval_digest(task: str, run: str, approval: str, revision: str) -> str:
-    return hashlib.sha256(json.dumps([task, run, approval, revision], separators=(",", ":")).encode()).hexdigest()
-
-
 def execute_task_run_command(*, owner_id: str, key: str, command: dict,
-                             validate: Callable[[], None], validate_approval: Callable[[], None] | None = None) -> dict:
+                             validate: Callable[[], None]) -> dict:
     from row_bot import threads
     validate()
     payload = command["payload"]
     task_id = payload["task_id"]
     stopping = command["type"] == "task.stop"
-    approving = command["type"] == "task.approval"
-    if approving and validate_approval is None:
-        raise ClientPlatformError("action_denied")
-    run_id = payload["run_id"] if stopping or approving else str(uuid.uuid5(uuid.UUID(command["command_id"]), "task-run"))
+    run_id = payload["run_id"] if stopping else str(uuid.uuid5(uuid.UUID(command["command_id"]), "task-run"))
     retrying = False
     try:
         previous = admissions.claim_command(owner_id, key, command, "tasks")
@@ -62,11 +54,9 @@ def execute_task_run_command(*, owner_id: str, key: str, command: dict,
 
     def record_commit(conn: sqlite3.Connection, saved_run: str) -> None:
         authority()
-        if approving:
-            validate_approval()
-        if saved_run != (payload["approval_id"] if approving else run_id):
+        if saved_run != run_id:
             raise ClientPlatformError("action_denied")
-        receipt = {**progress, "task_approval_recorded" if approving else "task_run_reserved": True}
+        receipt = {**progress, "task_run_reserved": True}
         changed = conn.execute(
             "UPDATE client_commands SET result_json=? WHERE owner_id=? AND key=? AND status='admitting'",
             (json.dumps(receipt, separators=(",", ":")), owner_id, key),
@@ -75,22 +65,7 @@ def execute_task_run_command(*, owner_id: str, key: str, command: dict,
             raise ClientPlatformError("operation_uncertain")
 
     try:
-        if approving:
-            current = task_execution.get_task_run(task_id, run_id)
-            progress.update(conversation_id=current.conversation_id, approval_id=payload["approval_id"],
-                            task_approval_decision="approved" if payload["approved"] else "denied")
-            authority()
-            if retrying:
-                if not previous or not previous.get("task_approval_recorded"):
-                    raise ClientPlatformError("operation_uncertain")
-                progress.update(status="partial", task_approval_recorded=True, code="task_approval_unconfirmed")
-            else:
-                validate_approval()
-                task_execution.respond_task_approval(task_id, run_id, payload["approval_id"],
-                    expected_revision=payload["approval_revision"], approved=payload["approved"],
-                    validate=authority, record_commit=record_commit)
-                progress.update(status="completed", task_approval_recorded=True)
-        elif stopping:
+        if stopping:
             current = task_execution.get_task_run(task_id, run_id)
             progress["conversation_id"] = current.conversation_id
             authority()
@@ -115,14 +90,17 @@ def execute_task_run_command(*, owner_id: str, key: str, command: dict,
                 raise task_execution.TaskExecutionError("task_revision_conflict")
             if review.policy_revision != payload["policy_revision"]:
                 raise task_execution.TaskExecutionError("task_policy_revision_conflict")
-            conversation = review.conversation_id or str(uuid.uuid5(uuid.UUID(command["command_id"]), "task-conversation"))
+            # Every run is a turn in the workflow's one conversation (F31).
+            from row_bot import tasks
+            workflow = tasks.get_task(task_id)
+            if workflow is None:
+                raise task_execution.TaskExecutionError("task_not_found")
+            conversation = tasks._prepare_task_thread(workflow)
+            if admissions.deletion_state(conversation) != "active":
+                raise ClientPlatformError("task_run_target_conflict")
             progress["conversation_id"] = conversation
             admissions.command_progress(owner_id, key, progress)
             validate()
-            if not review.conversation_id:
-                if threads._thread_exists(conversation) or admissions.deletion_state(conversation) != "active":
-                    raise ClientPlatformError("task_run_target_conflict")
-                threads.create_thread("Workflow run", thread_id=conversation, seed_default_skills=False)
             authority()
             task_execution.start_reviewed_task_run(task_id,
                 expected_task_revision=payload["task_revision"], expected_policy_revision=payload["policy_revision"],
@@ -133,8 +111,8 @@ def execute_task_run_command(*, owner_id: str, key: str, command: dict,
         return admissions.complete_command(owner_id, key, progress)
     except Exception as exc:
         saved = admissions.receipt(owner_id, command["command_id"])
-        if saved and (saved.get("task_run_reserved") or saved.get("task_approval_recorded")):
-            result = {**saved, "status": "partial", "code": "task_approval_unconfirmed" if approving else "task_run_unconfirmed"}
+        if saved and saved.get("task_run_reserved"):
+            result = {**saved, "status": "partial", "code": "task_run_unconfirmed"}
             admissions.command_progress(owner_id, key, result)
             return result
         if isinstance(exc, task_execution.TaskExecutionError):

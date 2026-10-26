@@ -1241,11 +1241,8 @@ def _agent_entry_failed(run_id: str, exc: BaseException) -> None:
         try:
             _release_child_capacity(run_id)
         finally:
-            try:
-                _notify_child_agent_waiters(run_id)
-            finally:
-                with _ACTIVE_LOCK:
-                    _ACTIVE_AGENT_RUNS.pop(run_id, None)
+            with _ACTIVE_LOCK:
+                _ACTIVE_AGENT_RUNS.pop(run_id, None)
 
 
 def _with_task_note(config: dict[str, Any], kind: str, text: str) -> dict[str, Any]:
@@ -1443,13 +1440,10 @@ def _run_agent_thread(
                 if capacity_acquired:
                     _release_child_capacity(run_id)
             finally:
-                try:
-                    _notify_child_agent_waiters(run_id)
-                finally:
-                    with _ACTIVE_LOCK:
-                        _ACTIVE_AGENT_RUNS.pop(run_id, None)
-                    # An open page of the agent's thread shows how it ended (B186).
-                    _conversation_changed(str((config.get("configurable") or {}).get("thread_id") or ""))
+                with _ACTIVE_LOCK:
+                    _ACTIVE_AGENT_RUNS.pop(run_id, None)
+                # An open page of the agent's thread shows how it ended (B186).
+                _conversation_changed(str((config.get("configurable") or {}).get("thread_id") or ""))
 
 
 def _resume_interrupt_ids(resume_state: Mapping[str, Any]) -> list[str]:
@@ -1545,7 +1539,6 @@ def resume_agent_run(
             "stopped",
             status_message="Approval denied by user",
         )
-        _notify_child_agent_waiters(run_id)
         return run
     config = resume_state.get("config")
     enabled_tool_names = resume_state.get("enabled_tool_names")
@@ -1738,13 +1731,10 @@ def _resume_agent_thread(
                 if capacity_acquired:
                     _release_child_capacity(run_id)
             finally:
-                try:
-                    _notify_child_agent_waiters(run_id)
-                finally:
-                    with _ACTIVE_LOCK:
-                        _ACTIVE_AGENT_RUNS.pop(run_id, None)
-                    # An open page of the agent's thread shows how it ended (B186).
-                    _conversation_changed(str((config.get("configurable") or {}).get("thread_id") or ""))
+                with _ACTIVE_LOCK:
+                    _ACTIVE_AGENT_RUNS.pop(run_id, None)
+                # An open page of the agent's thread shows how it ended (B186).
+                _conversation_changed(str((config.get("configurable") or {}).get("thread_id") or ""))
 
 
 def wait_for_agent_run(run_id: str, timeout: float | None = None) -> dict[str, Any] | None:
@@ -1851,20 +1841,7 @@ def stop_agent_run(run_id: str) -> dict[str, Any] | None:
         cancel_agent_run_approvals(run_id)
     except Exception:
         logger.exception("Failed to withdraw approvals for stopped child Agent %s", run_id)
-    _notify_child_agent_waiters(run_id)
     return run
-
-
-def _notify_child_agent_waiters(run_id: str) -> None:
-    try:
-        from row_bot.tasks import resume_workflows_waiting_for_child_agent
-
-        resume_workflows_waiting_for_child_agent(run_id)
-    except Exception:
-        logger.exception(
-            "Failed to notify workflows waiting for child Agent %s",
-            run_id,
-        )
 
 
 def list_active_agent_run_ids() -> list[str]:

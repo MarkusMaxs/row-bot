@@ -279,10 +279,9 @@ def _public_workflow(task: dict[str, Any] | None) -> dict[str, Any]:
         "name": task.get("name", ""),
         "description": task.get("description", ""),
         "enabled": bool(task.get("enabled", False)),
-        "advanced_mode": bool(task.get("advanced_mode", False)),
         "agent_profile_id": task.get("agent_profile_id", ""),
         "model_override": task.get("model_override", ""),
-        "steps": task.get("steps", []),
+        "messages": list(task.get("prompts") or []),
     }
 
 
@@ -972,13 +971,6 @@ def _agent_promote(run_id: str, target: str = "profile") -> str:
             "",
             "Produce a fresh result for the same kind of request. Preserve the source run's safety and profile constraints.",
         ])
-        steps = [
-            {
-                "type": "prompt",
-                "label": "Promoted Agent run",
-                "prompt": "\n".join(prompt_lines),
-            }
-        ]
         task_id = tasks_db.create_task(
             name=f"Promoted {run.get('display_name') or run_id}",
             description=(
@@ -986,7 +978,7 @@ def _agent_promote(run_id: str, target: str = "profile") -> str:
                 f"{run_id}. Review before enabling or scheduling."
             ),
             icon="hub",
-            steps=steps,
+            prompts=["\n".join(prompt_lines)],
             model_override=str(run.get("model_override") or "") or None,
             # A promoted workflow runs on Auto at most: Hands-off is the person's choice.
             safety_mode=stricter_approval_mode(run.get("approval_mode") or "block", "auto"),
@@ -996,12 +988,8 @@ def _agent_promote(run_id: str, target: str = "profile") -> str:
         )
         task = tasks_db.get_task(task_id)
         workflow = _public_workflow(task)
-        # The step's prompt quotes the child's summary: shown fenced, as data for review.
-        workflow["steps"] = [
-            {**step, "prompt": _fence_child_text(step["prompt"])}
-            if isinstance(step, dict) and step.get("prompt") else step
-            for step in workflow.get("steps") or []
-        ]
+        # The message quotes the child's summary: shown fenced, as data for review.
+        workflow["messages"] = [_fence_child_text(message) for message in workflow.get("messages") or []]
         return _json_response({
             "ok": True,
             "workflow": workflow,

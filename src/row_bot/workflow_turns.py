@@ -39,6 +39,23 @@ def _service() -> Any:
     return client_platform_service
 
 
+def person_rules(conversation_id: str) -> dict | None:
+    """The workflow's "Always ask me" apps and tools, when this is a workflow's conversation (N9)."""
+    from row_bot import tasks
+    conn = tasks._get_conn()
+    try:
+        row = conn.execute("SELECT always_ask FROM tasks WHERE persistent_thread_id = ? LIMIT 1",
+                           (conversation_id,)).fetchone()
+    finally:
+        conn.close()
+    try:
+        items = json.loads(row["always_ask"] or "[]") if row else []
+    except (TypeError, ValueError):
+        items = []
+    items = [str(item) for item in items if isinstance(item, str)] if isinstance(items, list) else []
+    return {"step": False, "items": items} if items else None
+
+
 def messages(task: Mapping[str, Any]) -> list[str]:
     """A workflow's messages, in the order its turns send them."""
     return [str(text) for text in task.get("prompts") or [] if str(text or "").strip()]
