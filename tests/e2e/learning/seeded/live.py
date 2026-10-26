@@ -306,6 +306,16 @@ class PersonRun:
         self.main_ref = self._main_model() or self.improver_ref
         models.adopt_saved_default(self.main_ref)
         if self.main_ref != self.improver_ref:
+            # Saved as the person's chat default (as in Settings): Learning reads its main model from there, so every
+            # test and judging replay names the assistant; only Learning's own unnamed calls go to the improver.
+            from row_bot.application.client_first_run import _model_settings_path
+            from row_bot.learning import routing
+            from row_bot.providers.saved_model_settings import update_saved_model_settings
+
+            update_saved_model_settings(lambda current: {**current, "model": self.main_ref},
+                                        path=_model_settings_path())
+            if routing.main_model_ref() != self.main_ref:
+                raise ScratchError(f"Learning reads its main model as {routing.main_model_ref()!r}, not {self.main_ref}")
             learning_calls_on(self.improver_ref)
             self.sim.model_ref = self.improver_ref  # the simulated person's words stay on the ChatGPT lane
         self._tools()
@@ -1676,8 +1686,9 @@ class PersonRun:
 
 def learning_calls_on(ref: str) -> Any:
     """The seeded setting with a local assistant (O140): Learning's own calls that name no model (diagnosis,
-    drafting, a method's own words) go to ``ref``; a call that names its model (a test or a judging replay of
-    the assistant) and every other background call keep theirs. The product sends both to the default chat
+    drafting, a method's own words, the grader's pass or fail) go to ``ref``; a call that names its model (a test
+    or a judging replay of the assistant, which names the person's saved main model) and every other background
+    call keep theirs. The product sends both to the default chat
     model; only this harness splits them. Returns the function it put in place."""
 
     from row_bot.providers import background
