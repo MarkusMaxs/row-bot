@@ -34,6 +34,8 @@ BOOKKEEPING = frozenset({
     "last_evolved_at", "review_reason", "review_candidate", "evolution_reason", "supersedes", "superseded_by",
     "aliases", "tags", "recalled_at", "category",
 })
+#: Provenance keys (where and how a memory was saved), by prefix: not facts either.
+BOOKKEEPING_PREFIXES = ("_", "source_", "extraction_", "learning_")
 #: Causes that are Row-Bot tidying what it knows, not the world changing.
 HOUSEKEEPING = frozenset({"merge", "enrich", "infer", "decay", "migrate"})
 _migrated: set[str] = set()
@@ -67,7 +69,7 @@ def tracked(entity: dict[str, Any]) -> dict[str, str]:
         except json.JSONDecodeError:
             raw = {}
     for key, value in (raw if isinstance(raw, dict) else {}).items():
-        if key in BOOKKEEPING or key.startswith("_") or key.endswith("_at"):
+        if key in BOOKKEEPING or key.startswith(BOOKKEEPING_PREFIXES) or key.endswith("_at"):
             continue
         found[f"property:{key}"] = json.dumps(value, sort_keys=True, ensure_ascii=False, default=str)
     return found

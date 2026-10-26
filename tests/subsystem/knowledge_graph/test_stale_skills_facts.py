@@ -63,14 +63,15 @@ def test_a_memory_superseded_by_another_closes_with_the_new_one(world):
 def test_only_facts_change_not_bookkeeping(world):
     from row_bot.stale_skills import facts
 
-    entity = world.kg.save_entity("person", "Olu", "Treasurer.", properties={"email": "olu@lanternlane.example",
-                                                                            "status": "active"})
+    entity = world.kg.save_entity("person", "Olu", "Treasurer.", properties={
+        "email": "olu@lanternlane.example", "status": "active", "source_thread_id": "t1", "extraction_method": "llm"})
     world.later(days=1)
     world.memory_evolution.mark_needs_review(entity["id"], "conflicts", incoming={"content": "Priyanka is treasurer."})
     world.later(days=1)
     current = world.kg.get_entity(entity["id"])
     props = json.loads(current["properties"])
-    world.kg.update_entity(entity["id"], current["description"], properties={**props, "email": "priyanka@x.example"})
+    world.kg.update_entity(entity["id"], current["description"],
+                           properties={**props, "email": "priyanka@x.example", "source_thread_id": "t2"})
 
     facts_seen = sorted((row["fact"], row["valid_to"] is None) for row in facts.history(entity["id"]))
     assert facts_seen == [("description", True), ("property:email", False), ("property:email", True)]
