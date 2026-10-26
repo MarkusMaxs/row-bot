@@ -2054,9 +2054,6 @@ export class HttpTransport implements ClientTransport {
   taskEditor(task: string, signal?: AbortSignal) {
     return wire.getTaskEditor(this.base, this.session(), task, signal);
   }
-  taskGraph(task: string, signal?: AbortSignal) {
-    return wire.getTaskGraph(this.base, this.session(), task, signal);
-  }
   taskSettings(task: string, signal?: AbortSignal) {
     return wire.getTaskSettings(this.base, this.session(), task, signal);
   }
@@ -2565,21 +2562,6 @@ export class HttpTransport implements ClientTransport {
   }
   taskRun(task: string, run: string, signal?: AbortSignal) {
     return wire.getTaskRun(this.base, this.session(), task, run, signal);
-  }
-  taskApprovals(
-    task: string,
-    run: string,
-    cursor?: string,
-    signal?: AbortSignal,
-  ) {
-    return wire.getTaskApprovals(
-      this.base,
-      this.session(),
-      task,
-      run,
-      cursor,
-      signal,
-    );
   }
   artifactExport(
     conversation: string,

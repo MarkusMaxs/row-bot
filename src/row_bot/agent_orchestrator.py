@@ -3711,14 +3711,6 @@ def _notify_surface_completion(orchestration: Mapping[str, Any], text: str) -> N
         pass
     except Exception:
         logger.exception("Goal continuation failed after orchestration completion")
-    try:
-        from row_bot.tasks import resume_workflows_waiting_for_orchestration
-
-        resume_workflows_waiting_for_orchestration(str(orchestration.get("id") or ""))
-    except (ImportError, AttributeError):
-        pass
-    except Exception:
-        logger.exception("Workflow continuation failed after orchestration completion")
 
 
 def handle_run_terminal(run_or_id: Mapping[str, Any] | str) -> bool:

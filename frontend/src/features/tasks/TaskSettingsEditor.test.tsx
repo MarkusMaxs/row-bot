@@ -28,13 +28,11 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 const fields: TaskSettingsFields = {
-  concurrency_group: null,
   trigger_type: 'none',
   trigger_task_id: null,
   model_override: null,
   agent_profile_id: 'builtin:worker',
   approval_mode: 'block',
-  persistent_enabled: false,
 };
 function snapshot(
   overrides: Partial<TaskSettingsSnapshot> = {},
@@ -53,10 +51,9 @@ function snapshot(
 }
 // SettingRow names its control and its row group with the same visible label,
 // so query the control itself by role and accessible name.
-const concurrencyGroup = () =>
-  screen.getByRole('textbox', { name: 'Queue name' });
-const findConcurrencyGroup = () =>
-  screen.findByRole('textbox', { name: 'Queue name' });
+const MISSED = 'If Row-Bot is closed at a scheduled time';
+const missedRuns = () => screen.getByRole('combobox', { name: MISSED });
+const findMissedRuns = () => screen.findByRole('combobox', { name: MISSED });
 
 /** The webhook rotation sits in a collapsed Danger zone until opened. */
 function openDangerZone() {
@@ -106,12 +103,12 @@ it('retains an unsent configuration through remount and observes late save witho
     save: vi.fn().mockReturnValue(response.promise),
   });
   const first = render(<TaskSettingsEditor {...callbacks} />);
-  fireEvent.change(await findConcurrencyGroup(), {
-    target: { value: 'Retained group' },
+  fireEvent.change(await findMissedRuns(), {
+    target: { value: 'run_once' },
   });
   first.unmount();
   const second = render(<TaskSettingsEditor {...callbacks} />);
-  expect(await findConcurrencyGroup()).toHaveValue('Retained group');
+  expect(await findMissedRuns()).toHaveValue('run_once');
   expect(screen.getByRole('button', { name: 'Save settings' })).toBeEnabled();
   fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
   await act(async () => {
@@ -120,15 +117,15 @@ it('retains an unsent configuration through remount and observes late save witho
   });
   second.unmount();
   const third = render(<TaskSettingsEditor {...callbacks} />);
-  expect(await findConcurrencyGroup()).toBeDisabled();
+  expect(await findMissedRuns()).toBeDisabled();
   third.unmount();
   await act(async () =>
     response.resolve(
-      snapshot({ fields: { ...fields, concurrency_group: 'Retained group' } }),
+      snapshot({ fields: { ...fields, missed_runs: 'run_once' } }),
     ),
   );
   render(<TaskSettingsEditor {...callbacks} />);
-  expect(await findConcurrencyGroup()).toHaveValue('Retained group');
+  expect(await findMissedRuns()).toHaveValue('run_once');
   expect(
     screen.getByText('Saved workflow settings. No workflow was run.'),
   ).toBeInTheDocument();
@@ -182,8 +179,8 @@ it('loads settings without effects and validates changed fields while saving', a
   expect(callbacks.save).not.toHaveBeenCalled();
   expect(callbacks.rotate).not.toHaveBeenCalled();
   expect(callbacks.download).not.toHaveBeenCalled();
-  fireEvent.change(concurrencyGroup(), {
-    target: { value: 'synthetic-group' },
+  fireEvent.change(missedRuns(), {
+    target: { value: 'run_once' },
   });
   await act(async () =>
     fireEvent.click(screen.getByRole('button', { name: 'Save settings' })),
@@ -195,7 +192,7 @@ it('loads settings without effects and validates changed fields while saving', a
     'task-a',
     'a'.repeat(64),
     'b'.repeat(64),
-    { ...fields, concurrency_group: 'synthetic-group' },
+    { ...fields, missed_runs: 'run_once' },
     false,
   );
   expect(callbacks.onSaved).toHaveBeenCalledOnce();
@@ -230,7 +227,9 @@ it('uses canonical reviewed profile and shows stricter effective policy', async 
     screen.getByText(/^Approvals: Block\. This workflow can only read/),
   ).toBeVisible();
   expect(
-    screen.getByText(/A reviewer approves what matches the workflow's steps/),
+    screen.getByText(
+      /A reviewer approves what matches the workflow's messages/,
+    ),
   ).toBeInTheDocument();
 });
 
@@ -333,7 +332,7 @@ it('does not rotate a webhook while a settings save is pending', async () => {
     save: vi.fn().mockReturnValue(pending.promise),
   });
   render(<TaskSettingsEditor {...callbacks} />);
-  const group = await findConcurrencyGroup();
+  const group = await findMissedRuns();
   openDangerZone();
   // Acknowledge while the saved settings are clean, then start a save.
   const acknowledgement = screen.getByRole('checkbox', {
@@ -367,20 +366,20 @@ it('aborts a stale review and cannot overwrite newer edits with its result', asy
   const pending = deferred<TaskSettingsSnapshot>();
   const callbacks = props({ review: vi.fn().mockReturnValue(pending.promise) });
   render(<TaskSettingsEditor {...callbacks} />);
-  fireEvent.change(await findConcurrencyGroup(), {
-    target: { value: 'first' },
+  fireEvent.change(await findMissedRuns(), {
+    target: { value: 'run_once' },
   });
   fireEvent.click(screen.getByRole('button', { name: 'Save settings' }));
-  fireEvent.change(concurrencyGroup(), {
-    target: { value: 'second' },
+  fireEvent.change(missedRuns(), {
+    target: { value: 'skip' },
   });
   expect(vi.mocked(callbacks.review).mock.calls[0][2]?.aborted).toBe(true);
   await act(async () =>
     pending.resolve(
-      snapshot({ fields: { ...fields, concurrency_group: 'first' } }),
+      snapshot({ fields: { ...fields, missed_runs: 'run_once' } }),
     ),
   );
-  expect(concurrencyGroup()).toHaveValue('second');
+  expect(missedRuns()).toHaveValue('skip');
   expect(callbacks.save).not.toHaveBeenCalled();
 });
 
@@ -389,13 +388,13 @@ it('retains draft on stale profile revision and requires explicit reload', async
     save: vi.fn().mockRejectedValue({ code: 'task_settings_profile_conflict' }),
   });
   render(<TaskSettingsEditor {...callbacks} />);
-  fireEvent.change(await findConcurrencyGroup(), {
-    target: { value: 'retained' },
+  fireEvent.change(await findMissedRuns(), {
+    target: { value: 'run_once' },
   });
   await act(async () =>
     fireEvent.click(screen.getByRole('button', { name: 'Save settings' })),
   );
-  expect(concurrencyGroup()).toHaveValue('retained');
+  expect(missedRuns()).toHaveValue('run_once');
   expect(screen.getByRole('alert')).toHaveTextContent(
     'Your draft is retained. Reload the saved settings before continuing.',
   );
@@ -408,7 +407,7 @@ it('retains draft on stale profile revision and requires explicit reload', async
     ),
   );
   expect(callbacks.load).toHaveBeenCalledTimes(2);
-  expect(await findConcurrencyGroup()).toHaveValue('');
+  expect(await findMissedRuns()).toHaveValue('skip');
   expect(callbacks.save).toHaveBeenCalledOnce();
 });
 
@@ -463,10 +462,10 @@ it('fences an old task review while the next task loads', async () => {
   await screen.findByRole('button', { name: 'Save settings' });
   await act(async () =>
     pending.resolve(
-      snapshot({ fields: { ...fields, concurrency_group: 'old' } }),
+      snapshot({ fields: { ...fields, missed_runs: 'run_once' } }),
     ),
   );
-  expect(concurrencyGroup()).toHaveValue('');
+  expect(missedRuns()).toHaveValue('skip');
   expect(screen.getByRole('button', { name: 'Save settings' })).toBeEnabled();
   expect(callbacks.save).not.toHaveBeenCalled();
 });
@@ -514,13 +513,8 @@ it('groups controls by purpose and names the workflow in its description', async
     within(model).getByRole('button', { name: 'Model' }),
   ).toHaveTextContent('Default model');
   const runs = screen.getByRole('group', { name: 'Runs' });
-  expect(
-    within(runs).getByRole('switch', {
-      name: 'Reuse a conversation across runs',
-    }),
-  ).not.toBeChecked();
-  expect(within(runs).getByRole('textbox', { name: 'Queue name' })).toHaveValue(
-    '',
+  expect(within(runs).getByRole('combobox', { name: MISSED })).toHaveValue(
+    'skip',
   );
   expect(within(runs).getByRole('combobox', { name: 'Trigger' })).toHaveValue(
     'none',

@@ -708,11 +708,19 @@ class ClientPlatformService:
         activity = get_thread_orchestration_activity([row[0] for row in selected]) if selected else {}
         awaiting = self._awaiting_approval([row[0] for row in selected])
         goals_waiting = self._goals_waiting([row[0] for row in selected])
-        return {"items": [self.get_conversation(row[0], workflow_thread_ids=workflow_thread_ids,
-                parent_conversation_id=parent_ids.get(row[0], ""),
-                orchestration_activity=activity.get(row[0], {}),
-                awaiting_approval=row[0] in awaiting, goal_waiting=row[0] in goals_waiting)
-                for row in selected], "has_more": more,
+        items = []
+        for row in selected:
+            try:
+                items.append(self.get_conversation(row[0], workflow_thread_ids=workflow_thread_ids,
+                             parent_conversation_id=parent_ids.get(row[0], ""),
+                             orchestration_activity=activity.get(row[0], {}),
+                             awaiting_approval=row[0] in awaiting, goal_waiting=row[0] in goals_waiting))
+            except ClientPlatformError as error:
+                if error.code != "not_found":
+                    raise
+                # Deleted while the page was read (a workflow's conversation goes with its workflow):
+                # it is left out, never the whole list.
+        return {"items": items, "has_more": more,
                 "next_cursor": base64.urlsafe_b64encode(json.dumps([revision, [selected[-1][1], selected[-1][2], selected[-1][0]]]).encode()).decode() if more else None}
 
     def _refresh_checkpoint(self, conversation_id: str, *, settle: tuple[str, bool] | None = None) -> None:
@@ -913,12 +921,12 @@ class ClientPlatformService:
             from row_bot.application.artifact_design_commands import execute_artifact_design_command
             return execute_artifact_design_command(self, command, target, owner_id=owner_id, key=idempotency_key,
                 validate=validate or (lambda: None), resolve_upload=resolve_upload, validate_confirmation=validate_approval)
-        if command["type"] in {"task.run", "task.stop", "task.approval"}:
+        if command["type"] in {"task.run", "task.stop"}:
             if target != "tasks":
                 raise ClientPlatformError("invalid_command")
             from row_bot.application.task_run_commands import execute_task_run_command
             return execute_task_run_command(owner_id=owner_id, key=idempotency_key, command=command,
-                                            validate=validate or (lambda: None), validate_approval=validate_approval)
+                                            validate=validate or (lambda: None))
         if command["type"] == "artifact.export":
             from row_bot.application.artifact_exports import execute_export
             return execute_export(self, command, target, owner_id=owner_id, key=idempotency_key,
@@ -936,7 +944,7 @@ class ClientPlatformService:
                 from row_bot.application.workspace_edit_commands import execute_workspace_edit
                 return execute_workspace_edit(self, command, target, owner_id=owner_id, key=idempotency_key,
                                               validate=validate or (lambda: None))
-            if command["type"] in {"task.create", "task.update", "task.delete", "task.duplicate", "task.delivery.update", "task.graph.update", "task.settings.update", "task.webhook.rotate"}:
+            if command["type"] in {"task.create", "task.update", "task.delete", "task.duplicate", "task.delivery.update", "task.settings.update", "task.webhook.rotate"}:
                 if target != "tasks":
                     raise ClientPlatformError("invalid_command")
                 from row_bot.application.task_commands import execute_task_command
@@ -1418,6 +1426,11 @@ class ClientPlatformService:
         if followup is not None:
             # Continues the conversation's own work; never routed as steering.
             config["configurable"]["internal_goal_continuation"] = True
+        from row_bot.workflow_turns import person_rules
+        # A workflow's "Always ask me" apps and tools wait for the person in every turn of its
+        # conversation, under every approval level (N9).
+        if rules := person_rules(conversation_id):
+            config["configurable"]["person_rules"] = rules
         from copy import deepcopy
         from row_bot.application.profile_controls import freeze_profile
         if frozen_context is not None:
@@ -1652,6 +1665,10 @@ class ClientPlatformService:
                                         assistant_text=final_text, model_ref=model_ref,
                                         goal_id=str((started_goal or {}).get("id") or ""),
                                         error_text=error_text)
+                with _turn_end_step(conversation_id, "the workflow's run"):
+                    # A workflow's run moves on when its turn ends: its next message, or its outcome (F31).
+                    from row_bot.workflow_turns import after_turn as after_workflow_turn
+                    after_workflow_turn(conversation_id, status=status, reply=final_text, error_text=error_text)
                 self.finish_execution(handle, status)
                 from row_bot.application.conversation_naming import after_turn
                 after_turn(self, conversation_id, status=status, reply=final_text, model_ref=model_ref)

@@ -190,8 +190,9 @@ test('a workflow’s question waits in Needs you and is answered there', async (
   expect(seeded.ok()).toBe(true);
   await page.goto('/app-v2/');
   const needs = page.getByRole('list', { name: 'Needs you' });
+  // The run asks in the workflow's conversation, named with its ⚡ (F31).
   const answer = needs.getByRole('button', {
-    name: 'Answer: Weekly launch check',
+    name: /^Answer: \W*Weekly launch check$/,
   });
   await expect(answer).toBeVisible();
   await everywhere(page, info, 'question-needs-you');

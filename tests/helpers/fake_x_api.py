@@ -40,6 +40,7 @@ def install(monkeypatch, fake: FakeXApi, *users: tuple[str, str, str]) -> list:
 class FakeXApi:
     users: dict[str, dict[str, str]] = field(default_factory=dict)  # access token -> {id, username, name}
     refreshes: dict[str, dict[str, Any]] = field(default_factory=dict)  # refresh token -> the new token
+    codes: dict[str, dict[str, Any]] = field(default_factory=dict)  # a sign-in's code -> its token
     posts: list[dict[str, Any]] = field(default_factory=list)
     requests: list[tuple[str, str]] = field(default_factory=list)  # (method, path), in order
     uploaded: dict[str, int] = field(default_factory=dict)  # media id -> bytes appended
@@ -154,8 +155,11 @@ class FakeXApi:
 
     def _token(self, request: httpx.Request) -> httpx.Response:
         form = {key: values[0] for key, values in parse_qs(request.content.decode()).items()}
-        fresh = self.refreshes.pop(form.get("refresh_token", ""), None) if form.get(
-            "grant_type") == "refresh_token" else None
+        if form.get("grant_type") == "authorization_code":
+            fresh = self.codes.pop(form.get("code", ""), None)
+        else:
+            fresh = self.refreshes.pop(form.get("refresh_token", ""), None) if form.get(
+                "grant_type") == "refresh_token" else None
         if fresh is None:
             return httpx.Response(400, json={"error": "invalid_request"})
         return httpx.Response(200, json=fresh)

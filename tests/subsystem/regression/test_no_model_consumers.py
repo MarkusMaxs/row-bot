@@ -6,15 +6,15 @@ the same "no model yet" answer instead of running on a built-in model.
 """
 from __future__ import annotations
 
-import contextvars
 import json
 import sys
 import types
-from pathlib import Path
 
 import pytest
 
 from row_bot import models
+from tests.contracts.client_platform.test_headless_lifecycle import platform  # noqa: F401
+from tests.subsystem.workflows.test_workflow_runs_as_chat import workflows  # noqa: F401
 
 pytestmark = pytest.mark.subsystem
 
@@ -55,63 +55,20 @@ def test_chat_turn_without_a_model_is_refused_before_running(no_model, monkeypat
         list(agent.stream_agent("hello", [], {"configurable": {"thread_id": "chat-thread"}}))
 
 
-def _fresh_task_modules(tmp_path: Path, reload_for_data_dir):
-    tasks, threads, _profiles, _runs = reload_for_data_dir(
-        tmp_path / "data", "row_bot.tasks", "row_bot.threads", "row_bot.agent_profiles", "row_bot.agent_runs"
-    )
-    return tasks, threads
+def test_workflow_run_fails_with_the_reason_and_no_turn(no_model, platform, workflows):  # noqa: F811
+    from tests.subsystem.workflows.test_workflow_runs_as_chat import Recording, create
 
+    fake = Recording()
+    platform.stream_factory = fake.stream
+    task = create(workflows, "Summarise today")
+    thread_id = workflows._prepare_task_thread(workflows.get_task(task["id"]))
 
-def test_workflow_run_fails_with_the_reason_and_no_retries(tmp_path, monkeypatch, no_model, reload_for_data_dir):
-    tasks, threads = _fresh_task_modules(tmp_path, reload_for_data_dir)
-    calls: list[str] = []
-    fake_agent = types.ModuleType("row_bot.agent")
+    workflows.run_task_background(task["id"], thread_id, [])
 
-    class TaskStoppedError(Exception):
-        pass
-
-    def invoke_agent(prompt, _tools, _config, **_kwargs):
-        calls.append(prompt)
-        raise models.NoModelChosenError()
-
-    fake_agent.TaskStoppedError = TaskStoppedError
-    fake_agent.RECURSION_LIMIT_TASK = 12
-    fake_agent.invoke_agent = invoke_agent
-    fake_agent.resume_invoke_agent = lambda *args, **kwargs: ""
-    fake_agent.repair_orphaned_tool_calls = lambda *args, **kwargs: None
-    fake_agent._approval_mode_var = contextvars.ContextVar("approval_mode", default="approve")
-    fake_agent._background_workflow_var = contextvars.ContextVar("background_workflow", default=False)
-    fake_agent._persistent_thread_var = contextvars.ContextVar("persistent_thread", default=False)
-    monkeypatch.setitem(sys.modules, "row_bot.agent", fake_agent)
-
-    class ImmediateThread:
-        def __init__(self, target, *args, **kwargs):
-            self._target, self._args, self._kwargs = target, tuple(kwargs.get("args") or ()), dict(kwargs.get("kwargs") or {})
-
-        def start(self):
-            self._target(*self._args, **self._kwargs)
-
-        def join(self, timeout=None):
-            return None
-
-        def is_alive(self):
-            return False
-
-    monkeypatch.setattr(tasks.threading, "Thread", ImmediateThread)
-    task_id = tasks.create_task(
-        "No model yet",
-        steps=[{"type": "prompt", "prompt": "Summarise today", "max_retries": 3, "retry_delay_seconds": 0}],
-        channels=[],
-        apply_default_skills=False,
-    )
-    thread_id = threads.create_thread("Workflow run", thread_id="workflow-no-model")
-
-    tasks.run_task_background(task_id, thread_id, [], notification=False)
-
-    assert calls == ["Summarise today"]
-    [run] = tasks.get_run_history(task_id, limit=1)
+    [run] = workflows.get_run_history(task["id"], limit=1)
     assert run["status"] == "failed"
-    assert run["status_message"] == models.NO_MODEL_CHOSEN
+    assert run["notice"] == "The run couldn't start. Check this workflow's model, then run it again."
+    assert fake.calls == [], "nothing runs on a model nobody chose"
 
 
 def test_memory_extraction_waits_and_keeps_its_bookmark(no_model, monkeypatch):

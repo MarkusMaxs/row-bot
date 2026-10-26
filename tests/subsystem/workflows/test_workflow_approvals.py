@@ -10,44 +10,29 @@ from tests.fixtures.tasks import fresh_tasks_module
 pytestmark = pytest.mark.subsystem
 
 
-def test_pipeline_state_round_trips_graph_interrupt_flag(tmp_path, reload_for_data_dir) -> None:
-    tasks = fresh_tasks_module(tmp_path, reload_for_data_dir)
+def _helper_approval(tasks, monkeypatch, resumed: list, **options) -> tuple[str, str]:
+    """A pending approval of a delegated helper, whose answer resumes that helper."""
+    import row_bot.agent_runner as agent_runner
 
-    tasks._save_pipeline_state(
-        run_id="run-1",
-        task_id="task-1",
-        thread_id="thread-1",
-        current_step_index=2,
-        step_outputs={"prompt_1": "draft"},
-        config={"configurable": {"thread_id": "thread-1"}},
-        resume_token="resume-1",
-        status="paused",
-        graph_interrupted=True,
+    monkeypatch.setattr(
+        agent_runner,
+        "resume_agent_run",
+        lambda run_id, *, resume_token, approved: resumed.append((run_id, resume_token, approved)),
     )
-
-    state = tasks._load_pipeline_state("resume-1")
-
-    assert state is not None
-    assert state["status"] == "paused"
-    assert state["step_outputs"] == {"prompt_1": "draft"}
-    assert state["config"]["configurable"]["thread_id"] == "thread-1"
-    assert state["graph_interrupted"] == "true"
-
-    tasks._clear_graph_interrupted("run-1")
-    assert tasks._load_pipeline_state("resume-1")["graph_interrupted"] is None
+    return tasks.create_approval_request(
+        "helper-run", "", "approval_1", "Approve?", agent_run_id="agent-run-1", resume_kind="agent_run", **options,
+    )
 
 
 def test_approval_resume_tokens_are_single_use(tmp_path, monkeypatch, reload_for_data_dir) -> None:
     tasks = fresh_tasks_module(tmp_path, reload_for_data_dir)
-    resumed: list[tuple[str, bool]] = []
-    monkeypatch.setattr(tasks, "_resume_pipeline", lambda token, approved=True: resumed.append((token, approved)))
-
-    token, request_id = tasks.create_approval_request("run-2", "task-2", "approval_1", "Approve?")
+    resumed: list = []
+    token, request_id = _helper_approval(tasks, monkeypatch, resumed)
 
     assert tasks.get_pending_approvals()[0]["id"] == request_id
     assert tasks.respond_to_approval(token, True, note="ok", source="web") is True
     assert tasks.respond_to_approval(token, True, note="again", source="web") is False
-    assert resumed == [(token, True)]
+    assert resumed == [("agent-run-1", token, True)]
     assert tasks.get_pending_approvals() == []
 
 
@@ -58,9 +43,7 @@ def test_approval_buddy_events_include_resume_token(tmp_path, monkeypatch, reloa
 
     bus = BuddyEventBus()
     monkeypatch.setattr(events, "_bus", bus)
-    monkeypatch.setattr(tasks, "_resume_pipeline", lambda *_args, **_kwargs: None)
-
-    token, request_id = tasks.create_approval_request("run-2", "task-2", "approval_1", "Approve?")
+    token, request_id = _helper_approval(tasks, monkeypatch, [])
     needed = bus.latest()
 
     assert needed is not None
@@ -77,12 +60,10 @@ def test_approval_buddy_events_include_resume_token(tmp_path, monkeypatch, reloa
     assert approved.payload["resume_token"] == token
 
 
-def test_expired_approval_does_not_resume_pipeline(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+def test_an_expired_approval_resumes_nothing(tmp_path, monkeypatch, reload_for_data_dir) -> None:
     tasks = fresh_tasks_module(tmp_path, reload_for_data_dir)
-    resumed: list[str] = []
-    monkeypatch.setattr(tasks, "_resume_pipeline", lambda token, approved=True: resumed.append(token))
-
-    token, _request_id = tasks.create_approval_request("run-3", "task-3", "approval_1", "Approve?", timeout_minutes=1)
+    resumed: list = []
+    token, _request_id = _helper_approval(tasks, monkeypatch, resumed, timeout_minutes=1)
     conn = tasks._get_conn()
     conn.execute(
         "UPDATE approval_requests SET timeout_at = ? WHERE resume_token = ?",
@@ -95,29 +76,18 @@ def test_expired_approval_does_not_resume_pipeline(tmp_path, monkeypatch, reload
     assert resumed == []
 
 
-def test_agent_run_approval_resumes_agent_runner_not_workflow(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+def test_an_old_step_pipelines_approval_can_no_longer_resume_anything(tmp_path, reload_for_data_dir) -> None:
+    """F31: the step runner is gone; an approval it left can't be answered into a run."""
     tasks = fresh_tasks_module(tmp_path, reload_for_data_dir)
-    workflow_resumes: list[str] = []
-    agent_resumes: list[tuple[str, str, bool]] = []
-    monkeypatch.setattr(tasks, "_resume_pipeline", lambda token, approved=True: workflow_resumes.append(token))
+    token, _request_id = tasks.create_approval_request("old-run", "task-old", "approval_1", "Approve?")
 
-    import row_bot.agent_runner as agent_runner
+    assert tasks.respond_to_approval(token, True) is False
 
-    monkeypatch.setattr(
-        agent_runner,
-        "resume_agent_run",
-        lambda run_id, *, resume_token, approved: agent_resumes.append((run_id, resume_token, approved)),
-    )
 
-    token, _request_id = tasks.create_approval_request(
-        "workflow-run",
-        "task-4",
-        "approval_1",
-        "Approve agent?",
-        agent_run_id="agent-run-1",
-        resume_kind="agent_run",
-    )
+def test_agent_run_approval_resumes_the_helper(tmp_path, monkeypatch, reload_for_data_dir) -> None:
+    tasks = fresh_tasks_module(tmp_path, reload_for_data_dir)
+    resumed: list = []
+    token, _request_id = _helper_approval(tasks, monkeypatch, resumed)
 
     assert tasks.respond_to_approval(token, False) is True
-    assert workflow_resumes == []
-    assert agent_resumes == [("agent-run-1", token, False)]
+    assert resumed == [("agent-run-1", token, False)]

@@ -3552,7 +3552,6 @@ class ProfileSummary(WireModel):
     editable: bool
     revision: str = Field(pattern=r"^[1-9][0-9]{0,19}$")
     capability: Literal["read_only", "write_capable", "orchestrator"]
-    allow_tools: list[str] = Field(max_length=100)
     skills: list[str] = Field(max_length=100)
     context_mode: Literal["auto", "focused", "recent", "full", "empty", "resume"]
     workspace_mode: Literal["auto", "read_only", "single_writer", "worktree"]
@@ -3593,7 +3592,6 @@ class ProfileFields(WireModel):
     when_to_use: str = Field(max_length=2048)
     instructions: str | None = Field(max_length=49152)
     capability: Literal["read_only", "write_capable", "orchestrator"]
-    allow_tools: list[str] = Field(max_length=100)
     skills: list[str] = Field(max_length=100)
     context_mode: Literal["auto", "focused", "recent", "full", "empty", "resume"]
     workspace_mode: Literal["auto", "read_only", "single_writer", "worktree"]
@@ -5792,7 +5790,6 @@ class ModelVisibilityState(WireModel):
 
 class AgentRuntimeSettingsState(WireModel):
     schema_version: Literal[1] = 1
-    max_iterations: int = Field(ge=1, le=1000000)
     max_spawn_depth: int = Field(ge=1, le=1000000)
     max_concurrent_children: int = Field(ge=1, le=1000000)
     max_active_children_global: int = Field(ge=1, le=1000000)
@@ -6112,7 +6109,6 @@ class TaskEditorSnapshot(WireModel):
     id: OpaqueId
     revision: str = Field(min_length=1, max_length=128)
     fields: TaskEditableFields
-    advanced: bool
     agent_profile_id: str = Field(max_length=128)
     approval_mode: str = Field(max_length=64)
     conversation_id: OpaqueId | None
@@ -6136,6 +6132,12 @@ class TaskRunReview(WireModel):
     conversation_id: OpaqueId | None
 
 
+class TaskRunAction(WireModel):
+    title: str = Field(min_length=1, max_length=256)
+    result: str = Field(max_length=512)
+    link: str | None = Field(default=None, max_length=2048)
+
+
 class TaskRunSummary(WireModel):
     id: OpaqueId
     task_id: OpaqueId
@@ -6154,6 +6156,10 @@ class TaskRunSummary(WireModel):
     notice: str | None = Field(default=None, max_length=512)
     # The one thing the person can do about it: choose another code folder (it was removed).
     fix: Literal["choose_folder"] | None = None
+    # What it did outside Row-Bot, from its tools' results: posts, emails, drafts (F31).
+    actions: list[TaskRunAction] = Field(default_factory=list, max_length=16)
+    # The approval card a waiting run waits on; the person reviews and answers it there.
+    approval_id: OpaqueId | None = None
 
 
 class TaskRunPage(WireModel):
@@ -6167,56 +6173,6 @@ class TaskRunPage(WireModel):
 class TaskRunResult(WireModel):
     run: TaskRunSummary
     replayed: bool
-
-
-class TaskApprovalMedia(WireModel):
-    name: str = Field(max_length=256)
-    size: int = Field(ge=0)
-    # The first hex digits of the SHA-256 of its contents.
-    fingerprint: str = Field(pattern=r"^[0-9a-f]{6,64}$")
-    kind: Literal["image", "video", "audio", "file"]
-
-
-class TaskApprovalCard(WireModel):
-    """Exactly what a person-only ("Always ask me") approval lets happen."""
-
-    action: str = Field(max_length=1024)
-    destination: str | None = Field(default=None, max_length=1024)
-    account: str | None = Field(default=None, max_length=256)
-    text: str | None = Field(default=None, max_length=16384)
-    media: list[TaskApprovalMedia] = Field(default_factory=list, max_length=16)
-
-
-class TaskApprovalReview(WireModel):
-    id: OpaqueId
-    task_id: OpaqueId
-    run_id: OpaqueId
-    revision: str = Field(pattern=r"^[a-f0-9]{64}$")
-    message: str = Field(max_length=16384)
-    requested_at: str = Field(max_length=80)
-    expires_at: str | None = Field(max_length=80)
-    approval_mode: str = Field(max_length=64)
-    message_truncated: bool
-    response_available: bool
-    nonce: str | None = Field(default=None, max_length=128)
-    # "question": Row-Bot's question (N4), answered on its own card (/approvals/{id}), never approved here.
-    kind: Literal["approval", "question"] = "approval"
-    # The person's own "Always ask me" approval: no approval level answers it for them.
-    person_only: bool = False
-    card: TaskApprovalCard | None = None
-
-
-class TaskApprovalPage(WireModel):
-    items: list[TaskApprovalReview] = Field(max_length=100)
-    total: int = Field(ge=0)
-    revision: str = Field(pattern=r"^[a-f0-9]{64}$")
-    next_cursor: str | None = Field(max_length=2048)
-
-
-class TaskApprovalResult(WireModel):
-    approval_id: OpaqueId
-    decision: Literal["approved", "denied"]
-    run: TaskRunSummary
 
 
 class TaskStopResult(WireModel):
@@ -6481,71 +6437,12 @@ class TaskCreatePayload(WireModel):
     fields: TaskEditableFields
 
 
-class TaskGraphFields(WireModel):
-    prompt: str | None = Field(default=None, max_length=16384)
-    condition: str | None = Field(default=None, max_length=16384)
-    message: str | None = Field(default=None, max_length=16384)
-    next: str | None = Field(default=None, max_length=16384)
-    if_true: str | None = Field(default=None, max_length=16384)
-    if_false: str | None = Field(default=None, max_length=16384)
-    if_approved: str | None = Field(default=None, max_length=16384)
-    if_denied: str | None = Field(default=None, max_length=16384)
-    on_error: str | None = Field(default=None, max_length=16384)
-    task_id: str | None = Field(default=None, max_length=16384)
-    channel: str | None = Field(default=None, max_length=16384)
-    objective: str | None = Field(default=None, max_length=16384)
-    profile: str | None = Field(default=None, max_length=16384)
-    developer_workspace_id: str | None = Field(default=None, max_length=16384)
-    editing_safety: str | None = Field(default=None, max_length=16384)
-    return_mode: str | None = Field(default=None, max_length=16384)
-    context: str | None = Field(default=None, max_length=16384)
-    max_retries: int | None = Field(default=None, ge=1, le=10)
-    retry_delay_seconds: int | None = Field(default=None, ge=0, le=300)
-    timeout_minutes: int | None = Field(default=None, ge=0, le=1440)
-    timeout_seconds: int | None = Field(default=None, ge=1, le=7200)
-    pass_output: bool | None = None
-    run_ids: list[Annotated[str, StringConstraints(max_length=128)]] | None = Field(
-        default=None, max_length=100
-    )
-    apps: list[Annotated[str, StringConstraints(min_length=3, max_length=512)]] | None = Field(
-        default=None, max_length=8
-    )
-    # "Always ask me": what the step does waits for the person's own approval under every level.
-    always_ask: bool | None = None
-
-
-class TaskGraphStepEdit(WireModel):
-    id: str = Field(min_length=1, max_length=128)
-    type: str = Field(min_length=1, max_length=128)
-    fields: TaskGraphFields
-
-
-class TaskGraphStep(TaskGraphStepEdit):
-    editable: bool
-    retained_fields: bool
-
-
-class TaskGraphSnapshot(WireModel):
-    task_id: OpaqueId
-    revision: str = Field(pattern=r"^[a-f0-9]{64}$")
-    steps: list[TaskGraphStep] = Field(max_length=100)
-    notify_only: bool
-
-
-class TaskGraphUpdatePayload(WireModel):
-    task_id: OpaqueId
-    task_revision: str = Field(pattern=r"^[a-f0-9]{64}$")
-    steps: list[TaskGraphStepEdit] = Field(min_length=1, max_length=100)
-
-
 class TaskSettingsFields(WireModel):
-    concurrency_group: str | None = Field(max_length=128)
     trigger_type: Literal["none", "task_complete", "webhook"]
     trigger_task_id: str | None = Field(max_length=128)
     model_override: str | None = Field(max_length=1024)
     agent_profile_id: str = Field(min_length=1, max_length=128)
     approval_mode: ApprovalLevel
-    persistent_enabled: bool
     # The workflow's own code folder: every step runs in it. None: the conversation's.
     workspace_id: str | None = Field(default=None, max_length=128)
     # A scheduled time while Row-Bot was closed: skip it, or run once when Row-Bot starts.
@@ -6990,13 +6887,6 @@ class TaskStopPayload(WireModel):
     run_id: OpaqueId
 
 
-class TaskApprovalPayload(TaskStopPayload):
-    approval_id: OpaqueId
-    approval_revision: str = Field(pattern=r"^[a-f0-9]{64}$")
-    approved: bool
-    nonce: str = Field(min_length=1, max_length=128)
-
-
 class BuddyPreferences(WireModel):
     visible: bool
     collapsed: bool
@@ -7205,12 +7095,10 @@ class Command(WireModel):
         "task.delete",
         "task.duplicate",
         "task.delivery.update",
-        "task.graph.update",
         "task.settings.update",
         "task.webhook.rotate",
         "task.run",
         "task.stop",
-        "task.approval",
         "artifact.export",
         "artifact.share",
         "workspace.edit",
@@ -7389,7 +7277,6 @@ COMMAND_PAYLOADS = {
     "artifact.edit": ArtifactEditPayload,
     "artifact.export": ArtifactExportPayload,
     "artifact.share": ArtifactSharePayload,
-    "task.graph.update": TaskGraphUpdatePayload,
     "task.create": TaskCreatePayload,
     "task.update": TaskUpdatePayload,
     "task.delete": TaskDeletePayload,
@@ -7399,7 +7286,6 @@ COMMAND_PAYLOADS = {
     "task.webhook.rotate": TaskWebhookRotatePayload,
     "task.run": TaskRunPayload,
     "task.stop": TaskStopPayload,
-    "task.approval": TaskApprovalPayload,
     "workspace.edit": WorkspaceEditPayload,
     "workspace.import": WorkspaceImportPayload,
     "workspace.undo": WorkspaceUndoPayload,
@@ -7956,8 +7842,6 @@ class CommandReceipt(WireModel):
     task_run_reserved: bool = False
     task_stop_requested: bool = False
     task_run_quiesced: bool = False
-    task_approval_recorded: bool = False
-    task_approval_decision: Literal["approved", "denied"] | None = None
     task_revision: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     status: Literal[
         "accepted",

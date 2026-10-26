@@ -92,14 +92,13 @@ MODELS = {name: getattr(schemas, name) for name in (
     "ArtifactDesignOutcome", "ArtifactPresetReviewRequest", "ArtifactPresetReview", "ArtifactReviewDraftRequest", "ArtifactReviewDraft",
     "ArtifactShareOptions", "ArtifactShareReview", "ArtifactShareOutcome",
     "ArtifactShareChannels", "ArtifactPublication",
-    "TaskRunReview", "TaskRunSummary", "TaskRunPage", "TaskRunResult", "TaskApprovalReview",
-    "TaskApprovalPage", "TaskApprovalResult", "TaskStopResult", "ArtifactExport",
+    "TaskRunReview", "TaskRunAction", "TaskRunSummary", "TaskRunPage", "TaskRunResult", "TaskStopResult",
+    "ArtifactExport",
     "ArtifactSavedExport", "ArtifactExportReveal", "ArtifactExportRevealResult",
     "ExportSaved", "ExportRevealRequest",
     "ArtifactBrandSuggestionRequest", "ArtifactBrandSuggestion", "WorkspaceEditableFile", "WorkspaceEditResult",
     "WorkspaceImportPage", "WorkspaceImportPatch", "WorkspaceImportReviewRequest", "WorkspaceImportReview", "WorkspaceImportResult",
     "WorkspaceUndoReviewRequest", "WorkspaceUndoReview", "WorkspaceUndoResult",
-    "TaskGraphFields", "TaskGraphStepEdit", "TaskGraphSnapshot",
     "DictationCapability", "DictationStart", "DictationIdentity", "DictationHandle", "DictationSnapshot", "DictationResult",
     "TalkStart", "TalkSnapshot", "TalkResult", "TalkOutputRequest", "RealtimeSnapshot", "RealtimeStart", "RealtimeEvent", "RealtimeEventRequest", "RealtimeEventResult", "DefaultModelSnapshot", "VoiceRunView",
     "FolderGrantClaim", "FolderGrantView", "DeckSetupOptions", "ArtifactSetupOptions", "ArtifactPreview", "ArtifactEditingState", "ArtifactLifecycleState", "WorkspaceInspector", "WorkspaceChanges",
@@ -422,7 +421,6 @@ OPERATIONS = (
     ("get", "/tasks", None, "TaskSummaryPage"),
     ("get", "/tasks/delivery-defaults", None, "TaskDeliverySnapshot"),
     ("get", "/tasks/{task_id}/editing", None, "TaskEditorSnapshot"),
-    ("get", "/tasks/{task_id}/graph", None, "TaskGraphSnapshot"),
     ("get", "/tasks/{task_id}/settings", None, "TaskSettingsSnapshot"),
     ("get", "/tasks/{task_id}/webhook-configuration", None, "bytes"),
     ("post", "/tasks/{task_id}/settings-review", "TaskSettingsFields", "TaskSettingsSnapshot"),
@@ -432,7 +430,6 @@ OPERATIONS = (
     ("get", "/tasks/{task_id}/run-review", None, "TaskRunReview"),
     ("get", "/tasks/{task_id}/runs", None, "TaskRunPage"),
     ("get", "/tasks/{task_id}/runs/{run_id}", None, "TaskRunSummary"),
-    ("get", "/tasks/{task_id}/runs/{run_id}/approvals", None, "TaskApprovalPage"),
     ("get", "/conversations/{conversation_id}/artifacts/{binding_id}/exports/{export_id}", None, "ArtifactExport"),
     ("post", "/conversations/{conversation_id}/artifacts/{binding_id}/exports/{export_id}/save", None, "ArtifactSavedExport"),
     ("post", "/conversations/{conversation_id}/artifacts/{binding_id}/brand-suggestion", "ArtifactBrandSuggestionRequest", "ArtifactBrandSuggestion"),
@@ -921,8 +918,6 @@ export const getTaskDeliveryDefaults = (base: string, proof: SessionProof, signa
   jsonRequest(base, '/tasks/delivery-defaults', 'TaskDeliverySnapshot', proof, 'GET', undefined, undefined, signal);
 export const getTaskEditor = (base: string, proof: SessionProof, task: string, signal?: AbortSignal): Promise<TaskEditorSnapshot> =>
   jsonRequest(base, `/tasks/${id(task)}/editing`, 'TaskEditorSnapshot', proof, 'GET', undefined, undefined, signal);
-export const getTaskGraph = (base: string, proof: SessionProof, task: string, signal?: AbortSignal): Promise<TaskGraphSnapshot> =>
-  jsonRequest(base, `/tasks/${id(task)}/graph`, 'TaskGraphSnapshot', proof, 'GET', undefined, undefined, signal);
 export const getTaskSettings = (base: string, proof: SessionProof, task: string, signal?: AbortSignal): Promise<TaskSettingsSnapshot> =>
   jsonRequest(base, `/tasks/${id(task)}/settings`, 'TaskSettingsSnapshot', proof, 'GET', undefined, undefined, signal);
 export const reviewTaskSettings = (base: string, proof: SessionProof, task: string, fields: TaskSettingsFields, signal?: AbortSignal): Promise<TaskSettingsSnapshot> =>
@@ -998,8 +993,6 @@ export const getTaskRuns = (base: string, proof: SessionProof, task: string, cur
   jsonRequest(base, `/tasks/${id(task)}/runs` + query({cursor}), 'TaskRunPage', proof, 'GET', undefined, undefined, signal);
 export const getTaskRun = (base: string, proof: SessionProof, task: string, run: string, signal?: AbortSignal): Promise<TaskRunSummary> =>
   jsonRequest(base, `/tasks/${id(task)}/runs/${id(run)}`, 'TaskRunSummary', proof, 'GET', undefined, undefined, signal);
-export const getTaskApprovals = (base: string, proof: SessionProof, task: string, run: string, cursor?: string, signal?: AbortSignal): Promise<TaskApprovalPage> =>
-  jsonRequest(base, `/tasks/${id(task)}/runs/${id(run)}/approvals` + query({cursor}), 'TaskApprovalPage', proof, 'GET', undefined, undefined, signal);
 export const getCachedModels = (base: string, proof: SessionProof, provider_id?: string, search = '', cursor?: string, signal?: AbortSignal): Promise<CachedModelPage> =>
   jsonRequest(base, '/settings/models' + query({provider_id, query:search, cursor}), 'CachedModelPage', proof, 'GET', undefined, undefined, signal);
 export const getModelsSettings = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<ModelsSettingsState> =>

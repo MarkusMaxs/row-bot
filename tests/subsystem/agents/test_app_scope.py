@@ -1,5 +1,5 @@
-"""Apps in chat: the agent profile is the ceiling, a chat's switches and a message's mentions only
-narrow it, and approvals still apply to every tool that stays. Fakes only; nothing connects."""
+"""Apps in chat: every ready app, which a chat's switches, a message's mentions and a runtime tool list
+only narrow, and approvals still apply to every tool that stays. Fakes only; nothing connects."""
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -32,15 +32,13 @@ def apps(monkeypatch):
                  {"code": "expired", "severity": "blocking", "message": "The saved sign-in no longer works. Sign in again."}]),
              _item("plugin:kit:mcp:figma", "plugin_kit_figma", "Figma", parent="plugin:kit")]
     off: list[str] = []
-    profile: dict = {}
     monkeypatch.setattr(scope, "_items", lambda strict=False: items)
     monkeypatch.setattr(scope, "_mcp_items", lambda strict=False: [item for item in items if item["kind"] == "mcp"])
     monkeypatch.setattr(scope, "_skill_names", lambda: {"/writer": ("writer",), "/secret-skill": ("secret-skill",)})
     monkeypatch.setattr("row_bot.threads.get_thread_apps_off", lambda conversation_id: list(off))
-    monkeypatch.setattr(scope, "_profile_allow", lambda conversation_id: profile.get("allow"))
     builtins: list[dict] = []
     monkeypatch.setattr("row_bot.integrations.builtin.rows", lambda validate=None, wait=True: builtins)
-    return SimpleNamespace(items=items, off=off, profile=profile, builtins=builtins)
+    return SimpleNamespace(items=items, off=off, builtins=builtins)
 
 
 def test_nothing_is_narrowed_without_a_switch_or_a_mention(apps):
@@ -98,8 +96,8 @@ def test_a_mention_focuses_the_turn_on_that_app(apps):
     assert scope.turn_scope("chat", "email me@linear.app", None) is None  # An address is not a mention.
 
 
-@pytest.mark.parametrize("why", ["off", "not_ready", "outside_profile"])
-def test_a_mention_never_turns_on_an_app_the_chat_or_profile_left_out(apps, why):
+@pytest.mark.parametrize("why", ["off", "not_ready", "outside_runtime_list"])
+def test_a_mention_never_turns_on_an_app_the_chat_or_turn_left_out(apps, why):
     if why == "off":
         apps.off.append("mcp:notion")
         text = "@Notion find the roadmap"
@@ -107,14 +105,11 @@ def test_a_mention_never_turns_on_an_app_the_chat_or_profile_left_out(apps, why)
         text = "@Sentry what broke?"
     else:
         text = "@Notion find the roadmap"
-    allow = ["web_search"] if why == "outside_profile" else None
+    allow = ["web_search"] if why == "outside_runtime_list" else None
     found = scope.turn_scope("chat", text, allow)
     assert not (found or {}).get("focus")
     if why == "off":
         assert found["exclude_servers"] == ["Notion"]  # Still left out; nothing else changes.
-    if why == "outside_profile":
-        apps.profile["allow"] = allow
-        assert all(not a["available"] for a in scope.chat_apps("chat"))
 
 
 def test_a_continued_turn_keeps_what_it_left_out_and_todays_switches_still_apply(apps):

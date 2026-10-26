@@ -86,7 +86,7 @@ keeps long Agent and Chat Only conversations bounded and recoverable.
 - **Streaming responses** — tokens stream in real-time with a typing indicator
 - **Provider-aware reasoning controls** — exact-model capability metadata exposes only valid Provider default, effort, On/Off, or token-budget choices; the selected value is isolated per thread and provider-qualified model, mapped into the native transport request, and reset safely if the provider rejects it before output
 - **Unified context management** — Agent Mode, tool-loop model calls, approval/orchestration resumes, and Chat Only assemble and count the complete next provider request through one capacity-aware preparation path; fixed prompt/tool overhead is checked before history compaction, old tool output is cleared first and automatic rolling compaction begins near the limit (leaving room for the reply and the summary), and one exact rebuild prevents a stale projection from entering a retry loop
-- **Progressive external capability loading** — recommended Auto mode binds permitted core tools plus bounded search/invoke bridges and keeps enabled external schemas in an immutable authorized catalog until needed; eager compatibility mode remains available, and background workflow runs retain an eager snapshot
+- **Progressive external capability loading** — recommended Auto mode binds permitted core tools plus bounded search/invoke bridges and keeps enabled external schemas in an immutable authorized catalog until needed; eager compatibility mode remains available, and a workflow's run, being a chat turn, uses the same mode as a chat
 - **Explicit prompt context/cache sections** — `prompt_context.py` assembles named stable and ephemeral sections so identity, profile, platform, self-knowledge, tool guides, manual skills, plugin skills, turn state, memory recall, Developer context, Designer context, channel state, and history have deterministic cache behavior
 - **Runtime readiness routing** — before building the graph, selected models are evaluated for context headroom, provider capability metadata, tool support, and surface requirements; full agent mode, chat-only mode, and blocked states are explicit outcomes rather than accidental provider failures
 - **Chat-only runtime** — models that are useful for normal conversation but cannot reliably accept tool schemas use a compact tool-free prompt, a shaped transcript without full tool bodies, and the normal streaming/persistence path
@@ -96,13 +96,13 @@ keeps long Agent and Chat Only conversations bounded and recoverable.
 - **Centralized prompts plus self-knowledge injection** — base prompt templates live in `prompts.py`, while `self_knowledge.py` injects a dynamic identity line, capability manifest, and live runtime state so Row-Bot can describe itself accurately without stale hard-coded copy
 - **Event-driven context meter** — the responsive desktop composer shows the estimated complete next input, effective capacity, and automatic compaction threshold; persisted usage restores after reopen, compact desktop layouts preserve the meter in a narrower control row, and mobile renders durable compaction notices without widening the input
 - **Generation-scoped stop & error recovery** — each active generation owns a cancellation scope that closes registered provider responses, terminates registered subprocesses, wakes queued state, closes matching approvals, cancels Browser, Computer Use, shell, voice, and Buddy activity, and stops only generation-linked child runs; checkpointed model-iteration budgets and no-progress detection wind down long or repetitive tool loops; orphaned tool calls are repaired without replay, including interrupted-parent recovery after restart; provider/API errors are surfaced as persistent red toasts and saved to the conversation checkpoint so they survive thread refresh
-- **Workflow cancellation** — running background workflows can be stopped from the chat header, activity panel, or workflow card; cancellation is checked between every LangGraph node for clean shutdown
+- **Workflow cancellation** — a running workflow is a turn in its own conversation and stops as a chat turn does, from its conversation, the activity panel, or the workflow card; a run waiting on a card is ended and the card withdrawn
 - **Displaced tool-call auto-repair** — if context trimming displaces tool-call/response pairs, the agent automatically detects and repairs the ordering before the next LLM call; orphaned tool calls trigger an automatic retry
 - **Grouped tool traces** — repeated tool calls of the same type are grouped into quiet compact expandable rows, keeping long research, browser, and Developer runs readable while preserving individual results and real discovered-integration labels
 - **Thinking retention** — non-empty reasoning/thinking text is separated from answer tokens, preserved across streaming, detached reattach, checkpoint loading, and final transcript rendering, and shown in a collapsed Thinking trace without treating reasoning-only chunks as the visible final answer
 - **Date/time awareness** — current date and time is injected into every LLM call so the model always knows "today"
 - **Destructive action confirmation** — dangerous operations (file deletion, sending emails, deleting calendar events, deleting memories, deleting workflows, selected settings changes) require explicit user approval via an interrupt mechanism
-- **Workflow-scoped background permissions** — background workflows use a tiered system: safe operations always run, low-risk operations (move file, move calendar, send email) are allowed with optional runtime guards, and irreversible operations (delete file, delete memory) are always blocked; shell commands and email recipients can be allowlisted per-workflow via the editor UI
+- **Workflow permissions are a chat's** — a workflow's run uses its approval level exactly as a chat does (Block, Ask, Auto, or Hands-off chosen by the person), on the same approval cards, plus the workflow's own "Always ask me" apps
 
 ---
 
@@ -388,7 +388,7 @@ into an unbounded autonomous system.
 - **Profile snapshots** — each run receives a profile snapshot so long-running child agents keep the instructions and policy they started with even if the profile library changes later
 - **Prompt integration** — `agent.py` injects the active profile as a structured system context for normal agent runs and chat-only turns; missing or disabled profiles produce a model-visible warning and user-facing recovery guidance instead of failing silently
 - **Thread binding** — `threads.py` stores the selected profile for a thread, while `profile_library.py`, `profile_picker.py`, and slash/profile commands expose selection and review without requiring manual config edits
-- **Policy summary** — profile prompt context includes capability, context, workspace, allowed tools, and pinned profile skills so the model sees a compact boundary rather than the entire profile JSON
+- **Policy summary** — profile prompt context includes capability, context, workspace, and pinned profile skills so the model sees a compact boundary rather than the entire profile JSON; a profile lists no tools, so every turn has the tools a chat has and its capability and the approval level decide what may run
 - **Built-in profiles** — the bundled profile library provides focused roles for research, review, implementation, orchestration, and other repeatable work patterns; users can duplicate or save profiles when a successful run should become reusable guidance
 
 ### Goal Mode
@@ -727,7 +727,7 @@ installed FunASR/SenseVoice runtime, from cache only.
 - **Dangerous commands require approval** — destructive or system-modifying commands trigger an interrupt so you can accept or reject them
 - **Blocked by default** — high-risk commands like `shutdown`, `reboot`, or `mkfs` are rejected outright
 - **Private data folder** — a command that names Row-Bot's data folder (its path in any common spelling, `~`/`$HOME`/`%USERPROFILE%` forms, a `.row-bot` segment, or `ROW_BOT_DATA_DIR`) is refused in every approval mode without asking, and the file tools refuse paths inside it; **Settings › System › Advanced** can let the agent read it, and then each such command asks, even in Auto (Block still refuses it)
-- **Background safety integration** — safe commands always execute; moderate commands are blocked by default in workflows but can be allowlisted per workflow; dangerous commands remain blocked
+- **Background safety integration** — a workflow's shell commands are classified and gated exactly as a chat's, at its approval level; dangerous commands remain blocked
 - **Inline terminal panel** — command output appears in a collapsible terminal panel in the chat UI with clear and history controls
 - **History persistence** — shell history is saved per thread in `~/.row-bot/shell_history.json`
 - **Stop propagation** — shell execution uses `process_cancellation.py`, so cancelling the owning generation terminates the command process group and returns a stopped result without losing persistent-session bookkeeping
@@ -833,57 +833,45 @@ within one turn.
 
 ## Workflows & Scheduling
 
-Tasks have been renamed to **Workflows** throughout the application. The workflow engine adds a step-based pipeline runner, delivery routing, approvals, triggers, and safety gating on top of APScheduler.
+A workflow is a chat that runs on its own (F31). Each run sends the workflow's message to its own conversation as a chat turn the server starts, the way a goal continues, so it has every tool a chat has, tool search, the conversation's approval level, the same approval cards and Stop. APScheduler, Run now, a webhook or another workflow finishing starts a run.
 
 ### Core Engine
 
-- **Unified workflow engine** — named multi-step workflows run sequentially in a fresh or persistent thread and are scheduled through APScheduler
+- **Runs are chat turns** — `workflow_turns.py` starts a run's first message through `conversation_followups`; each further message is a turn of its own after the one before completes. When the last turn ends the run takes its outcome from what its outbound tools returned (never from the model's words): completed with the action's link, `unsure` when a tool couldn't confirm, `denied` when the person said no, `failed` with the reason
+- **One ongoing conversation** — every run is a dated turn ("Scheduled run · 26 Oct, 08:00") in the workflow's own conversation, so a run can see what earlier runs found
+- **Retries without repeats** — a turn that fails on a passing problem is tried again after a wait (twice at most, longer for a provider limit that says when it resets), never once the run has acted outside Row-Bot
+- **Waiting and replacement** — a turn paused on an approval card marks its run `waiting`; a new run replaces one still waiting (`expired`) and withdraws its card, so an old action can't go out late; a run that starts while the one before is still working is `skipped`
+- **No step limit** — a turn goes on while it makes progress; the repeat check stops one that is stuck, and a 1,000-round safety ceiling ends a turn asking "Keep going?"
 - **SQLite schema recovery** — `tasks.py` validates the workflow database schema before use, repairs partial schemas in place, backs up and recreates corrupt DBs, and retries schema-related operations once after repair
+- **Step migration** — workflows saved with the old step pipeline become messages on upgrade (`messages_from_steps`); the step tables are dropped and their pending approvals cancelled
 - **7 schedule types** — `daily`, `weekly`, `weekdays`, `weekends`, `interval`, `cron`, and one-shot `delay_minutes`; `task_create` and `task_update` also take `run_at`, one future local date and time stored as a one-off run
-- **Template variables** — prompts can use `{{date}}`, `{{day}}`, `{{time}}`, `{{month}}`, `{{year}}`, `{{task_id}}`, and `{{step.X.output}}`
-- **Per-workflow model/profile override** — each workflow can force a different model or Agent Profile, then restore the default after completion
-- **Skills and tools overrides** — workflows can narrow the skill set globally and the tool set per step; promoted Agent-run workflows preserve the originating profile and safety context for review before enablement
+- **Template variables** — messages can use `{{date}}`, `{{day}}`, `{{time}}`, `{{month}}`, `{{year}}`, and `{{task_id}}`
+- **Per-workflow model/profile override** — each workflow can use its own model and Agent Profile; a profile lists no tools
 - **Channel delivery** — workflow output can inherit the workflow-level default delivery channels or use a per-workflow override via `delivery_channel` and `delivery_target`; web-app run status is always preserved
-- **Persistent threads** — workflows can reuse the same thread across runs to preserve context
-- **Notify-only mode** — workflows can skip agent execution and just send notifications
+- **Notify-only mode** — reminders skip the agent turn and just send notifications
 - **Webhook triggers** — workflows can be launched by HTTP webhook with per-workflow secrets
 - **Completion triggers** — one workflow can trigger another after finishing
-- **Concurrency groups** — related workflows can be serialized so only one runs at a time
-- **Approval level** — Block (`block`), Ask (`approve`), Auto (`auto`, model-reviewed: a reviewer approves what clearly matches the person's request and asks about the rest) and Hands-off (`full`, chosen by the person) control shell, workflow, and channel behavior inside background execution
-
-### Step-Based Pipelines
-
-- **5 step types** — Prompt, Condition, Approval, Subtask, and Notify
-- **Conditional branching** — condition steps support `contains`, `not_contains`, `regex`, `json_path`, and `llm_evaluate`, each with `if_true` / `if_false` targets
-- **Approval gates** — approval steps pause execution, route requests through channels and desktop notifications, and resume on explicit user approval or denial
-- **Prompt chaining** — each step can see previous step output, enabling research → summarize → act patterns
-- **Agent-callable workflows** — the task tool can create, update, and run full step graphs programmatically
-- **Agent-run promotion** — completed child-agent runs can be promoted into disabled manual workflows, preserving the original objective, context summary, profile reference, skills/tools overrides, model override, and approval mode so the workflow can be reviewed before scheduling or enabling
+- **Approval level** — Block (`block`), Ask (`approve`), Auto (`auto`, model-reviewed against the workflow's own messages) and Hands-off (`full`, chosen by the person), as in a chat, plus the workflow's "Always ask me" apps
+- **Agent-run promotion** — completed child-agent runs can be promoted into disabled manual workflows, preserving the original objective, context summary, profile reference, model override, and approval mode so the workflow can be reviewed before scheduling or enabling
 
 ### Workflow Builder UI
 
-- **Simple/Advanced toggle** — simple mode preserves a single-prompt workflow editor; advanced mode exposes the full step builder
-- **Step builder** — reorder, delete, retarget, and retype steps visually
-- **Variable insertion menu** — context variables and prior-step outputs can be inserted without hand typing placeholders
-- **Flow preview** — Mermaid diagram generated from the step graph with manual refresh
-- **Validation** — required-field checks, reference validation, and operator-specific rules run before save
+- **Messages** — a workflow is one message or a few, reordered by drag or the arrow keys, with `{{` inserting the date
 - **Delivery defaults UI** — the Workflows panel exposes a compact default-delivery selector; workflows tied to default update when the global default changes, while explicit overrides remain untouched
 
 ### Approval System
 
-- **Pending approvals panel** — approval cards show task or child-agent source, a bounded display-safe reason, request text, and Approve / Deny controls
+- **Same cards as a chat** — a workflow run's approval is its conversation's card, with the full action (a post's text and account, an email's recipients and body), answered in the conversation or from the attention indicator and Overview's Needs you, whose Review opens the card
 - **Sidebar badge** — pending approvals surface as a badge and quick actions above the thread list
-- **Multi-surface routing** — approvals can be routed through desktop, the mobile Activity surface, Telegram, Discord, Slack, WhatsApp, SMS, and plugin-owned channel paths according to channel capabilities; button-capable adapters render inline controls and text-only adapters require an explicit YES/NO response
-- **Resume integration** — the agent and workflow runtime resume correctly on approve or deny and follow the appropriate branch
 
 ### Existing Features
 
 - **Always-background execution** — workflows run without blocking the main chat UI
-- **Pre-built templates** — seeds five disabled starter workflows across simple and advanced examples; nothing is scheduled or run until the user enables it. The Workflows library's **Start from a template** (`integrations/workflow_templates.py`) creates a scheduled workflow switched off, in Ask approval mode, scoped to the apps the template names (or Row-Bot's own tools), and offers Connect when such an app is not connected yet
+- **Pre-built templates** — seeds five disabled one-message starter workflows; nothing is scheduled or run until the user enables it. The Workflows library's **Start from a template** (`integrations/workflow_templates.py`) creates a one-message scheduled workflow switched off, in Ask approval mode, and offers Connect when the app it names is not connected yet
 - **Home screen dashboard** — Workflows and Activity tabs show tiles, upcoming runs, run history, channel status, pending approvals, extraction journal, and dream journal
 - **Persistent run history** — execution history survives workflow deletion for auditability
-- **Monitoring / polling** — interval schedules plus condition steps support ongoing monitors like price checks or release watchers
-- **Stop / cancel support** — running workflows can be stopped from the chat header, activity panel, or workflow card
+- **Monitoring / polling** — interval schedules plus a message that says what to do in each case support ongoing monitors like price checks or release watchers
+- **Stop / cancel support** — running workflows can be stopped from their conversation, the activity panel, or the workflow card
 
 ---
 
@@ -1231,9 +1219,9 @@ current parent or child runtime.
   channel tools enter the external catalog with their actual runtime targets
 - **Recommended Auto mode** — `tools/registry.py` persists Auto versus eager
   compatibility. Auto binds core tools plus `tool_search`/`tool_invoke`; eager
-  binds every authorized external wrapper directly. Background workflow graphs
-  retain eager binding for compatibility, while interactive parent and child
-  agents honor the selected mode
+  binds every authorized external wrapper directly. Chats, workflow runs (chat
+  turns in the workflow's conversation) and parent and child agents honor the
+  selected mode
 - **Forced resume continuity** — when an approval or checkpoint resume already
   depends on progressive invocation, graph reconstruction forces the discovery
   surface so the target does not disappear because settings changed mid-turn

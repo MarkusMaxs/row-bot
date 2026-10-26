@@ -1,4 +1,4 @@
-"""N9: a workflow's own code folder. Every step runs in it, runs say which folder they used, and a
+"""N9: a workflow's own code folder. Its conversation works in it, runs say which folder they used, and a
 folder that has been removed stops the run before it starts, saying so in plain words."""
 
 from __future__ import annotations
@@ -28,17 +28,16 @@ def setup(tmp_path, monkeypatch, reload_for_data_dir):
         path.mkdir()
         storage.save_workspace(DeveloperWorkspace(id=f"dev_{name.replace('-', '_')}", name=name, path=str(path)))
         folders[name] = (f"dev_{name.replace('-', '_')}", path)
-    # A run's worker is not started here: only what happens before it starts is under test.
-    from row_bot.runtime import executions
+    # A run's turn is not started here: only what happens before it starts is under test.
+    from row_bot import workflow_turns
 
     started: list[str] = []
-    monkeypatch.setattr(executions.generation_registry, "thread",
-                        lambda **kwargs: SimpleNamespace(start=lambda: started.append(kwargs["domain_id"])))
+    monkeypatch.setattr(workflow_turns, "start", lambda task, thread_id, run_id, trigger="Run": started.append(run_id))
     return SimpleNamespace(tasks=tasks, threads=threads, storage=storage, folders=folders, started=started)
 
 
 def _workflow(tasks, **values) -> str:
-    return tasks.create_task("Landing checks", steps=[{"type": "prompt", "prompt": "Run the checks"}], **values)
+    return tasks.create_task("Landing checks", prompts=["Run the checks"], **values)
 
 
 def _settings(task_id):
@@ -78,7 +77,7 @@ def test_existing_workflows_keep_no_folder_and_run_in_their_conversation(setup):
     assert conversation_resources.list_bindings(thread_id).bindings == ()
 
 
-def test_every_step_runs_in_the_workflow_folder_and_the_run_names_it(setup):
+def test_the_workflows_conversation_works_in_its_folder_and_the_run_names_it(setup):
     task_id = _workflow(setup.tasks)
     controls, snapshot = _settings(task_id)
     folder_id, _path = setup.folders["row-bot-landing"]
@@ -89,7 +88,7 @@ def test_every_step_runs_in_the_workflow_folder_and_the_run_names_it(setup):
         folder_id, "row-bot-landing", True)
     thread_id, run = _run(setup, task_id)
     assert (run.workspace_id, run.workspace_name) == (folder_id, "row-bot-landing")
-    # The run's conversation works in the folder: every step, and a child agent that picks none.
+    # The run's conversation works in the folder: every turn, and a child agent that picks none.
     from row_bot import conversation_resources
 
     [binding] = conversation_resources.list_bindings(thread_id).bindings
@@ -101,8 +100,10 @@ def test_a_kept_conversation_moves_to_the_workflows_folder(setup):
     task_id = _workflow(setup.tasks)
     controls, snapshot = _settings(task_id)
     landing, docs = setup.folders["row-bot-landing"][0], setup.folders["docs-site"][0]
-    _save(controls, snapshot, workspace_id=docs, persistent_enabled=True)
-    first, _run_one = _run(setup, task_id)
+    _save(controls, snapshot, workspace_id=docs)
+    first, run_one = _run(setup, task_id)
+    setup.tasks._finish_run(run_one.id, "completed")  # Its turn ended.
+    setup.tasks.forget_active_run(first)
     controls, snapshot = _settings(task_id)
     _save(controls, snapshot, workspace_id=landing)
 

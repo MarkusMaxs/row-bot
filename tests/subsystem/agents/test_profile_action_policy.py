@@ -275,24 +275,27 @@ def test_write_capable_and_unprofiled_calls_preserve_original_approval_callback_
     assert calls == ["run", "run"]
 
 
-def test_readonly_child_and_workflow_explicit_allowlists_do_not_widen_parent_filter(
+def test_a_read_only_child_sees_the_chats_tools_but_delegation_and_is_refused_their_actions(
     runtime,
 ):
-    from row_bot import agent_runner, tasks
+    """F31: a profile lists no tools; its read-only capability refuses each action at dispatch."""
+    from row_bot import agent_runner
 
-    profile = {
-        "tool_policy_json": {
-            "capability": "read_only",
-            "allow_tools": ["image_gen", "gmail", "filesystem"],
-        }
-    }
-    for filter_tools in (
-        agent_runner._filter_child_tools,
-        tasks._filter_workflow_tools_for_profile,
-    ):
-        assert filter_tools(["image_gen", "gmail", "filesystem"], profile) == [
-            "filesystem"
-        ]
+    profile = {"tool_policy_json": {"capability": "read_only"}}
+    assert agent_runner._filter_child_tools(
+        ["image_gen", "gmail", "filesystem", "agents"], profile
+    ) == ["image_gen", "gmail", "filesystem"]
+    calls = []
+    send = runtime._bind_profile_tool(
+        StructuredTool.from_function(
+            lambda: calls.append(1) or "sent", name="send_email", description="Send"
+        ),
+        source="core",
+        parent="gmail",
+    )
+    runtime._current_agent_profile_snapshot_var.set(profile)
+    assert "read-only" in send.invoke({})
+    assert calls == []
 
 
 def test_existing_mcp_effect_owner_must_confirm_read_only(runtime, monkeypatch):
@@ -434,7 +437,7 @@ def test_toolkit_sync_async_keep_approval_once_and_current_profile(
     assert calls == ["git commit"] and len(approvals) == 1
 
 
-def test_retained_profile_denylist_and_malformed_policy_fail_closed(runtime):
+def test_saved_tool_lists_are_ignored_and_an_unknown_capability_fails_closed(runtime):
     calls = []
     bound = runtime._bind_profile_tool(
         StructuredTool.from_function(
@@ -454,21 +457,21 @@ def test_retained_profile_denylist_and_malformed_policy_fail_closed(runtime):
             }
         }
     )
-    assert "denied" in bound.invoke({})
+    assert bound.invoke({}) == "read"
     runtime._current_agent_profile_snapshot_var.set(
         {
             "tool_policy_json": {
                 "capability": "write_capable",
-                "allow_tools": "filesystem",
+                "allow_tools": "shell",
             }
         }
     )
-    assert "unavailable" in bound.invoke({})
+    assert bound.invoke({}) == "read"
     runtime._current_agent_profile_snapshot_var.set(
         {"tool_policy_json": {"capability": "unknown"}}
     )
     assert "read-only" in bound.invoke({})
-    assert calls == [1]
+    assert calls == [1, 1, 1]
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])

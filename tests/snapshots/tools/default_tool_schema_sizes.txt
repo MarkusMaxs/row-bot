@@ -1,5 +1,5 @@
 agent_message: 526
-agent_profile_save: 1590
+agent_profile_save: 1446
 agent_profiles: 508
 agent_promote: 469
 agent_retry: 301
@@ -79,11 +79,11 @@ send_file: 885
 start_process: 1299
 stop_process: 332
 suggest_apps: 861
-task_create: 4268
+task_create: 3877
 task_delete: 277
 task_list: 286
 task_run_now: 263
-task_update: 1869
+task_update: 1467
 tracker_delete: 308
 tracker_log: 1539
 tracker_query: 597
@@ -102,4 +102,4 @@ workspace_read_file: 867
 workspace_write_file: 547
 youtube_search: 660
 youtube_transcript: 725
-TOTAL (104 tools): 74039
+TOTAL (104 tools): 73102

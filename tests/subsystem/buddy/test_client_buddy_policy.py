@@ -163,18 +163,17 @@ def test_stored_disabled_tool_cannot_use_stale_enabled_registry(env):
         env.policy.capture_provider_policy("full")
 
 
-def test_profile_dispatch_uses_exact_operation_allowlist_and_readonly_restriction(env):
+def test_profile_dispatch_uses_the_runtime_allowlist_and_readonly_restriction(env):
     env.context["agent_profile_snapshot"] = {
         "id": "writer",
-        "tool_policy_json": {
-            "capability": "write_capable",
-            "allow_tools": ["generate_image", "animate_image"],
-        },
+        "tool_policy_json": {"capability": "write_capable"},
     }
     assert env.policy.capture_provider_policy("full")["image_model"]
-    env.context["agent_profile_snapshot"]["tool_policy_json"]["deny_tools"] = [
-        "animate_image"
-    ]
+    env.context["tool_allowlist"] = ["generate_image"]  # The turn's own list leaves out animating.
+    with pytest.raises(ValueError, match="buddy_tool_policy_denied"):
+        env.policy.capture_provider_policy("full")
+    env.context.pop("tool_allowlist")
+    env.context["agent_profile_snapshot"]["tool_policy_json"]["capability"] = "read_only"
     with pytest.raises(ValueError, match="buddy_tool_policy_denied"):
         env.policy.capture_provider_policy("full")
 

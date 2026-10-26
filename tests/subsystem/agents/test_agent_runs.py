@@ -123,7 +123,7 @@ def test_agent_run_event_edge_crud(tmp_path, reload_for_data_dir):
     assert finished["tools_override"] == ["shell"]
     assert finished["result_json"] == {"ok": True}
     assert finished["root_run_id"] == "child-run"
-    assert finished["model_iterations_max"] == 90
+    assert finished["model_iterations_max"] == 1000  # The safety ceiling, not a setting (F31).
 
     children = agent_runs.list_child_runs(parent_run_id=parent["id"])
     assert [run["id"] for run in children] == ["child-run"]
@@ -369,57 +369,3 @@ def test_get_agent_run_for_child_thread(tmp_path, reload_for_data_dir):
     assert row is not None
     assert row["id"] == "lookup-child"
     assert row["parent_thread_id"] == parent_thread_id
-
-
-def test_workflow_run_is_mirrored_to_agent_runs(tmp_path, reload_for_data_dir):
-    agent_runs, _profiles, tasks, _data_dir = _fresh_agent_run_modules(
-        tmp_path,
-        reload_for_data_dir,
-    )
-
-    task_id = tasks.create_task(
-        "Profiled workflow",
-        steps=[
-            {
-                "type": "prompt",
-                "prompt": "Review this change.",
-            }
-        ],
-        agent_profile_id="quality_reviewer",
-    )
-    task = tasks.get_task(task_id)
-    run_id = tasks._record_run_start(
-        task_id,
-        "workflow-thread",
-        1,
-        task_name=task["name"],
-        task_icon=task["icon"],
-    )
-
-    with sqlite3.connect(Path(tasks._DB_PATH)) as conn:
-        legacy = conn.execute(
-            "SELECT * FROM task_runs WHERE id = ?",
-            (run_id,),
-        ).fetchone()
-
-    mirrored = agent_runs.get_agent_run(run_id)
-    assert legacy is not None
-    assert mirrored["kind"] == "workflow"
-    assert mirrored["task_id"] == task_id
-    assert mirrored["thread_id"] == "workflow-thread"
-    assert mirrored["status"] == "running"
-    assert mirrored["profile_id"] == "builtin:review"
-    assert mirrored["profile_snapshot_json"]["slug"] == "review"
-    assert mirrored["max_turns"] == 1
-
-    tasks._update_run_progress(run_id, 1)
-    progressed = agent_runs.get_agent_run(run_id)
-    assert progressed["turns_used"] == 1
-
-    tasks._finish_run(run_id, "completed", status_message="Delivered")
-    finished = agent_runs.get_agent_run(run_id)
-    assert finished["status"] == "completed"
-    assert finished["status_message"] == "Delivered"
-    assert finished["summary"] == "Delivered"
-    event_types = {item["type"] for item in agent_runs.get_agent_events(run_id)}
-    assert {"run.started", "turn.completed", "run.completed"} <= event_types

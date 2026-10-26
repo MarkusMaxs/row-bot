@@ -23,10 +23,11 @@ def test_cross_channel_approval_resolution_updates_other_channels(tmp_path, monk
     registry.register(source)
     registry.register(mirror)
 
-    token, approval_id = tasks.create_approval_request("run-1", "task-1", "approval_1", "Approve?")
+    token, approval_id = tasks.create_approval_request("run-1", "", "agent_interrupt", "Approve?",
+                                                       agent_run_id="run-1", resume_kind="agent_run")
     tasks._store_approval_channel_ref(approval_id, "source", "source-ref")
     tasks._store_approval_channel_ref(approval_id, "mirror", "mirror-ref")
-    monkeypatch.setattr(tasks, "_resume_pipeline", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("row_bot.agent_runner.resume_agent_run", lambda *_args, **_kwargs: None)
 
     assert tasks.respond_to_approval(token, True, source="source") is True
 
