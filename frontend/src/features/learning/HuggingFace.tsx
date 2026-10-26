@@ -364,6 +364,7 @@ export function HuggingFaceQuoteSheet({
             <Select
               id={capId}
               value={String(cap)}
+              aria-describedby={`${capId}-help`}
               onChange={(event) => setCap(Number(event.target.value))}
             >
               {choices.map((value) => (
@@ -372,12 +373,12 @@ export function HuggingFaceQuoteSheet({
                 </option>
               ))}
             </Select>
-            <small className="learning-muted">
-              {spent > 0 ? `${moneyWords(spent)} spent this month. ` : ''}
-              Later runs start in quiet hours on their own while they fit this
-              cap.
-            </small>
           </label>
+          <small id={`${capId}-help`} className="learning-muted">
+            {spent > 0 ? `${moneyWords(spent)} spent this month. ` : ''}
+            Later runs start in quiet hours on their own while they fit this
+            cap.
+          </small>
           {!fits && (
             <p role="alert" className="learning-error">
               This run doesn’t fit the cap. Choose a higher one to start it.
