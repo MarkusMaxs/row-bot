@@ -202,7 +202,7 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("--past uses the main model only (as S1's past did)")
     else:
         gate = GpuGate(Path(args.gpu_booking) if args.gpu_booking else None, "lane-B",
-                       label=f"SA1 phrasing ({args.model})")
+                       label=f"SA2 phrasing ({args.model})")
         gate.acquire("phrasing the stale-skills world's messages", expect="10 min, 20 GB")
         ask = _ollama_ask(args.model)
     if args.past:
