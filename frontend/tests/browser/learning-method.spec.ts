@@ -77,6 +77,10 @@ async function turnOn(page: Page) {
   await page.goto('/app-v2/settings/learning');
   await page.getByRole('button', { name: 'Turn on Learning' }).click();
   const sheet = page.getByRole('dialog', { name: 'Turn on Learning' });
+  // The graphics card is read first: turning on before it is known skips the download ask.
+  await expect(
+    sheet.getByText('NVIDIA GeForce RTX 5070 Laptop (8 GB)'),
+  ).toBeVisible();
   await sheet.getByRole('button', { name: 'Turn on Learning' }).click();
   const ask = page.getByRole('dialog', {
     name: 'Download the training engine and Qwen3.5 2B?',
