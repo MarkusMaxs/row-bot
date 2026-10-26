@@ -68,8 +68,8 @@ def keeps(template: str, variant: str) -> bool:
 def prompt_for(person: Mapping[str, Any], template: str) -> str:
     return (
         f"You are writing chat messages for {person['name']}. {person['about']}\n"
-        f"How she writes: {person.get('asks', '')}\n\n"
-        f"Write {VARIANTS} different ways she might type this message to her assistant:\n\n{template}\n\n"
+        f"How they write: {person.get('asks', '')}\n\n"
+        f"Write {VARIANTS} different ways they might type this message to their assistant:\n\n{template}\n\n"
         "Keep every {field} in curly braces exactly as written (they are filled in later) and keep the meaning. "
         "Don't add numbers, dates, names, email addresses or any other facts. One line each. Reply with a JSON "
         "list of strings only."
@@ -87,11 +87,11 @@ def parse(text: str) -> list[str]:
 
 
 def phrase(person: Mapping[str, Any], ask: Callable[[str], str]) -> dict[str, Any]:
-    """Every slot's kept variants (``ask(prompt) -> text``), with counts."""
+    """Every slot's kept variants (``ask(prompt) -> text``) for this person's catalogue, with counts."""
 
     slots: dict[str, Any] = {}
     asked = kept = 0
-    for slot, template in sorted(world.slots().items()):
+    for slot, template in sorted(world.slots(world.catalogue(person["id"])).items()):
         variants = parse(ask(prompt_for(person, template)))
         asked += len(variants)
         good = sorted({item.strip() for item in variants if keeps(template, item)} - {template})
@@ -131,6 +131,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--eval-profile", default="")
     parser.add_argument("--scratch", required=True)
     parser.add_argument("--gpu-booking", default="")
+    parser.add_argument("--people", default=",".join(world.PEOPLE), help="comma-separated people (default: all six)")
     args = parser.parse_args(argv)
     from tests.e2e.learning.seeded import generator
     from tests.e2e.learning.seeded.scratch import GpuGate, check_scratch
@@ -138,7 +139,7 @@ def main(argv: list[str] | None = None) -> int:
     scratch = check_scratch(Path(args.scratch), Path(args.eval_profile) if args.eval_profile else None)
     scratch.mkdir(parents=True, exist_ok=True)
     os.environ["ROW_BOT_DATA_DIR"] = str(scratch)
-    person = generator.load_person(world.PERSON)
+    people = [item.strip() for item in args.people.split(",") if item.strip()]
     tokens: dict[str, int] = {"input": 0, "output": 0, "calls": 0}
     gate = None
     if args.model == "main":
@@ -153,7 +154,7 @@ def main(argv: list[str] | None = None) -> int:
         guard_sign_in()
         SignIn(Path(args.eval_profile)).install()
         model = eval_profile.choose_model([item.model_id for item in codex.fetch_codex_model_infos()])
-        writer = SimulatedPerson({"id": "phrasing", "name": person["name"]}, 0, model_ref=f"model:codex:{model}")
+        writer = SimulatedPerson({"id": "phrasing", "name": "phrasing"}, 0, model_ref=f"model:codex:{model}")
 
         def ask(prompt: str) -> str:
             message = writer._model().invoke([HumanMessage(content=prompt)])  # noqa: SLF001 - the person's model
@@ -170,13 +171,26 @@ def main(argv: list[str] | None = None) -> int:
         gate.acquire("phrasing the stale-skills world's messages", expect="10 min, 20 GB")
         ask = _ollama_ask(args.model)
     try:
-        found = phrase(person, ask)
+        for person_id in people:
+            with world.people_dir(person_id):
+                person = generator.load_person(person_id)
+            found = phrase(person, ask)
+            print(write(person_id, args.model, found))
+            print(json.dumps({"person": person_id, "asked": found["asked"], "kept": found["kept"], "tokens": tokens}))
     finally:
         if gate is not None:
+            _ollama_unload(args.model)
             gate.release()
-    print(write(world.PERSON, args.model, found))
-    print(json.dumps({"asked": found["asked"], "kept": found["kept"], "tokens": tokens}))
     return 0
+
+
+def _ollama_unload(model: str) -> None:
+    import httpx
+
+    try:
+        httpx.post("http://127.0.0.1:11434/api/generate", timeout=60, json={"model": model, "keep_alive": 0})
+    except httpx.HTTPError:
+        pass
 
 
 if __name__ == "__main__":

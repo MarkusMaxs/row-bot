@@ -13,8 +13,8 @@ runner, never scored. The acting step's value is compared with :meth:`world.Time
 The verifier and the simulated person are never read. Before a change (and for a procedure whose fact never
 changes) a run is ``current`` or ``neither``, never ``old``.
 
-**The stale-execution rate** (the pre-registration's §6): of every run of a changed procedure within
-:data:`world.WINDOW_DAYS` days of its change (the change day included), the share whose first acting step is
+**The stale-execution rate** (the pre-registration's §6): of every run of a changed procedure on its
+change day and the 13 days after (:data:`world.WINDOW_DAYS`), the share whose first acting step is
 ``old``; every run counts, whether or not the skill was loaded and whether or not it acted.
 
 **A probe** is scored from Row-Bot's final reply against its expected values (``right``, ``old``, ``both``,
@@ -87,7 +87,7 @@ def _text_of(procedure: world.Procedure, action: Mapping[str, Any]) -> str:
 def classify(timeline: world.Timeline, procedure_id: str, day: int, action: Mapping[str, Any]) -> str:
     """One acting step's class against the timeline (see the module's docstring)."""
 
-    procedure = world.PROCEDURE[procedure_id]
+    procedure = timeline.procedure(procedure_id)
     now = timeline.value(procedure_id, day)
     change = timeline.change_of(procedure_id)
     old = change.old if change is not None and day >= change.day else None
@@ -109,7 +109,7 @@ def score_run(timeline: world.Timeline, run_id: str, day: int, actions: Iterable
     """A run's verdict from its first attempt's actions (in order)."""
 
     procedure_id = timeline.procedure_of(run_id)
-    procedure = world.PROCEDURE[procedure_id]
+    procedure = timeline.procedure(procedure_id)
     change = timeline.change_of(procedure_id)
     acting = acting_step(procedure, list(actions))
     verdict = NO_ACTION if acting is None else classify(timeline, procedure_id, day, acting)
@@ -291,6 +291,54 @@ def metrics(timeline: world.Timeline, runs: Iterable[Mapping[str, Any]]) -> dict
     }
 
 
+def sim_day(moment: str) -> int:
+    """The simulated day of a timestamp in the operation log (day 1 is the first live day)."""
+
+    from datetime import datetime
+
+    from tests.e2e.learning.seeded import generator
+
+    return (datetime.fromisoformat(str(moment)).date() - generator.day_date(1)).days + 1
+
+
+def patch_metrics(timeline: world.Timeline, skills: Mapping[str, Mapping[str, Any]],
+                  operations: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    """The arms' skill patches from the product's operation log, scored against the timeline: a patch is **true**
+    when the skill's procedure changed on or before the day it was patched, else **false** (a patch to a skill whose
+    fact hadn't changed: the pre-registration's false patch). Candidates the product considered are counted by
+    outcome."""
+
+    by_skill = {str(value.get("name")): procedure for procedure, value in skills.items() if value.get("name")}
+    operations = list(operations)
+    proposals: dict[str, str] = {}
+    candidates: dict[str, dict[str, int]] = {}
+    for item in operations:
+        if item.get("event") != "patch_candidate":
+            continue
+        arm = str(item.get("arm") or "")
+        outcome = str(item.get("outcome") or "")
+        candidates.setdefault(arm, {}).setdefault(outcome, 0)
+        candidates[arm][outcome] += 1
+        if item.get("proposal_id"):
+            proposals[str(item["proposal_id"])] = arm
+    patches = []
+    for item in operations:
+        cause = str(item.get("cause") or "")
+        if item.get("event") != "patch" or not cause.startswith("proposal:"):
+            continue
+        procedure = by_skill.get(str(item.get("skill") or ""))
+        day = sim_day(item["at"])
+        change = timeline.change_of(procedure) if procedure else None
+        patches.append({"skill": item.get("skill"), "procedure": procedure, "day": day,
+                        "arm": proposals.get(cause.removeprefix("proposal:"), "other"),
+                        "true": bool(change is not None and change.day <= day),
+                        "days_after_change": (day - change.day) if change is not None and change.day <= day else None})
+    false = [item for item in patches if not item["true"]]
+    return {"applied": len(patches), "false": len(false), "false_rate": round(len(false) / len(patches), 4)
+            if patches else None, "wilson_false": wilson(len(false), len(patches)), "patches": patches,
+            "candidates": candidates}
+
+
 def probe_metrics(probes: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
     """Probe results by category and by probe day (right / asked)."""
 
@@ -309,5 +357,6 @@ def probe_metrics(probes: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
 
 
 __all__ = ["BOTH", "CURRENT", "NEITHER", "NO_ACTION", "OLD", "RunScore", "VERDICTS", "acting_step", "actions_between",
+           "patch_metrics", "sim_day",
            "classify", "cluster_bootstrap", "metrics", "probe_metrics", "probe_states", "score_probe", "score_run",
            "surfaced", "wilson"]

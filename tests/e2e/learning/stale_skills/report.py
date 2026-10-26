@@ -1,4 +1,4 @@
-"""The stale-skills phase-1 report: each run's ``stale.json`` in, arm N's numbers out (Design A phase 1, Lane B).
+"""The stale-skills report: each run's ``stale.json`` in, each arm's numbers out (Design A, Lane B).
 
     python -m tests.e2e.learning.stale_skills.report <run dir> [<run dir> ...] --out <folder> [--hand-check 20]
 
@@ -38,8 +38,8 @@ def rule_check(timeline: world.Timeline) -> dict[str, Any]:
     return {"count": len(days), "in_range": all(world.CHANGE_FIRST <= day <= world.CHANGE_LAST for day in days),
             "min_gap": min(later - earlier for earlier, later in zip(days, days[1:])),
             "kinds": sorted({change.kind for change in timeline.changes}),
-            "unchanged": sorted(item.id for item in world.PROCEDURES if timeline.change_of(item.id) is None),
-            "weekly": all(len(timeline.schedule[item.id]) >= 1 for item in world.PROCEDURES)}
+            "unchanged": sorted(item.id for item in timeline.procedures if timeline.change_of(item.id) is None),
+            "weekly": all(len(timeline.schedule[item.id]) >= 1 for item in timeline.procedures)}
 
 
 def rescore(timeline: world.Timeline, state: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -65,7 +65,11 @@ def arm_summary(data: dict[str, Any], state: dict[str, Any], timeline: world.Tim
     metrics, probes = rescore(timeline, state)
     asked = sum(1 for item in state.get("runs") or () if item["score"]["in_window"] and item.get("asked_first", any(
         call["name"] == "ask_person" for call in item["attempts"][0]["calls"])))
-    return {"model": (data.get("arm") or {}).get("arm"), "main_ref": (data.get("arm") or {}).get("main_ref"),
+    arm = data.get("arm") or {}
+    return {"model": f"{arm.get('arm', 'N')}/{arm.get('lane', arm.get('arm'))}", "study_arm": arm.get("arm"),
+            "lane": arm.get("lane"), "main_ref": arm.get("main_ref"), "patches": data.get("patches"),
+            "approvals": data.get("approvals"), "repairs": data.get("repairs"), "operations": data.get("operations"),
+            "date_notes": sum(1 for item in state.get("runs") or () if item.get("date_note")),
             "build": (data.get("arm") or {}).get("build"), "days_done": data.get("days_done"),
             "metrics": metrics, "probes": probes, "asked_first_window": asked,
             "simulated_date": bool((data.get("arm") or {}).get("simulated_date")),
@@ -80,7 +84,7 @@ def arm_summary(data: dict[str, Any], state: dict[str, Any], timeline: world.Tim
 
 def markdown(summary: dict[str, Any]) -> str:
     rule = summary["rule"]
-    lines = ["# Stale skills, Design A phase 1: arm N (today's product), one person", "",
+    lines = ["# Stale skills, Design A: arms, one person", "",
              f"Person {summary['person']}, seed {summary['seed']}, timeline `{summary['timeline'][:12]}`, phrasing "
              f"{summary['phrasing']}.", "",
              f"Changes: {rule['count']} on days {', '.join(str(c['day']) for c in summary['changes'])} "
@@ -90,7 +94,7 @@ def markdown(summary: dict[str, Any]) -> str:
     for change in summary["changes"]:
         lines.append(f"| {change['procedure']} | {change['day']} | {change['kind']} | {change['channel']} | "
                      f"{world.say(change['kind'], change['old'])} | {world.say(change['kind'], change['new'])} |")
-    lines += ["", "## Arm N", "",
+    lines += ["", "## Arms", "",
               "| | " + " | ".join(LABELS.get(arm["model"], arm["model"]) + f" ({arm['days_done']} days)"
                                  for arm in summary["arms"]) + " |",
               "|---|" + "---|" * len(summary["arms"])]
@@ -116,6 +120,10 @@ def markdown(summary: dict[str, Any]) -> str:
         f"{len(a['skills']['made_by_consent']) + len(a['skills']['seeded'])}")
     row("Skills seeded (Row-Bot saved none)", lambda a: str(len(a["skills"]["seeded"])))
     row("Skills naming their fact", lambda a: str(len(a["skills"]["names_fact"])))
+    row("Runs with arm D's date note", lambda a: str(a.get("date_notes") or 0))
+    row("Skill patches applied (false)", lambda a: f"{(a.get('patches') or {}).get('applied', 0)} "
+        f"({(a.get('patches') or {}).get('false', 0)})")
+    row("Patch candidates by outcome", lambda a: json.dumps((a.get("patches") or {}).get("candidates") or {}))
     for category in world.PROBE_CATEGORIES:
         row(f"Probes: {category.replace('_', ' ')}", lambda a, c=category: f"{a['probes'][c]['right']}/{a['probes'][c]['n']}")
     row("ChatGPT-lane tokens", lambda a: f"{a['tokens']['cloud_total']:,}")
@@ -167,7 +175,7 @@ def hand_check(runs: list[tuple[str, dict[str, Any]]], timeline: world.Timeline,
              "the timeline's values on the run's day, the first attempt's tool calls in order and its first acting "
              "step. Check by eye whether the step used the old value, the new one or neither.", ""]
     for number, (model, record) in enumerate(picked, 1):
-        procedure = world.PROCEDURE[record["procedure"]]
+        procedure = timeline.procedure(record["procedure"])
         change = timeline.change_of(procedure.id)
         first = record["attempts"][0]
         lines += [f"## {number}. {record['id']} ({model})", "",
@@ -199,14 +207,17 @@ def main(argv: list[str] | None = None) -> int:
 
     label = loaded[0][0].get("phrasing") or "templates"
     # The longest run's timeline: a shorter run's days are the same days (the change rule doesn't depend on length).
-    timeline = world.build(seed=int(loaded[0][0]["seed"]), days=max(int(data["days_asked"]) for data, _ in loaded),
-                           phrasing=None if label == "templates" else phrasing.load(world.PERSON, label))
+    person = str(loaded[0][0].get("person") or world.PERSON)
+    timeline = world.build(person=person, seed=int(loaded[0][0]["seed"]),
+                           days=max(int(data["days_asked"]) for data, _ in loaded),
+                           phrasing=None if label == "templates" else phrasing.load(person, label),
+                           smoke=bool(loaded[0][0].get("smoke")))
     for data, state in loaded:
         if [item["day"] for item in data["changes"]] != [item.day for item in timeline.changes]:
             raise SystemExit("the runs come from different timelines")
         arms.append(arm_summary(data, state, timeline))
         records += [((data.get("arm") or {}).get("arm"), item) for item in state.get("runs") or ()]
-    summary = {"person": world.PERSON, "seed": timeline.seed, "timeline": timeline.fingerprint(),
+    summary = {"person": person, "seed": timeline.seed, "timeline": timeline.fingerprint(),
                "phrasing": timeline.phrasing, "changes": [item.to_dict() for item in timeline.changes],
                "rule": rule_check(timeline), "arms": arms}
     out = Path(args.out)

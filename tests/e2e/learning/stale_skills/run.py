@@ -1,26 +1,40 @@
-"""The stale-skills run of one arm for one person: today's product (arm N) over the timeline (Design A phase 1, Lane B).
+"""The stale-skills run of one arm for one person (Design A, Lane B): the product with its stale-skills setting.
 
 One process per run (Row-Bot binds its data folder when imported), in its own scratch profile (``sa_`` folders under
 ``D:\\RowBotScratch\\stale-skills\\``), on S1's :class:`~tests.e2e.learning.seeded.live.PersonRun` (the profile, the
-30-day past through Row-Bot's own import, the simulated person, the simulated clock, the nights' Dream and vault):
+30-day past through Row-Bot's own import, the simulated person, the simulated clock, the nights' Dream and vault).
 
-- ``--model main``: the main model on the ChatGPT lane (the eval profile's sign-in, in this process's memory only;
-  **a token refresh and any write-back are refused**);
-- ``--model local``: ``model:ollama:<--local-model>`` as the default model, so chat turns, memory extraction and
-  Dream run on it; the simulated person's words still come from the ChatGPT lane. Each simulated day books the card.
+**The arm** (``--arm``, paired across arms: the same person, seed and changes) is the product's ``stale_skills.json``
+setting, written into the profile before anything else (so the past's memories have their validity records too):
 
-Each simulated day, in order (:func:`steps`): the morning (the world's files and inbox change on a change's day),
-the day's items (what the person tells, the recurring runs, the probes on probe days), the evening's background
-memory extraction (the app runs it when idle), and the night (S1's: Dream, the vault's refresh; Learning's training
-is not run). **Every step is saved** in ``state.json`` as it ends, and a run started again continues at the first
-step not done (a turn cut off by a crash is asked again, in a new chat, and the redo is logged).
+- ``N``: on with arm N: validity, links and the operation log only; no prompt text, no Dream phase (today's
+  behaviour);
+- ``R``: reconciliation: the Dream Cycle drafts ``patch_skill`` proposals overnight; **the person approves every one
+  the next morning** (the policy), through the product's own apply;
+- ``D``: the date-aware note where a stale skill is shown;
+- ``F``: failure-triggered repair: after a run whose first attempt used the procedure's skill and failed its check,
+  the product drafts a repair from that run (the request, the answer, the person's correction); **the person approves
+  it at once** (the policy);
+- ``A``: a second, independent copy of R (its own profile), for noise.
 
-A run records what its first attempt did (the emails and events, in order; every tool call; what auto-recall and
-memory tools returned; which skill it loaded) and :mod:`scorer` scores it. **The skill** is made through the
-simulated person's consent on the procedure's 2nd or 3rd passed run (``world.Timeline.consent_run``): they accept
-Row-Bot's offer, or ask for one; Row-Bot drafts and applies it through its own approval gate. If Row-Bot saves no
-skill, the template skill (:func:`seeded_skill`) is seeded that day, and counted. Row-Bot's own skill is kept as it
-made it, whatever it names.
+**The model** (``--model``):
+
+- ``main``: the main model on the ChatGPT lane (the eval profile's sign-in, in this process's memory only; **a token
+  refresh and any write-back are refused**);
+- ``local``: ``model:ollama:<--local-model>`` as the default model, so chat turns, memory extraction, Dream and the
+  arms' drafts run on it; the simulated person's words still come from the ChatGPT lane. Each simulated day books
+  the card.
+
+Each simulated day, in order (:func:`steps`): the morning (the world's files and inbox change on a change's day; arm
+R's approvals; in the smoke world, the seeded skills on day 1), the day's items (what the person tells, the recurring
+runs, the probes on probe days), the evening's background memory extraction, and the night (S1's: Dream, the vault's
+refresh). **Every step is saved** in ``state.json`` as it ends, and a run started again continues at the first step
+not done.
+
+**The skill** is made through the simulated person's consent on the procedure's 2nd or 3rd passed run: they accept
+Row-Bot's offer, or ask for one; Row-Bot drafts it and its approval card asks the person, who approves (the skill-save
+fixes #559 and #560 made this work; phase 1's harness stand-in for the lost card is gone). If Row-Bot saves no skill,
+the template skill (:func:`seeded_skill`) is seeded that day, and counted.
 
 The run stops cleanly at the token cap and at once on any usage or rate-limit error (exit 76).
 """
@@ -56,14 +70,13 @@ STAGES = ("profile", "past", "days")
 STAND_INS = ("calendar", "gmail", "outlook_calendar", "outlook_mail")
 #: Tool calls that act on the world for each procedure's action (the acting step's tool).
 ACTING_TOOLS = {"mail": "mail_send", "event": "calendar_create_event"}
+#: The study's arms, and the product's setting each one runs (A is a second copy of R).
+ARMS = {"N": "N", "R": "R", "D": "D", "F": "F", "A": "R"}
 CONSENT_YES = "Yes please, save it as a skill."
 CONSENT_ASK = ("I'll be asking you this a lot - can you save how you just did it as a skill, so it's done the same "
                "way every time?")
 CONSENT_APPLY = "Yes, go ahead and save it."
 _OFFER = re.compile(r"\bskill\b", re.IGNORECASE)
-#: What ``row_bot_apply_proposal`` answers when its own approval question is swallowed (the product's
-#: ``_apply_controlled_proposal`` catches LangGraph's interrupt as an error, so the card never shows; found 26 Oct).
-LOST_CARD = "Failed to apply proposal: (Interrupt("
 _LIMIT_WORDS = ("rate limit", "rate_limit", "ratelimit", "usage limit", "usage_limit", "429", "too many requests",
                 "quota", "rate_limited", "usage_limit_reached")
 #: No new card booking from here until the person's quiet hours end (a day takes a few minutes: never run into 00:40).
@@ -122,6 +135,15 @@ def simulated_datetime(now: Any) -> type[datetime]:
     return SimulatedNow
 
 
+def write_setting(data: Path, arm: str) -> dict[str, Any]:
+    """The product's stale-skills setting for this study arm, in the profile."""
+
+    setting = {"enabled": True, "arm": ARMS[arm]}
+    data.mkdir(parents=True, exist_ok=True)
+    (data / "stale_skills.json").write_text(json.dumps(setting), encoding="utf-8")
+    return setting
+
+
 # ── Steps and resuming (pure) ────────────────────────────────────────────────
 
 
@@ -162,29 +184,52 @@ def remaining(timeline: world.Timeline, state: dict[str, Any], days: int) -> lis
 # ── The seeded skill ─────────────────────────────────────────────────────────
 
 
-def seeded_skill(procedure: world.Procedure, value: world.Value) -> dict[str, str]:
+def seeded_skill(procedure: world.Procedure, value: world.Value, first_name: str = "Mara") -> dict[str, str]:
     """The template skill for ``procedure`` with the fact's value on the day it is seeded."""
 
     said = world.say(procedure.kind, value)
     if procedure.action == "event":
         step = (f"2. Create one event with `calendar_create_event`: title `{procedure.event.replace('{who}', '<name>')}`,"
-                f" the date from Mara's message, **start {value['start']}, end {value['end']}** ({procedure.fact}).")
-        take = "1. Take the date (and the volunteer's name, if any) from Mara's message."
+                f" the date from {first_name}'s message, **start {value['start']}, end {value['end']}** "
+                f"({procedure.fact}).")
+        take = f"1. Take the date (and the person's name, if any) from {first_name}'s message."
     elif procedure.kind in ("address", "supplier", "role"):
         step = (f"2. Send one email with `mail_send` to {value.get('name', procedure.party)}, **{said}** "
-                f"({procedure.fact}), with the details from Mara's message.")
-        take = f"1. Take the {procedure.unit or 'details'} from Mara's message."
+                f"({procedure.fact}), with the details from {first_name}'s message.")
+        take = f"1. Take the {procedure.unit or 'details'} from {first_name}'s message."
     else:
         step = (f"2. Send one email with `mail_send` to {procedure.to} that states {procedure.fact}: **{said}**.")
-        take = "1. Take the week (if any) from Mara's message."
+        take = f"1. Take the week (if any) from {first_name}'s message."
     name = f"{procedure.id}_procedure"
     return {
         "name": name, "display_name": procedure.title[4:].capitalize() if procedure.title.startswith("the ")
         else procedure.title.capitalize(),
-        "description": f"How Mara's {procedure.title.removeprefix('the ')} is done.",
-        "instructions": (f"Use this when Mara asks for {procedure.title}.\n\n## Steps\n{take}\n{step}\n"
-                         "3. Tell Mara it's done.\n"),
+        "description": f"How {first_name}'s {procedure.title.removeprefix('the ')} is done.",
+        "instructions": (f"Use this when {first_name} asks for {procedure.title}.\n\n## Steps\n{take}\n{step}\n"
+                         f"3. Tell {first_name} it's done.\n"),
     }
+
+
+def reads_before(procedure: world.Procedure, calls: list[dict[str, Any]]) -> list[str]:
+    """The tools a first attempt called before its acting step (all of them when it never acted)."""
+
+    acting = ACTING_TOOLS[procedure.action]
+    found = []
+    for call in calls:
+        if call["name"] == acting:
+            break
+        found.append(call["name"])
+    return found
+
+
+def repair_correction(record: dict[str, Any], procedure: world.Procedure) -> str:
+    """What the person said was wrong with the run (arm F's evidence): their first reaction's words, or, when they
+    gave up without words, that the result was wrong (never the right value)."""
+
+    for reaction in record.get("reaction") or ():
+        if reaction.get("text"):
+            return str(reaction["text"])
+    return f"That wasn't right ({procedure.title})."
 
 
 # ── The run ──────────────────────────────────────────────────────────────────
@@ -198,20 +243,25 @@ class StaleRun(PersonRun):
     """One arm's run for one person (see the module's docstring)."""
 
     def __init__(self, args: argparse.Namespace) -> None:
+        world.use_people_dir(args.person)
         super().__init__(args)
-        self.arm = args.arm
-        phrased = None if args.phrasing == "templates" else phrasing_module.load(world.PERSON, args.phrasing)
+        self.lane = args.lane_model  # "main" or "local"
+        self.study_arm = args.arm
+        phrased = None if args.phrasing == "templates" else phrasing_module.load(args.person, args.phrasing)
         if args.phrasing != "templates" and phrased is None:
-            raise ScratchError(f"no phrasing file for {args.phrasing!r}: run phrasing.py first, or --phrasing templates")
-        self.timeline = world.build(seed=args.seed, days=args.days, phrasing=phrased)
+            raise ScratchError(f"no phrasing file for {args.person}/{args.phrasing}: run phrasing.py first, or "
+                               "--phrasing templates")
+        self.timeline = world.build(person=args.person, seed=args.seed, days=args.days, phrasing=phrased,
+                                    smoke=args.smoke)
         self.history = replace(self.timeline.history, stream=self.timeline.runs)
         self.person["tools"] = [*self.person["tools"], "row_bot_status"]
-        self.gpu.label = f"SA1 stale skills ({self.arm})"
+        self.gpu.label = f"SA2 stale skills ({self.study_arm}, {self.lane})"
         self.gpu.quiet = quiet_soon
         self._recalled: list[list[str]] = []
         self._errors: list[str] = []
         data = self.state.data
-        for key in ("runs", "tells", "probes", "evenings", "mornings", "redone", "unprompted_skills"):
+        for key in ("runs", "tells", "probes", "evenings", "mornings", "redone", "unprompted_skills", "approvals",
+                    "repairs"):
             data.setdefault(key, [])
         data.setdefault("skills", {})
         data.setdefault("started", [])
@@ -220,9 +270,14 @@ class StaleRun(PersonRun):
 
     def boot(self) -> None:
         guard_sign_in()
+        setting = write_setting(self.data, self.study_arm)
         super().boot()
+        from row_bot import stale_skills
+
+        stale_skills.invalidate()
+        stale_skills.set_clock(lambda: self.clock.now().replace(tzinfo=None))
         codex_ref = self.main_ref
-        if self.arm == "local":
+        if self.lane == "local":
             from row_bot import models
 
             self.main_ref = f"model:ollama:{self.args.local_model}"
@@ -232,12 +287,16 @@ class StaleRun(PersonRun):
             self._show_simulated_date()
         self._watch_limits()
         self._record_recall()
-        arm = {"arm": self.arm, "main_ref": self.main_ref, "person_words": codex_ref, "build": self.build,
-               "simulated_date": bool(self.args.sim_date),
-               "timeline": self.timeline.fingerprint(), "phrasing": self.timeline.phrasing, "seed": self.args.seed}
+        arm = {"arm": self.study_arm, "setting": setting, "lane": self.lane, "main_ref": self.main_ref,
+               "person_words": codex_ref, "build": self.build, "simulated_date": bool(self.args.sim_date),
+               "smoke": bool(self.args.smoke), "timeline": self.timeline.fingerprint(),
+               "phrasing": self.timeline.phrasing, "seed": self.args.seed, "person": self.person_id}
         prompts = {item.id: item.prompt for item in self.timeline.runs}
         if any(prompts.get(item["id"]) != item.get("prompt") for item in self.state.data["runs"]):
             raise ScratchError("this run's state was made from another timeline: start a new run folder")
+        saved = self.state.data.get("arm") or {}
+        if saved and (saved.get("arm"), saved.get("lane")) != (self.study_arm, self.lane):
+            raise ScratchError("this run folder belongs to another arm or model: start a new run folder")
         self.state.data["arm"] = arm
         self.save()
 
@@ -340,7 +399,7 @@ class StaleRun(PersonRun):
                 "cloud_tokens": self.cloud_tokens() - before, "memories": _memory_count()}
 
     def _book(self, what: str, expect: str) -> None:
-        if self.arm != "local":
+        if self.lane != "local":
             return
         self._wait_for_person()
         from tests.e2e.learning.seeded.scratch import after_quiet_hours
@@ -362,7 +421,7 @@ class StaleRun(PersonRun):
             logger.debug("couldn't unload %s", self.args.local_model, exc_info=True)
 
     def _card(self, phase: str, seconds: float) -> None:
-        if self.arm == "local":
+        if self.lane == "local":
             self._gpu_time(phase, seconds)
 
     # ── Stage: days ─────────────────────────────────────────────────────
@@ -380,7 +439,7 @@ class StaleRun(PersonRun):
             if started_day != day:
                 if started_day is not None:
                     self.gpu.release()
-                self._book(f"{self.args.local_model} arm, simulated day {day}", "6 min, 12 GB")
+                self._book(f"{self.args.local_model} arm {self.study_arm}, simulated day {day}", "6 min, 12 GB")
                 started_day, clock_started = day, time.monotonic()
             if what == "morning":
                 self._morning(day)
@@ -398,7 +457,7 @@ class StaleRun(PersonRun):
                 self.state.data["evenings"].append({"day": day, **self._extract()})
                 self.save()
             else:
-                self.night(day)  # S1's: Dream, the vault's refresh (Learning's runner is off: --no-gpu)
+                self.night(day)  # S1's: Dream (arm R's reconciliation is its phase), the vault's refresh
                 self._check_limits()
                 self._card(f"simulated day {day}", time.monotonic() - clock_started)
                 self.save()
@@ -412,8 +471,29 @@ class StaleRun(PersonRun):
             target = self.workspace / path
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(text, encoding="utf-8", newline="\n")
+        if day == 1:
+            for procedure_id in self.timeline.seeded_skills:
+                self._seed_skill(self.timeline.procedure(procedure_id), day, why="the smoke world's skill")
+        if self.study_arm in ("R", "A"):
+            self._approve_reconciliations(day)
         self.state.data["mornings"].append(day)
         self.save()
+
+    def _approve_reconciliations(self, day: int) -> None:
+        """Arm R's policy: the person approves every reconciliation proposal the next morning (the product's apply,
+        as the approval card does)."""
+
+        from row_bot import evolution
+
+        for proposal in evolution.list_proposals(status="ready", proposal_type="patch_skill"):
+            if not str(proposal.get("title") or "").startswith("Reconcile skill:"):
+                continue
+            result = evolution.apply_proposal(proposal["id"], require_approval=False, approved_by_user=True)
+            target = str((proposal.get("payload") or {}).get("target_skill") or "")
+            self.state.data["approvals"].append({"day": day, "proposal": proposal["id"], "skill": target,
+                                                 "ok": bool(result.get("ok")),
+                                                 "message": str(result.get("message") or "")[:300]})
+            self.note(f"day {day}: approved reconciliation of {target!r}: {result.get('message')}")
 
     # ── A turn and what it did ──────────────────────────────────────────
 
@@ -439,13 +519,13 @@ class StaleRun(PersonRun):
             "tools": [_invoked(call) for call in calls],
             "calls": [{"name": _invoked(call), "args": call["args"]} for call in calls],
             "skill_loads": [_skill_ref(call) for call in calls if _invoked(call) == "skill_load"],
+            "date_notes": [item["content"][:1200] for item in results if '"date_check"' in item["content"]],
             "memory_results": [item["content"][:4000] for item in results if "memory" in item["name"].lower()
                                or "recall" in item["name"].lower() or _bridged_memory(item, calls)],
             "recalled": [text for batch in self._recalled for text in batch],
             "answer": result.answer[:3000],
             "error": result.error,
             "error_text": errors[:3],
-            "lost_card": any(LOST_CARD in item["content"] for item in results),
         }
         return result, seen
 
@@ -486,14 +566,15 @@ class StaleRun(PersonRun):
         eval_worker._CURRENT.apps = self.apps  # noqa: SLF001
 
     def _run(self, request: Any) -> dict[str, Any]:
-        """One recurring run: the turn, the check, the person's reaction (first attempt scored), then consent."""
+        """One recurring run: the turn, the check, the person's reaction (first attempt scored), arm F's repair,
+        then consent."""
 
         from row_bot.learning import teach
         from row_bot.learning.packs.verify import Outcome, verify, workspace_files
 
         self.check_cap()
         self._place(request)
-        procedure = world.PROCEDURE[self.timeline.procedure_of(request.id)]
+        procedure = self.timeline.procedure(self.timeline.procedure_of(request.id))
         thread_id = self._new_thread(f"run-{request.id}", request.prompt)
         tokens_before = self.cloud_tokens()
         skill = self._skill_state(procedure)
@@ -547,9 +628,12 @@ class StaleRun(PersonRun):
         record["auto_recall_new"] = scorer.surfaced(self.timeline, procedure.id, request.day, first["recalled"])
         record["skill_loaded"] = bool(skill.get("name")) and any(skill["name"] in ref for ref in first["skill_loads"])
         record["any_skill_loaded"] = bool(first["skill_loads"])
+        record["date_note"] = bool(first["date_notes"])
         record["reads_before_acting"] = reads_before(procedure, first["calls"])
         record["asked_first"] = "ask_person" in record["reads_before_acting"]
         self.clock.advance(minutes=2)
+        if self.study_arm == "F" and record["skill_loaded"] and not record["passed_first"]:
+            self._repair(request, procedure, record)
         self._consent(request, procedure, thread_id, record)
         made = sorted(set(self._user_skills()) - set(skills_before) - set(
             (record.get("consent") or {}).get("made") or ()))
@@ -558,8 +642,28 @@ class StaleRun(PersonRun):
         record["tokens"] = self.cloud_tokens() - tokens_before
         self.note(f"day {request.day} {procedure.id}: {scored.verdict}{' (in window)' if scored.in_window else ''}"
                   f", first {'ok' if record['passed_first'] else 'wrong'}, skill "
-                  f"{'loaded' if record['skill_loaded'] else 'not loaded'}; {record['tokens']:,} tokens")
+                  f"{'loaded' if record['skill_loaded'] else 'not loaded'}"
+                  f"{', date note' if record['date_note'] else ''}; {record['tokens']:,} tokens")
         return record
+
+    def _repair(self, request: Any, procedure: world.Procedure, record: dict[str, Any]) -> None:
+        """Arm F: the product drafts a repair from the failed run, and the person approves it at once (the policy)."""
+
+        from row_bot import evolution
+        from row_bot.stale_skills import arms
+
+        name = record["skill"]["name"]
+        started = time.monotonic()
+        outcome = arms.repair(name, request=request.prompt, answer=record["attempts"][0]["answer"],
+                              correction=repair_correction(record, procedure))
+        repair = {"day": request.day, "run": request.id, "skill": name, "seconds": round(time.monotonic() - started, 1),
+                  **outcome}
+        if outcome.get("outcome") == "proposed":
+            result = evolution.apply_proposal(outcome["proposal_id"], require_approval=False, approved_by_user=True)
+            repair["applied"] = {"ok": bool(result.get("ok")), "message": str(result.get("message") or "")[:300]}
+        self.state.data["repairs"].append(repair)
+        record["repair"] = repair
+        self.note(f"day {request.day}: repair of {name!r}: {outcome.get('outcome')}")
 
     def _probe(self, probe: world.Probe) -> dict[str, Any]:
         self.check_cap()
@@ -601,8 +705,8 @@ class StaleRun(PersonRun):
         return {item.name: _skill_text(item) for item in skills.get_manual_skills() if item.source == "user"}
 
     def _consent(self, request: Any, procedure: world.Procedure, thread_id: str, record: dict[str, Any]) -> None:
-        """On the procedure's consent run the person says yes to Row-Bot's offer (or asks for the skill); if Row-Bot
-        saves none, the template skill is seeded that day."""
+        """On the procedure's consent run the person says yes to Row-Bot's offer (or asks for the skill) and approves
+        its card; if Row-Bot saves none, the template skill is seeded that day."""
 
         if self.state.data["skills"].get(procedure.id, {}).get("name") or not record["passed_final"]:
             return
@@ -627,75 +731,71 @@ class StaleRun(PersonRun):
             self.clock.advance(minutes=2)
             if made:
                 break
-            if seen["lost_card"]:
-                # The person has said yes and Row-Bot asked for its approval card, which the product lost: the
-                # person approves the proposal Row-Bot drafted, as the card would (the product's own apply, the
-                # draft unchanged), and it is recorded as such.
-                made = self._approve_lost_card(proposals_before, consent)
-                break
             message = CONSENT_APPLY
         consent["proposals"] = _proposals(since=proposals_before)
         consent["made"] = sorted(made)
         consent["made_text"] = {name: text[:3000] for name, text in made.items()}
+        consent["card"] = any(item.get("tool") == "row_bot_apply_proposal" for turn in consent["turns"]
+                              for item in turn["approvals"])
         value = self.timeline.value(procedure.id, request.day)
         if made:
             name = sorted(made)[0]
             consent["names_fact"] = world.states(procedure.kind, value, made[name])
             self.state.data["skills"][procedure.id] = {"name": name, "source": "offer" if offered else "asked",
                                                        "day": request.day, "names_fact": consent["names_fact"],
-                                                       "card_stand_in": bool(consent.get("card_stand_in")),
-                                                       "consent": consent}
-            self.note(f"skill {name!r} made by Row-Bot ({'offer' if offered else 'asked'}), day {request.day}"
-                      f", names the fact: {consent['names_fact']}")
+                                                       "card": consent["card"], "consent": consent}
+            self.note(f"skill {name!r} made by Row-Bot ({'offer' if offered else 'asked'}, card {consent['card']}), "
+                      f"day {request.day}, names the fact: {consent['names_fact']}")
             record["consent"] = consent
             return
+        record["consent"] = consent
+        self._seed_skill(procedure, request.day, why="Row-Bot saved no skill", consent=consent)
+
+    def _seed_skill(self, procedure: world.Procedure, day: int, *, why: str,
+                    consent: dict[str, Any] | None = None) -> None:
         from row_bot import skills
 
-        spec = seeded_skill(procedure, value)
-        skills.create_skill(name=spec["name"], display_name=spec["display_name"], icon="📋",
-                            description=spec["description"], instructions=spec["instructions"],
-                            tags=["kitchen", "stale-skills"], enabled=True)
-        self.state.data["skills"][procedure.id] = {"name": spec["name"], "source": "seeded", "day": request.day,
-                                                   "names_fact": True, "why": "Row-Bot saved no skill",
-                                                   "consent": consent}
-        record["consent"] = consent
-        self.note(f"skill {spec['name']!r} seeded on day {request.day} (Row-Bot saved none)")
-
-    def _approve_lost_card(self, proposals_before: set[str], consent: dict[str, Any]) -> dict[str, str]:
-        from row_bot import evolution
-
-        before = self._user_skills()
-        ready = [item for item in _proposals(since=proposals_before)
-                 if item["type"] == "create_skill" and item["status"] in ("ready", "approved", "draft")]
-        consent["card_stand_in"] = {"proposals": [item["id"] for item in ready]}
-        if not ready:
-            return {}
-        result = evolution.apply_proposal(ready[-1]["id"], require_approval=False, approved_by_user=True)
-        consent["card_stand_in"].update({"applied": ready[-1]["id"], "ok": bool(result.get("ok")),
-                                         "message": str(result.get("message") or "")[:300]})
-        return {name: text for name, text in self._user_skills().items() if name not in before}
+        if self.state.data["skills"].get(procedure.id, {}).get("name"):
+            return
+        spec = seeded_skill(procedure, self.timeline.value(procedure.id, day) if consent is not None
+                            else self.timeline.start[procedure.id], self.timeline.catalogue.first_name)
+        skills.load_skills()
+        if skills.get_skill(spec["name"]) is None:
+            skills.create_skill(name=spec["name"], display_name=spec["display_name"], icon="📋",
+                                description=spec["description"], instructions=spec["instructions"],
+                                tags=["stale-skills"], enabled=True)
+        self.state.data["skills"][procedure.id] = {"name": spec["name"], "source": "seeded", "day": day,
+                                                   "names_fact": True, "why": why, "consent": consent or {}}
+        self.note(f"skill {spec['name']!r} seeded on day {day} ({why})")
 
     # ── Result ──────────────────────────────────────────────────────────
 
     def stale_result(self) -> dict[str, Any]:
+        from row_bot import stale_skills
+
         data = self.state.data
         scored = [{**item["score"], "skill_loaded": item["skill_loaded"], "recalled_new": item["recalled_new"],
                    "passed_first": item["passed_first"]} for item in data["runs"]]
+        operations = stale_skills.operations()
         return {
-            "format": "row_bot.learning.stale_skills_arm", "version": 1, "arm": data.get("arm"),
-            "person": self.person_id, "seed": self.args.seed, "days_asked": self.args.days,
+            "format": "row_bot.learning.stale_skills_arm", "version": 2, "arm": data.get("arm"),
+            "person": self.person_id, "seed": self.args.seed, "days_asked": self.args.days, "smoke": self.args.smoke,
             "days_done": len([day for day, night in data["nights"].items() if night.get("done")]),
             "timeline": self.timeline.fingerprint(), "phrasing": self.timeline.phrasing,
-            "changes": [item.to_dict() for item in self.timeline.changes],
+            "changes": [item.to_dict() for item in self.timeline.changes], "arrivals": self.timeline.arrivals,
             "metrics": scorer.metrics(self.timeline, scored), "probes": scorer.probe_metrics(data["probes"]),
+            "patches": scorer.patch_metrics(self.timeline, data["skills"], operations),
+            "operations": {event: sum(1 for item in operations if item["event"] == event)
+                           for event in sorted({item["event"] for item in operations})},
+            "approvals": data["approvals"], "repairs": data["repairs"],
             "skills": {key: {k: v for k, v in value.items() if k != "consent"} | {
                 "consent_turns": len((value.get("consent") or {}).get("turns") or ()),
                 "proposals": (value.get("consent") or {}).get("proposals")} for key, value in data["skills"].items()},
             "unprompted_skills": data["unprompted_skills"], "redone": data["redone"],
             "runs": [{key: item.get(key) for key in ("id", "day", "procedure", "passed_first", "passed_final",
                                                      "recalled_new", "recalled_old", "auto_recall_new",
-                                                     "skill_loaded", "any_skill_loaded", "reads_before_acting",
-                                                     "asked_first", "tokens")}
+                                                     "skill_loaded", "any_skill_loaded", "date_note",
+                                                     "reads_before_acting", "asked_first", "tokens")}
                      | {"score": item["score"], "skill": {key: (item.get("skill") or {}).get(key)
                                                           for key in ("name", "source", "names_start", "names_new")},
                         "tools": item["attempts"][0]["tools"],
@@ -711,24 +811,29 @@ class StaleRun(PersonRun):
             "limit_errors": data.get("limit_errors", []), "started": data["started"],
             "nights": {day: {step: (value or {}).get("error") or "ok" for step, value in (night.get("steps") or {}).items()}
                        for day, night in data["nights"].items()},
+            "reconciled": {day: (((night.get("steps") or {}).get("dream") or {}).get("outcome") or {}).get("reconciled")
+                           for day, night in data["nights"].items()},
         }
 
+    def _dream(self) -> Any:
+        """S1's Dream step, keeping arm R's reconciliation summary (S1 keeps only the numbers)."""
 
-def reads_before(procedure: world.Procedure, calls: list[dict[str, Any]]) -> list[str]:
-    """The tools a first attempt called before its acting step (all of them when it never acted)."""
+        from row_bot import dream_cycle
 
-    acting = ACTING_TOOLS[procedure.action]
-    found = []
-    for call in calls:
-        if call["name"] == acting:
-            break
-        found.append(call["name"])
-    return found
+        if not dream_cycle.is_enabled():
+            return {"ran": False, "why": "off"}
+        found = dream_cycle.run_dream_cycle() or {}
+        kept = {key: value for key, value in found.items() if isinstance(value, (int, float, bool))}
+        if found.get("reconciled_skills") is not None:
+            kept["reconciled"] = found["reconciled_skills"]
+        kept["errors"] = list(found.get("errors") or ())[:5]
+        return kept
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="One arm of the stale-skills run for one person (Design A phase 1)")
-    parser.add_argument("--arm", default="N", choices=("N",), help="phase 1 runs today's product only")
+    parser = argparse.ArgumentParser(description="One arm of the stale-skills run for one person (Design A)")
+    parser.add_argument("--arm", default="N", choices=tuple(ARMS), help="the study arm (A: a second copy of R)")
+    parser.add_argument("--person", default=world.PERSON, choices=world.PEOPLE)
     parser.add_argument("--model", choices=("main", "local"), required=True)
     parser.add_argument("--local-model", default="qwen3.5:9b")
     parser.add_argument("--data", required=True)
@@ -736,6 +841,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--days", type=int, default=world.DAYS)
     parser.add_argument("--seed", type=int, default=world.SEED)
     parser.add_argument("--phrasing", default="main", help="main, an Ollama model's label, or templates")
+    parser.add_argument("--smoke", action="store_true", help="the two-day smoke world (phase 2)")
     parser.add_argument("--eval-profile", required=True)
     parser.add_argument("--cap-tokens", type=int, required=True)
     parser.add_argument("--spent-before", type=int, default=0)
@@ -743,9 +849,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--stages", default=",".join(STAGES))
     parser.add_argument("--sim-date", action="store_true", help="the turn context says the simulated date")
     args = parser.parse_args(argv)
-    args.arm = "local" if args.model == "local" else "main"
+    args.lane_model = args.model
+    if args.smoke:
+        args.days = world.SMOKE_DAYS
     # S1's PersonRun reads these; this run trains nothing and runs no crash or comparison checks.
-    args.person, args.tier, args.lane, args.crash, args.gpu, args.pilot_compare = "mara", "8gb", "lane-B", False, False, True
+    args.tier, args.lane, args.crash, args.gpu, args.pilot_compare = "8gb", "lane-B", False, False, True
     args.runtimes_from = ""
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
@@ -753,8 +861,8 @@ def main(argv: list[str] | None = None) -> int:
             reconfigure(encoding="utf-8", errors="replace")
     logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     data = check_scratch(Path(args.data), Path(args.eval_profile))
-    if "sa_" not in data.as_posix().lower():
-        raise ScratchError(f"{data}: the stale-skills profiles live under an sa_ folder")
+    if not re.search(r"(^|/)sa2?_", data.as_posix().lower()):
+        raise ScratchError(f"{data}: the stale-skills profiles live under an sa_ or sa2_ folder")
     run = StaleRun(args)
     run.boot()
     wanted = [stage.strip() for stage in args.stages.split(",") if stage.strip()]

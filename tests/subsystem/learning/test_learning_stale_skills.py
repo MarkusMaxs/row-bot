@@ -1,5 +1,5 @@
-"""The stale-skills world timeline, its scorer and the run's resume (Design A phase 1, Lane B): deterministic, no
-network."""
+"""The stale-skills world timeline for six people, its scorer, the arms' harness and the run's resume (Design A,
+Lane B): deterministic, no network."""
 
 from __future__ import annotations
 
@@ -18,22 +18,29 @@ def timeline() -> world.Timeline:
     return world.build()
 
 
+@pytest.fixture(scope="module")
+def worlds() -> dict[str, world.Timeline]:
+    return {person: world.build(person=person) for person in world.PEOPLE}
+
+
 def _runs_of(timeline: world.Timeline, procedure: str) -> list:
     return [item for item in timeline.runs if timeline.procedure_of(item.id) == procedure]
 
 
-@pytest.mark.parametrize("seed", SEEDS)
-def test_the_changes_follow_the_pre_registered_rule(seed):
-    timeline = world.build(seed=seed)
+@pytest.mark.parametrize("person, seed", [("mara", seed) for seed in SEEDS] + [
+    (person, world.SEED) for person in world.PEOPLE if person != "mara"])
+def test_the_changes_follow_the_pre_registered_rule(person, seed):
+    timeline = world.build(person=person, seed=seed)
     days = [change.day for change in timeline.changes]
     assert len(days) == 8 and len({change.procedure for change in timeline.changes}) == 8
     assert all(20 <= day <= 110 for day in days)
     assert all(later - earlier >= 7 for earlier, later in zip(days, days[1:]))
     assert {change.kind for change in timeline.changes} == set(world.KINDS)
-    unchanged = [item.id for item in world.PROCEDURES if timeline.change_of(item.id) is None]
+    unchanged = [item.id for item in timeline.procedures if timeline.change_of(item.id) is None]
     assert len(unchanged) == 8
-    for procedure in world.PROCEDURES:
-        assert 1 <= len(timeline.schedule[procedure.id]) <= 2  # at least weekly
+    for procedure in timeline.procedures:
+        # The procedures that change run twice a week, the others once (the user's decision, 26 Oct).
+        assert len(timeline.schedule[procedure.id]) == (1 if procedure.id in unchanged else 2)
         runs = _runs_of(timeline, procedure.id)
         gaps = [later.day - earlier.day for earlier, later in zip(runs, runs[1:])]
         assert runs[0].day <= 7 and max(gaps) <= 7
@@ -68,8 +75,21 @@ def test_a_shorter_run_lives_the_same_days(timeline):
                                                                   if item.day <= 60]
 
 
-def test_the_world_renders_each_fact_where_the_rule_says(timeline):
-    for procedure in world.PROCEDURES:
+def test_six_people_each_have_sixteen_procedures_over_the_six_kinds(worlds):
+    for person, timeline in worlds.items():
+        kinds = [item.kind for item in timeline.procedures]
+        assert {kind: kinds.count(kind) for kind in world.KINDS} == {"address": 3, "supplier": 3, "hours": 3,
+                                                                      "amount": 2, "role": 2, "policy": 3}, person
+        assert len({item.id for item in timeline.procedures}) == 16
+        assert timeline.history.past, person  # S1's 30-day past, from S1's generator (the new three too)
+    channels = [change.channel for timeline in worlds.values() for change in timeline.changes]
+    assert 0.35 <= channels.count("in_passing") / len(channels) <= 0.65  # seeded 50/50
+
+
+@pytest.mark.parametrize("person", world.PEOPLE)
+def test_the_world_renders_each_fact_where_the_rule_says(worlds, person):
+    timeline = worlds[person]
+    for procedure in timeline.procedures:
         runs = _runs_of(timeline, procedure.id)
         first_value = timeline.value(procedure.id, runs[0].day)
         assert world.states(procedure.kind, first_value, runs[0].prompt)  # the person explains it once
@@ -81,30 +101,37 @@ def test_the_world_renders_each_fact_where_the_rule_says(timeline):
             reference = json.dumps(item.task.reference.calls[0]["args"], ensure_ascii=False)
             assert world.states(procedure.kind, timeline.value(procedure.id, item.day), reference)
     for change in timeline.changes:
+        arrives = timeline.arrivals[change.procedure]
         told = [message for tell in timeline.tells if tell.day == change.day and tell.about == change.procedure
                 for message in tell.messages]
-        passing = [item.prompt for item in timeline.runs if item.day == change.day and "FYI" in item.prompt
+        passing = [item.prompt for item in timeline.runs if item.day == arrives and "FYI" in item.prompt
                    and world.states(change.kind, change.new, item.prompt)]
         assert (told if change.channel == "told" else passing)
+        # In passing on a day with no other request (a weekend): with the next request, before any run of its own.
+        assert arrives == change.day or (change.channel == "in_passing" and not any(
+            change.day <= item.day < arrives for item in timeline.runs))
         assert world.states(change.kind, change.new, (told or passing)[0])
         # The world itself changes that morning: the runbook (and a policy's own document), and an inbox letter.
         files = timeline.files_on(change.day)
-        assert world.states(change.kind, change.new, files[world.RUNBOOK])
+        assert world.states(change.kind, change.new, files[timeline.catalogue.runbook])
         assert not world.states(change.kind, change.new, timeline.runbook(change.day - 1)) or change.kind == "hours"
-        procedure = world.PROCEDURE[change.procedure]
+        procedure = timeline.procedure(change.procedure)
         if procedure.doc:
             assert world.states(change.kind, change.new, files[procedure.doc])
+            assert procedure.doc_rule.format(n=change.new["number"]) in files[procedure.doc]
+            assert procedure.doc_rule.format(n=change.old["number"]) in timeline.document(procedure.doc, change.day - 1)
         letters = [item["id"] for item in timeline.apps_on(change.day)["mail"]["messages"]]
         assert f"msg_change_{change.procedure}" in letters
         assert f"msg_change_{change.procedure}" not in [item["id"] for item in
                                                         timeline.apps_on(change.day - 1)["mail"]["messages"]]
 
 
-def test_each_run_passes_its_check_with_the_right_outcome_and_fails_with_the_decoy(timeline):
+@pytest.mark.parametrize("person", world.PEOPLE)
+def test_each_run_passes_its_check_with_the_right_outcome_and_fails_with_the_decoy(worlds, person):
     from row_bot.learning.packs.fake_apps import FakeApps
     from row_bot.learning.packs.verify import Outcome, verify
 
-    for item in timeline.runs:
+    for item in worlds[person].runs:
         for solution, wanted in ((item.task.reference, True), (item.task.decoy, False)):
             apps = FakeApps(item.task.apps)
             for call in solution.calls:
@@ -112,16 +139,21 @@ def test_each_run_passes_its_check_with_the_right_outcome_and_fails_with_the_dec
             assert verify(item.task, Outcome("Done.", {}, apps.state()), backend="auto").passed is wanted, item.id
 
 
-def test_probes_take_their_answers_from_the_timeline(timeline):
+@pytest.mark.parametrize("person", world.PEOPLE)
+def test_probes_take_their_answers_from_the_timeline(worlds, person):
+    timeline = worlds[person]
     assert sorted({probe.day for probe in timeline.probes}) == list(world.PROBE_DAYS)
     for day in world.PROBE_DAYS:
         mine = [probe for probe in timeline.probes if probe.day == day]
-        assert {probe.category for probe in mine} == set(world.PROBE_CATEGORIES)
+        # As-of and update probes need a change before the probe day (the first change may come after day 30).
+        changed = any(change.day <= day for change in timeline.changes)
+        assert {probe.category for probe in mine} == set(world.PROBE_CATEGORIES) - (
+            set() if changed else {"as_of", "update"})
     for probe in timeline.probes:
         if probe.category == "as_of":
             change = timeline.change_of(probe.fact)
             assert change.day <= probe.day and probe.expected == (json.dumps(change.old, sort_keys=True),)
-        if probe.category == "current" and probe.fact in world.PROCEDURE:
+        if probe.category == "current" and probe.fact in {item.id for item in timeline.procedures}:
             assert probe.expected == (json.dumps(timeline.value(probe.fact, probe.day), sort_keys=True),)
 
 
@@ -183,6 +215,12 @@ def test_value_checkers_read_each_kind_of_fact():
     assert world.states("policy", {"number": 4, "unit": "°C"}, "fridges at 4°C or below")
     assert world.states("policy", {"number": 4, "unit": "shifts"}, "at most four shifts a week")
     assert not world.states("policy", {"number": 4, "unit": "shifts"}, "at most 3 shifts a week, 4 days")
+    assert world.states("policy", {"number": 5, "unit": "days"}, "freezes 5 working days before release")
+    assert world.states("policy", {"number": 3, "unit": "%"}, "a late fee of 3% a month")
+    assert world.states("policy", {"number": 90, "unit": "minutes"}, "at least ninety minutes each")
+    assert world.states("policy", {"number": 2, "unit": "reviewers"}, "every merge needs two reviewers")
+    assert world.states("policy", {"number": 134, "unit": "°C"}, "cycles run at 134 °C")
+    assert not world.states("policy", {"number": 6, "unit": "children"}, "6 adults per trip")
 
 
 def test_probe_scoring(timeline):
@@ -281,3 +319,78 @@ def test_the_turn_context_can_say_the_simulated_date():
     assert simulated.now() == moment
     assert simulated.now().astimezone().date() == moment.date()
     assert simulated.now(timezone.utc) == moment.astimezone(timezone.utc)
+
+
+def test_an_amount_is_never_read_from_a_date_or_a_time():
+    assert world.states("amount", {"amount": 16}, "Adult tickets are GBP 16 this week.")
+    assert not world.states("amount", {"amount": 16}, "Price note for the week of 2026-11-16.")
+    assert not world.states("amount", {"amount": 16}, "For the week of 16 November, see you at 16:30.")
+    assert not world.states("amount", {"amount": 16}, "From November 16 the room is free.")
+
+
+@pytest.mark.parametrize("person", world.PEOPLE)
+def test_the_smoke_world_has_two_changes_told_first_thing_and_skills_naming_the_old_values(person):
+    smoke = world.build(person=person, smoke=True)
+    full = world.build(person=person)
+    assert smoke.days == world.SMOKE_DAYS and smoke.probes == ()
+    assert [(change.day, change.channel) for change in smoke.changes] == [(1, "told"), (2, "told")]
+    assert [(change.procedure, change.old, change.new) for change in smoke.changes] == [
+        (change.procedure, change.old, change.new) for change in full.changes[:2]]
+    for change in smoke.changes:
+        tell = next(item for item in smoke.tells if item.about == change.procedure)
+        assert tell.day == change.day and tell.order == 0  # told before that day's runs
+        assert {item.day for item in smoke.runs if smoke.procedure_of(item.id) == change.procedure} == {1, 2}
+    running = sorted({smoke.procedure_of(item.id) for item in smoke.runs})
+    assert len(running) == 4 and set(smoke.seeded_skills) < set(running)
+    consent = [item for item in running if item not in smoke.seeded_skills]
+    assert [smoke.consent_run[item] for item in consent] == [1]  # one skill comes through the approval card
+    for item in smoke.runs:  # no request states a fact: the skill and memory are all the agent has
+        procedure = smoke.procedure(smoke.procedure_of(item.id))
+        assert not any(world.states(procedure.kind, value, item.prompt) for value in procedure.pool)
+    for procedure_id in smoke.seeded_skills:
+        procedure = smoke.procedure(procedure_id)
+        skill = run.seeded_skill(procedure, smoke.start[procedure_id], smoke.catalogue.first_name)
+        assert world.states(procedure.kind, smoke.start[procedure_id], skill["instructions"])
+        assert smoke.catalogue.first_name in skill["instructions"]
+
+
+def test_each_arm_runs_its_own_product_setting(tmp_path):
+    for arm, setting in (("N", "N"), ("R", "R"), ("D", "D"), ("F", "F"), ("A", "R")):
+        written = run.write_setting(tmp_path / arm, arm)
+        assert written == {"enabled": True, "arm": setting}
+        assert json.loads((tmp_path / arm / "stale_skills.json").read_text(encoding="utf-8")) == written
+
+
+def test_arm_f_repairs_from_the_persons_words_never_from_the_timeline(timeline):
+    procedure = world.PROCEDURE["bread_order"]
+    said = {"reaction": [{"action": "correct", "text": "No - that address isn't read any more."}]}
+    assert run.repair_correction(said, procedure) == "No - that address isn't read any more."
+    silent = run.repair_correction({"reaction": [{"action": "give_up", "text": ""}]}, procedure)
+    assert not any(world.states(procedure.kind, value, silent) for value in procedure.pool)
+
+
+def test_patches_are_scored_true_or_false_from_the_timeline(timeline):
+    from tests.e2e.learning.seeded import generator
+
+    change = timeline.changes[0]
+    unchanged = next(item.id for item in timeline.procedures if timeline.change_of(item.id) is None)
+    skills = {change.procedure: {"name": f"{change.procedure}_procedure"}, unchanged: {"name": f"{unchanged}_procedure"}}
+
+    def at(day: int) -> str:
+        return f"{generator.day_date(day).isoformat()}T08:00:00"
+
+    operations = [
+        {"event": "patch_candidate", "arm": "R", "outcome": "proposed", "proposal_id": "p1"},
+        {"event": "patch_candidate", "arm": "R", "outcome": "proposed", "proposal_id": "p2"},
+        {"event": "patch_candidate", "arm": "R", "outcome": "no_change"},
+        {"event": "patch", "skill": f"{change.procedure}_procedure", "cause": "proposal:p1", "at": at(change.day + 1)},
+        {"event": "patch", "skill": f"{unchanged}_procedure", "cause": "proposal:p2", "at": at(change.day + 1)},
+        {"event": "patch", "skill": f"{change.procedure}_procedure", "cause": "", "at": at(change.day + 2)},
+    ]
+    found = scorer.patch_metrics(timeline, skills, operations)
+    assert (found["applied"], found["false"], found["false_rate"]) == (2, 1, 0.5)
+    assert [(item["procedure"], item["true"], item["days_after_change"]) for item in found["patches"]] == [
+        (change.procedure, True, 1), (unchanged, False, None)]
+    assert found["candidates"] == {"R": {"proposed": 2, "no_change": 1}}
+    early = scorer.patch_metrics(timeline, skills, [{**operations[3], "at": at(change.day - 1)}])
+    assert early["false"] == 1  # a patch before the change is a false patch too
