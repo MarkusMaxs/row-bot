@@ -25,12 +25,6 @@
       "title": "Max Concurrent Children",
       "type": "integer"
     },
-    "max_iterations": {
-      "maximum": 1000000,
-      "minimum": 1,
-      "title": "Max Iterations",
-      "type": "integer"
-    },
     "max_spawn_depth": {
       "maximum": 1000000,
       "minimum": 1,
@@ -45,7 +39,6 @@
     }
   },
   "required": [
-    "max_iterations",
     "max_spawn_depth",
     "max_concurrent_children",
     "max_active_children_global",

@@ -868,7 +868,7 @@ export function SavedTasks({
                         <span>
                           {task.notify_only
                             ? 'Reminder'
-                            : `${task.step_count} ${task.step_count === 1 ? 'step' : 'steps'}`}
+                            : `${task.step_count} ${task.step_count === 1 ? 'message' : 'messages'}`}
                         </span>
                         <span aria-hidden>·</span>
                         <span>{lastRun}</span>
@@ -925,8 +925,8 @@ export function SavedTasks({
                           <span className="visually-hidden">
                             Open run of {task.name}:{' '}
                           </span>
-                          {run && run.steps_total > 0
-                            ? `Step ${Math.min(run.steps_done + 1, run.steps_total)}/${run.steps_total}`
+                          {run && run.steps_total > 1
+                            ? `Message ${Math.min(run.steps_done + 1, run.steps_total)} of ${run.steps_total}`
                             : runStatus(run?.status ?? 'running').label}
                         </button>
                       ) : (
@@ -1082,7 +1082,7 @@ export default function TaskLibrary() {
     ReadonlyArray<{ id: string; label: string }>
   >([]);
   const execution = useMemo(() => taskRuns(controller), [controller]);
-  // The apps set up here (every page), for a prompt step to name the ones it uses (Apps owns them).
+  // The apps set up here (every page), for "Always ask me" to list (Apps owns them).
   const loadApps = useCallback(
     async (signal?: AbortSignal) => {
       const found: { id: string; name: string; icon: string }[] = [];

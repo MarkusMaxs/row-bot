@@ -366,7 +366,7 @@ def _task_run_now(task_id: str) -> str:
 
     thread_id = tasks_db._prepare_task_thread(task)
     enabled = [t.name for t in tool_registry.get_enabled_tools()]
-    tasks_db.run_task_background(task_id, thread_id, enabled, notification=True, trigger="Run now")
+    tasks_db.run_task_background(task_id, thread_id, enabled, trigger="Run now")
 
     return (
         f"Task '{task['icon']} {task['name']}' started in its own conversation.\n"

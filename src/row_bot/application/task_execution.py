@@ -112,7 +112,7 @@ def get_task_run_review(task_id: str, *, enabled_tool_names: Sequence[str]) -> T
     return TaskRunReview(
         task_id, revision, tasks._reviewed_policy_revision(policy), policy["agent_profile_id"],
         policy["approval_mode"], bool(task.get("notify_only")),
-        0 if task.get("notify_only") else len(task["steps"]), task.get("persistent_thread_id"),
+        0 if task.get("notify_only") else len(task["prompts"]), task.get("persistent_thread_id"),
     )
 
 
@@ -176,7 +176,7 @@ def start_reviewed_task_run(
     try:
         validate()
         tasks.run_task_background(
-            task_id, conversation_id, list(enabled_tool_names), notification=False,
+            task_id, conversation_id, list(enabled_tool_names),
             reviewed_capture=capture, validate=validate,
         )
         return TaskRunResult(get_task_run(task_id, stable_run_id), replayed=False)

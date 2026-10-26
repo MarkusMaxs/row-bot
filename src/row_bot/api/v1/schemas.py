@@ -3552,7 +3552,6 @@ class ProfileSummary(WireModel):
     editable: bool
     revision: str = Field(pattern=r"^[1-9][0-9]{0,19}$")
     capability: Literal["read_only", "write_capable", "orchestrator"]
-    allow_tools: list[str] = Field(max_length=100)
     skills: list[str] = Field(max_length=100)
     context_mode: Literal["auto", "focused", "recent", "full", "empty", "resume"]
     workspace_mode: Literal["auto", "read_only", "single_writer", "worktree"]
@@ -3593,7 +3592,6 @@ class ProfileFields(WireModel):
     when_to_use: str = Field(max_length=2048)
     instructions: str | None = Field(max_length=49152)
     capability: Literal["read_only", "write_capable", "orchestrator"]
-    allow_tools: list[str] = Field(max_length=100)
     skills: list[str] = Field(max_length=100)
     context_mode: Literal["auto", "focused", "recent", "full", "empty", "resume"]
     workspace_mode: Literal["auto", "read_only", "single_writer", "worktree"]
@@ -5722,7 +5720,6 @@ class ModelVisibilityState(WireModel):
 
 class AgentRuntimeSettingsState(WireModel):
     schema_version: Literal[1] = 1
-    max_iterations: int = Field(ge=1, le=1000000)
     max_spawn_depth: int = Field(ge=1, le=1000000)
     max_concurrent_children: int = Field(ge=1, le=1000000)
     max_active_children_global: int = Field(ge=1, le=1000000)

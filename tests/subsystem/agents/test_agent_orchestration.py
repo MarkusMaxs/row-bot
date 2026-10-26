@@ -404,7 +404,7 @@ def test_lifecycle_snapshots_are_fixed_and_illegal_transitions_fail(
             "child_timeout_seconds",
         )
     } == {
-        "max_iterations": 90,
+        "max_iterations": 1000,  # The safety ceiling, never a caller's own (F31).
         "max_spawn_depth": 1,
         "max_concurrent_children": 3,
         "max_active_children_global": 8,

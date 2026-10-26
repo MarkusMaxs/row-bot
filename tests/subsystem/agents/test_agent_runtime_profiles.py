@@ -183,7 +183,7 @@ def test_disabled_thread_profile_warns_instead_of_silent_fallback(tmp_path, relo
     assert "disabled" in prompt
 
 
-def test_thread_profile_allowlist_flows_into_chat_stream_config(tmp_path, reload_for_data_dir):
+def test_a_chats_profile_is_frozen_into_its_turn_without_narrowing_its_tools(tmp_path, reload_for_data_dir):
     threads, profiles, _agent = _fresh_runtime_modules(tmp_path, reload_for_data_dir)
     thread_id = threads.create_thread("Profile tool filter")
     saved = profiles.save_agent_profile(
@@ -206,7 +206,7 @@ def test_thread_profile_allowlist_flows_into_chat_stream_config(tmp_path, reload
 
     assert config["agent_profile_id"] == saved["id"]
     assert config["agent_profile_snapshot"]["slug"] == "tool_filter_smoke"
-    assert config["tool_allowlist"] == ["filesystem", "row_bot_status"]
+    assert "tool_allowlist" not in config, "a profile lists no tools (F31)"
     missing = {"agent_profile_id": threads._get_thread_agent_profile("missing-thread")["id"]}
     freeze_profile(missing)
     assert missing["agent_profile_snapshot"] == {}

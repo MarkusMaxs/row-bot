@@ -645,12 +645,12 @@ surfaces:
     status: ready
     source_files: [frontend/src/features/apps/AppViewFrame.tsx, frontend/src/features/apps/view-bridge.ts, src/row_bot/integrations/views.py]
   workflow_app_templates:
-    title: Workflow templates that use apps, and a step's apps
+    title: Workflow templates that use apps
     app_route: /app-v2/?tab=workflows
     state: templates switched off, no app connected
     scenario: configured
     docs_page: /docs/guides/workflows
-    no_image_reason: The app templates and a step's apps have no approved screenshot yet; the page describes them in words.
+    no_image_reason: The app templates have no approved screenshot yet; the page describes them in words.
     capture_type: manual
     status: ready
-    source_files: [frontend/src/features/tasks/AppTemplates.tsx, frontend/src/features/tasks/StepApps.tsx, src/row_bot/integrations/workflow_templates.py]
+    source_files: [frontend/src/features/tasks/AppTemplates.tsx, src/row_bot/integrations/workflow_templates.py]

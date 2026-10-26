@@ -227,7 +227,9 @@ it('uses canonical reviewed profile and shows stricter effective policy', async 
     screen.getByText(/^Approvals: Block\. This workflow can only read/),
   ).toBeVisible();
   expect(
-    screen.getByText(/A reviewer approves what matches the workflow's steps/),
+    screen.getByText(
+      /A reviewer approves what matches the workflow's messages/,
+    ),
   ).toBeInTheDocument();
 });
 

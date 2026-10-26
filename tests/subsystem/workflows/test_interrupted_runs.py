@@ -27,14 +27,10 @@ def runs(tmp_path, reload_for_data_dir):
                 ("old-running", "task-a", "t1", "2026-08-06T09:00:00.075057", "running", 4, 1),
                 ("old-starting", "task-a", "t2", "2026-08-07T09:00:00", "starting", 4, 0),
                 ("old-stopping", "task-a", "t3", "2026-08-08T09:00:00", "stopping", 4, 2),
-                ("old-paused", "task-a", "t4", "2026-08-09T09:00:00", "paused", 4, 2),
+                ("old-waiting", "task-a", "t4", "2026-08-09T09:00:00", "waiting", 4, 2),
                 ("old-completed", "task-a", "t5", "2026-08-10T09:00:00", "completed", 4, 4),
                 ("new-running", "task-a", "t6", "2026-09-26T18:00:05", "running", 4, 1),
             ],
-        )
-        conn.execute(
-            "INSERT INTO pipeline_state (run_id,task_id,thread_id,current_step_index,step_outputs,status,created_at,updated_at) "
-            "VALUES ('old-running','task-a','t1',1,'{}','running','2026-08-06','2026-08-06')"
         )
         conn.commit()
     finally:
@@ -63,17 +59,10 @@ def test_runs_left_unfinished_by_an_earlier_process_are_marked_stopped(runs):
         assert status == "stopped"
         assert message.startswith("Interrupted: Row-Bot closed")
         assert finished_at
-    # Paused runs resume from saved state; this process's runs are untouched.
-    assert after["old-paused"][0] == "paused"
+    # A run waiting on its card goes on when the card is answered; this process's runs are untouched.
+    assert after["old-waiting"][0] == "waiting"
     assert after["new-running"][0] == "running"
     assert after["old-completed"][0] == "completed"
-    conn = runs._get_conn()
-    try:
-        assert conn.execute(
-            "SELECT COUNT(*) FROM pipeline_state WHERE run_id='old-running'"
-        ).fetchone()[0] == 0
-    finally:
-        conn.close()
     assert runs.settle_interrupted_runs(CUTOFF) == []
 
 

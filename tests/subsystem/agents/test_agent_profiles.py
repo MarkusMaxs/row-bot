@@ -72,43 +72,10 @@ def test_builtin_agent_profile_registry(tmp_path, reload_for_data_dir):
     assert librarian["slug"] == "knowledge"
     assert quality_reviewer["tool_policy_json"]["capability"] == "read_only"
     assert verifier["tool_policy_json"]["capability"] == "write_capable"
-    assert "memory" in researcher["tool_policy_json"]["allow_tools"]
-    assert "memory" in librarian["tool_policy_json"]["allow_tools"]
     assert agent_profiles.require_agent_profile("default")["slug"] == "row_bot_default"
-
-    inherited = {
-        profile["slug"]
-        for profile in profiles
-        if not profile["tool_policy_json"].get("allow_tools")
-    }
-    assert inherited == {"row_bot_default", "worker"}
-    common_tools = {
-        "memory",
-        "row_bot_status",
-        "conversation_search",
-        "duckduckgo",
-        "web_search",
-        "url_reader",
-        "filesystem",
-        "shell",
-    }
-    explicit_profiles = [
-        profile
-        for profile in profiles
-        if profile["slug"] not in {"row_bot_default", "worker"}
-    ]
-    for profile in explicit_profiles:
-        allow_tools = set(profile["tool_policy_json"].get("allow_tools") or [])
-        assert common_tools <= allow_tools, profile["slug"]
-    system_info_profiles = {
-        profile["slug"]
-        for profile in explicit_profiles
-        if "system_info" in (profile["tool_policy_json"].get("allow_tools") or [])
-    }
-    assert system_info_profiles == {"develop", "code_review", "ui_check", "verify"}
-    data_tools = {profile["slug"]: profile for profile in profiles}
-    assert "wolfram_alpha" in data_tools["data"]["tool_policy_json"]["allow_tools"]
-    assert "wolfram" not in data_tools["data"]["tool_policy_json"]["allow_tools"]
+    # A profile lists no tools (F31): each has every tool a chat has, and its capability and the approval level
+    # decide what it may do.
+    assert all("allow_tools" not in profile["tool_policy_json"] for profile in profiles)
     expected_skills = {
         "row_bot_default": [],
         "plan": ["brain_dump", "task_automation"],
@@ -181,7 +148,7 @@ def test_db_backed_profile_crud_and_duplicate_builtin(tmp_path, reload_for_data_
 
     assert saved["scope"] == "user"
     assert agent_profiles.require_agent_profile("release_reviewer")["id"] == saved["id"]
-    assert saved["tool_policy_json"]["allow_tools"] == ["filesystem"]
+    assert "allow_tools" not in saved["tool_policy_json"], "a saved tool list is dropped"
     assert "deny_memory_write" not in saved["tool_policy_json"]
     assert "allow_tool_groups" not in saved["tool_policy_json"]
     assert "include_memory" not in saved["context_policy_json"]
@@ -283,24 +250,17 @@ def test_thread_profile_pointer_helpers(tmp_path, reload_for_data_dir):
         threads._set_thread_agent_profile(tid, "missing_profile")
 
 
-def test_workflow_profile_fields_strip_step_profile_policy(tmp_path, reload_for_data_dir):
+def test_a_workflow_keeps_its_profile_and_refuses_a_missing_one(tmp_path, reload_for_data_dir):
     agent_profiles, tasks, _threads = _fresh_agent_modules(tmp_path, reload_for_data_dir)
 
     task_id = tasks.create_task(
         "Review workflow",
-        steps=[
-            {
-                "type": "prompt",
-                "prompt": "Review this.",
-                "agent_profile_id": "verifier",
-            }
-        ],
+        prompts=["Review this."],
         agent_profile_id="quality_reviewer",
     )
     task = tasks.get_task(task_id)
 
     assert task["agent_profile_id"] == "builtin:review"
-    assert "agent_profile_id" not in task["steps"][0]
     with pytest.raises(agent_profiles.AgentProfileError):
         tasks.create_task("Bad workflow", prompts=["hi"], agent_profile_id="missing")
 

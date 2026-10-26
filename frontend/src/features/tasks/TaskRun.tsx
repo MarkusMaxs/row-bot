@@ -376,9 +376,12 @@ export default function TaskRun({
                   {wallTimeOf(selected.late_for)}.
                 </p>
               )}
-              {selected.notice && selected.status !== 'waiting' && (
-                <p className="task-run-notice">{selected.notice}</p>
-              )}
+              {selected.notice &&
+                selected.status !== 'waiting' &&
+                // A run that acted says so in its list below, with links, not twice.
+                !(selected.actions?.length ?? 0) && (
+                  <p className="task-run-notice">{selected.notice}</p>
+                )}
               {(selected.actions?.length ?? 0) > 0 && (
                 <ul className="task-run-actions-list" aria-label="What it did">
                   {(selected.actions ?? []).map((action, index) => (
@@ -386,7 +389,9 @@ export default function TaskRun({
                       <span className="task-run-action-title">
                         {action.title}
                       </span>
-                      <span>{action.result}</span>
+                      <span className="task-run-action-result">
+                        {action.result}
+                      </span>
                       {action.link && (
                         <a
                           href={action.link}

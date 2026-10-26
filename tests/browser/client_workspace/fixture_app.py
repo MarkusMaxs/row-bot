@@ -2669,6 +2669,23 @@ def stream(text: str, enabled_tools: list[str], config: dict, *, stop_event=None
         finally:
             call["quiesced"] = True
         return
+    if text.strip() == "b407 digest fixture":
+        # B407: a workflow's background turn that asks before it sends, as a scheduled run's would.
+        from row_bot.threads import append_checkpoint_messages
+        call = predecessor._record("submit", config, "b407-digest")
+        thread = call["conversation_id"]
+        identity = f"b407:{call['generation_id']}"
+        name, call_id = "send_digest", fixture_id(identity + ":call")
+        try:
+            append_checkpoint_messages(thread, [AIMessage(id=fixture_id(identity + ":tool-call"), content="",
+                tool_calls=[{"id": call_id, "name": name, "args": {"to": "team"}}])])
+            yield "tool_call", {"tool_call_id": call_id, "name": name, "args": {"to": "team"}}
+            yield "interrupt", [{"__interrupt_id": fixture_id(identity + ":approval"), "tool": name,
+                                 "question": "Send this morning's digest to the team?",
+                                 "description": "Send this morning's digest to the team?", "args": {"to": "team"}}]
+        finally:
+            call["quiesced"] = True
+        return
     if "unnamed app tool fixture" in text:
         # S12 (B388): an approval for a Counter tool this runtime never issued (as one left waiting from before a
         # restart): the card names the app from its one set-up connection, in plain words.
@@ -4027,63 +4044,6 @@ def p4_tasks(state: str, x_fixture_token: str = Header(default="")) -> dict:
     return {"state": state, "seeded_tasks": count}
 
 
-# F23: workflows whose steps branch, loop, break and leave a step unreached,
-# for the step editor's flowchart. Saved switched off; never scheduled or run.
-_F23_WORKFLOWS = (
-    ("f23-chain", "Flowchart: morning summary", [
-        {"id": "gather", "type": "prompt", "prompt": "Gather today's calendar and inbox highlights"},
-        {"id": "summarise", "type": "prompt", "prompt": "Summarise the news in five bullet points"},
-        {"id": "tell", "type": "notify", "message": "Your morning summary is ready", "channel": "desktop"},
-    ]),
-    ("f23-review", "Flowchart: weekly report review", [
-        {"id": "draft", "type": "prompt", "prompt": "Draft the weekly report from this week's notes"},
-        {"id": "check", "type": "condition", "condition": "contains:TODO", "if_true": "fix", "if_false": "review"},
-        {"id": "fix", "type": "prompt", "prompt": "Finish every TODO left in the report"},
-        {"id": "review", "type": "approval", "message": "Approve the weekly report before it goes out?",
-         "timeout_minutes": 0, "if_approved": "publish", "if_denied": "end"},
-        {"id": "publish", "type": "notify", "message": "The weekly report went out", "channel": "desktop",
-         "next": "end"},
-    ]),
-    ("f23-loop", "Flowchart: draft until approved", [
-        {"id": "write", "type": "prompt", "prompt": "Write a short announcement for the team"},
-        {"id": "approve", "type": "approval", "message": "Approve the announcement?", "timeout_minutes": 0,
-         "if_denied": "write"},
-        {"id": "announce", "type": "notify", "message": "The announcement was approved", "channel": "desktop"},
-    ]),
-    ("f23-broken", "Flowchart: release checklist", [
-        {"id": "collect", "type": "prompt", "prompt": "Check the release checklist"},
-        {"id": "gate", "type": "condition", "condition": "contains:ready", "if_true": "ship",
-         "if_false": "notes_9"},
-        {"id": "ship", "type": "notify", "message": "Ready to ship", "channel": "desktop", "next": "end"},
-        {"id": "tidy", "type": "prompt", "prompt": "Tidy up old release drafts"},
-    ]),
-)
-
-
-@app.post("/__p4_fixture/workflow-graphs")
-def p4_workflow_graphs(x_fixture_token: str = Header(default="")) -> dict:
-    """Seed disposable workflows with branching steps; do not schedule or run them."""
-    predecessor._authorize(x_fixture_token)
-    from row_bot import tasks
-    if not Path(tasks._DB_PATH).resolve().is_relative_to(predecessor.DATA.resolve()):
-        raise HTTPException(status_code=403, detail="Synthetic data scope required")
-    conn = tasks._get_conn()
-    try:
-        conn.execute("DELETE FROM tasks WHERE id LIKE 'f23-%'")
-        conn.executemany(
-            "INSERT INTO tasks (id,name,description,icon,prompts,created_at,enabled,notify_only,sort_order,"
-            "channels,steps,advanced_mode) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            [(identity, name, "Synthetic flowchart", "",
-              json.dumps([step["prompt"] for step in steps if step["type"] == "prompt"]),
-              "2026-01-01", 0, 0, order, "[]", json.dumps(steps), 1)
-             for order, (identity, name, steps) in enumerate(_F23_WORKFLOWS)],
-        )
-        conn.commit()
-    finally:
-        conn.close()
-    return {"seeded_workflows": len(_F23_WORKFLOWS)}
-
-
 @app.post("/__p4_fixture/tools/{state}")
 def p4_tools(state: str, x_fixture_token: str = Header(default="")) -> dict:
     """Register inert synthetic metadata only in this disposable fixture process."""
@@ -4907,22 +4867,6 @@ def p6_views(x_fixture_token: str = Header(default="")) -> dict:
 
 
 
-@app.post("/__p6_fixture/app-workflow")
-def p6_app_workflow(x_fixture_token: str = Header(default="")) -> dict:
-    """A switched-off, scheduled workflow whose prompt step uses the fixture Counter app (set up first)."""
-    p4_provider_credentials(x_fixture_token)
-    from row_bot import tasks
-    from row_bot.integrations import scope
-    item = next(item for item in scope._mcp_items() if item["server"] == "Counter")
-    task_id = tasks.create_task(
-        name="Counter morning digest", description="Every morning, the count and what changed.", icon="🔢",
-        schedule="daily:09:00", enabled=False, safety_mode="approve", apply_default_skills=False,
-        agent_profile_id=tasks.DEFAULT_WORKFLOW_AGENT_PROFILE_ID,
-        steps=[{"id": "read", "type": "prompt", "apps": [item["id"]],
-                "prompt": "Using Counter, show today's count and what changed since yesterday."}])
-    return {"task_id": task_id}
-
-
 _p6_search_was_on = False
 
 
@@ -4957,18 +4901,14 @@ _S12_MATHS = "\n".join([
 
 @app.post("/__s12_fixture/monthly-workflow")
 def s12_monthly_workflow(x_fixture_token: str = Header(default="")) -> dict:
-    """B345: a switched-off workflow made from "at 08:00 on the 1st of every month", its prompt step naming the
-    fixture Counter app (set up first with /__p6_fixture/views)."""
+    """B345: a switched-off workflow made from "at 08:00 on the 1st of every month"."""
     p4_provider_credentials(x_fixture_token)
     from row_bot import tasks
-    from row_bot.integrations import scope
-    item = next(item for item in scope._mcp_items() if item["server"] == "Counter")
     task_id = tasks.create_task(
         name="Month-end close", description="The month's count, on the 1st.", icon="🗓️",
         schedule="cron:0 8 1 * *", enabled=False, safety_mode="approve", apply_default_skills=False,
         agent_profile_id=tasks.DEFAULT_WORKFLOW_AGENT_PROFILE_ID,
-        steps=[{"id": "close", "type": "prompt", "apps": [item["id"]],
-                "prompt": "Using Counter, total last month's count and note what changed."}])
+        prompts=["Using @Counter, total last month's count and note what changed."])
     return {"task_id": task_id}
 
 
@@ -6225,49 +6165,54 @@ def n9_workflows(x_fixture_token: str = Header(default="")) -> dict:
             tasks.delete_task(task["id"])
     task_id = tasks.create_task(
         _N9_TASK, description="Checks the landing page every morning and posts the result.", icon="🛬",
-        steps=[{"type": "prompt", "id": "check", "always_ask": True,
-                "prompt": "Run the landing page checks and post a short summary on X."},
-               {"type": "notify", "id": "tell", "channel": "desktop", "message": "Landing checks: {{prev_output}}"}],
+        prompts=["Run the landing page checks and post a short summary on X."],
         schedule="daily:09:00", timezone="Europe/London", safety_mode="auto", enabled=False,
         workspace_id="dev_n9_landing", workspace_name="row-bot-landing", missed_runs="run_once",
         always_ask=["builtin:tool:web_search"], apply_default_skills=False,
     )
     now = datetime.now()
+    # Every run is a turn of the workflow's one conversation (F31).
+    thread_id = tasks._prepare_task_thread(tasks.get_task(task_id))
     runs = [  # Oldest first: the newest, waiting on its card, is the one the run history opens.
-        ("n9-late", "completed", now - timedelta(days=3, hours=2), "2026-10-19T09:00:00+01:00", "", 2),
+        ("n9-late", "completed", now - timedelta(days=3, hours=2), "2026-10-19T09:00:00+01:00",
+         "Posted on X as @rowbot: https://x.com/rowbot/status/1849000000000000001"),
         ("n9-folder-gone", "blocked", now - timedelta(days=2),
-         "", "row-bot-landing isn't a code folder any more. Choose another in this workflow's settings.", 0),
-        ("n9-not-approved", "stopped", now - timedelta(days=1), "", "Not approved in time", 0),
-        ("n9-asking", "paused", now - timedelta(minutes=12), "", "", 0),
+         "", "row-bot-landing isn't a code folder any more. Choose another in this workflow's settings."),
+        ("n9-replaced", "expired", now - timedelta(days=1), "", "A newer run replaced it before it was approved."),
+        ("n9-asking", "waiting", now - timedelta(minutes=12), "", "It needs your approval to go on."),
     ]
+    actions = {"n9-late": [{"tool": "x_post", "title": "Post on X", "result": "Posted on X as @rowbot",
+                            "link": "https://x.com/rowbot/status/1849000000000000001"}]}
     conn = tasks._get_conn()
     try:
-        for run_id, status, started, late_for, notice, done in runs:
-            finished = None if status == "paused" else (started + timedelta(minutes=3)).isoformat()
+        for run_id, status, started, late_for, notice in runs:
+            finished = None if status == "waiting" else (started + timedelta(minutes=3)).isoformat()
             conn.execute(
                 "INSERT INTO task_runs (id,task_id,thread_id,started_at,finished_at,status,status_message,steps_total,"
-                "steps_done,task_name,task_icon,workspace_id,workspace_name,late_for,notice,fix) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (run_id, task_id, f"{run_id}-thread", started.isoformat(), finished, status, notice, 2, done,
-                 _N9_TASK, "🛬", "" if status == "blocked" else "dev_n9_landing",
+                "steps_done,task_name,task_icon,workspace_id,workspace_name,late_for,notice,fix,actions_json) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (run_id, task_id, thread_id, started.isoformat(), finished, status, "", 1,
+                 0 if status == "waiting" else 1, _N9_TASK, "🛬", "" if status == "blocked" else "dev_n9_landing",
                  "" if status == "blocked" else "row-bot-landing", late_for, notice,
-                 "choose_folder" if status == "blocked" else ""),
+                 "choose_folder" if status == "blocked" else "", json.dumps(actions.get(run_id, []))),
             )
-        capture = {"run_id": "n9-asking", "thread_id": "n9-asking-thread", "task": {"id": task_id},
-                   "policy": {"approval_mode": "auto"}}
-        conn.execute(
-            "INSERT INTO pipeline_state (run_id,task_id,thread_id,current_step_index,step_outputs,status,resume_token,"
-            "config,graph_interrupted,created_at,updated_at) VALUES (?,?,?,0,'{}','paused',?,?,'true',?,?)",
-            ("n9-asking", task_id, "n9-asking-thread", "n9-token", json.dumps({"_reviewed_task_run": capture}),
-             now.isoformat(), now.isoformat()),
-        )
+        # The waiting run's card: its conversation's own X card, which only the person answers (N9, "Always ask me").
+        post = {"__interrupt_id": "n9-interrupt", "tool": "x_post", "label": "Post to X as @rowbot",
+                "question": "Post to X as @rowbot?", "description": "Post to X as @rowbot", "person_only": True,
+                "review": {"decision": "ask", "reason": "You asked to approve this yourself."},
+                "args": {"account": "@rowbot", "action": "post", "text": _N9_CARD["text"]},
+                "x_post": {"account_id": "2047775631836844032", "username": "rowbot", "name": "Row-Bot",
+                           "action": "post", "text": _N9_CARD["text"], "target_id": "", "target_url": "",
+                           "media": [{"name": "landing-checks.png", "size": 184320, "sha256": "3f9a1c07be52",
+                                      "kind": "image"}]}}
         conn.execute(
             "INSERT INTO approval_requests (id,run_id,task_id,step_id,resume_token,message,status,requested_at,"
-            "timeout_at,approval_payload_json) VALUES (?,?,?,?,?,?,'pending',?,?,?)",
-            ("n9-approval", "n9-asking", task_id, "check", "n9-token", "Step 1/2: Post on X",
-             (now - timedelta(minutes=11)).isoformat(), (now + timedelta(hours=23, minutes=49)).isoformat(),
-             json.dumps({"person_only": True, "binding": "f" * 64, "card": _N9_CARD,
-                         "reason": "You asked to approve this yourself."})),
+            "resume_kind,source_thread_id,parent_thread_id,approval_payload_json) "
+            "VALUES (?,?,?,?,?,?,'pending',?,'conversation',?,?,?)",
+            ("n9-approval", "n9-asking-pass", "", "conversation", "n9-token", "Post to X as @rowbot?",
+             (now - timedelta(minutes=11)).isoformat(), thread_id, thread_id,
+             json.dumps({"interrupt_ids": ["n9-interrupt"], "interrupt": [post], "pass_id": "n9-asking-pass",
+                         "model_selection": {"provider_id": "", "model_ref": ""}})),
         )
         conn.commit()
     finally:
@@ -6674,12 +6619,12 @@ def b407_background_run(x_fixture_token: str = Header(default="")) -> dict:
     _b407_clear()
     task_id = tasks.create_task(
         _B407_TASK, description="Gathers the morning's news and asks before it goes to the team.", icon="📰",
-        steps=[{"id": "send", "type": "approval", "message": "Send this morning's digest to the team?"}],
-        channels=[], enabled=False, apply_default_skills=False,
+        prompts=["b407 digest fixture"], channels=[], enabled=False, safety_mode="approve",
+        apply_default_skills=False,
     )
     task = tasks.get_task(task_id)
     thread_id = tasks._prepare_task_thread(task)
-    tasks.run_task_background(task_id, thread_id, [], notification=False)
+    tasks.run_task_background(task_id, thread_id, [])
     return {"task_id": task_id, "conversation_id": thread_id}
 
 

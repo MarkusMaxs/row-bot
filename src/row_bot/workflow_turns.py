@@ -88,7 +88,11 @@ def _send(task: Mapping[str, Any], thread_id: str, run_id: str, index: int, *, t
     sent = messages(task)
     prompt = tasks.expand_template_vars(sent[index], task_id=str(task["id"]))
     followup = followups.Followup(kind=KIND, prompt=prompt, note=_note(task, index, len(sent), trigger))
-    receipt = followups.start(_service(), thread_id, followup, model_ref=str(task.get("model_override") or ""))
+    try:
+        receipt = followups.start(_service(), thread_id, followup, model_ref=str(task.get("model_override") or ""))
+    except Exception:  # The turn's worker could not start (the app is closing, or no thread was free).
+        logger.warning("Workflow run %s could not start its turn", run_id, exc_info=True)
+        receipt = None
     if receipt is None:
         tasks._finish_run(run_id, "failed", notice="The run couldn't start. Check this workflow's model, then run it again.")
         tasks.forget_active_run(thread_id)

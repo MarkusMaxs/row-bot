@@ -59,7 +59,6 @@ const builtinProfile: ProfileSummary = {
   editable: false,
   revision: '1',
   capability: 'read_only',
-  allow_tools: ['read_file'],
   skills: [],
   context_mode: 'auto',
   workspace_mode: 'read_only',
@@ -80,7 +79,6 @@ const userProfile: ProfileSummary = {
   revision: '4',
   capability: 'write_capable',
   workspace_mode: 'single_writer',
-  allow_tools: ['read_file', 'write_file'],
   skills: ['local-style'],
   instructions_preview: '[private preview]',
 };
@@ -290,15 +288,11 @@ it('preserves stored profile instructions unless replacement is explicit', async
   );
 });
 
-it('picks profile tools and skills by name and saves their IDs (F14)', async () => {
+it('picks profile skills by name and saves their IDs, with no tool list (F14, F31)', async () => {
   const props = options();
   render(
     <GoalProfileSettings
       {...props}
-      searchTools={async () => [
-        { id: 'read_file', label: 'Read file', detail: 'Built in' },
-        { id: 'calculator', label: 'Calculator', detail: 'Built in' },
-      ]}
       searchSkills={async () => [
         { id: 'local-style', label: 'Local style', detail: 'Yours' },
       ]}
@@ -308,21 +302,24 @@ it('picks profile tools and skills by name and saves their IDs (F14)', async () 
   await openProfiles();
   fireEvent.click(screen.getByRole('button', { name: 'Edit Focused Writer' }));
   await screen.findByRole('group', { name: 'Edit profile' });
-  // No ID fields: the profile's current picks show by name.
-  expect(screen.queryByText('Comma-separated stable tool IDs.')).toBeNull();
+  // An agent has the tools a chat has: there is no list to pick, only what its capability allows.
+  expect(screen.queryByRole('group', { name: /Tools/ })).toBeNull();
   expect(
-    await screen.findByRole('checkbox', { name: /Read file/ }),
-  ).toBeChecked();
-  expect(screen.getByRole('list', { name: 'Chosen skills' })).toHaveTextContent(
-    'Local style',
-  );
-  fireEvent.click(screen.getByRole('checkbox', { name: /Calculator/ }));
+    screen.getByText(
+      'Every agent has the tools a chat has. Read only lets it look, never change or send.',
+    ),
+  ).toBeInTheDocument();
+  expect(
+    await screen.findByRole('list', { name: 'Chosen skills' }),
+  ).toHaveTextContent('Local style');
   fireEvent.click(screen.getByRole('button', { name: 'Save profile' }));
   await waitFor(() => expect(props.reviewProfile).toHaveBeenCalledTimes(1));
   expect(props.reviewProfile.mock.calls[0][0].fields).toMatchObject({
-    allow_tools: ['read_file', 'write_file', 'calculator'],
     skills: ['local-style'],
   });
+  expect(props.reviewProfile.mock.calls[0][0].fields).not.toHaveProperty(
+    'allow_tools',
+  );
 });
 
 it('edits a copy of the saved instructions only after showing them', async () => {
@@ -457,12 +454,11 @@ it('manages grouped profiles without a conversation and starts a selected profil
   ).toBeInTheDocument();
 });
 
-it('opens a profile’s details under its own row, naming its tools and skills, with Start chat', async () => {
+it('opens a profile’s details under its own row, naming its skills, with Start chat', async () => {
   const props = options();
   const busy = {
     ...builtinProfile,
-    allow_tools: Array.from({ length: 25 }, (_, index) => `tool_${index + 1}`),
-    skills: ['brain_dump', 'task_automation'],
+    skills: Array.from({ length: 25 }, (_, index) => `skill_${index + 1}`),
   };
   props.loadProfiles.mockResolvedValue({
     ...profilePage,
@@ -493,11 +489,12 @@ it('opens a profile’s details under its own row, naming its tools and skills, 
   // Beside the row it belongs to, not after the whole list.
   expect(view.closest('li')).toContainElement(details);
   expect(details).toHaveTextContent(
-    'Tools' +
-      Array.from({ length: 20 }, (_, index) => `Tool ${index + 1}`).join(', ') +
+    'Skills' +
+      Array.from({ length: 20 }, (_, index) => `Skill ${index + 1}`).join(
+        ', ',
+      ) +
       ' and 5 more',
   );
-  expect(details).toHaveTextContent('SkillsBrain dump, Task automation');
   fireEvent.click(within(details).getByRole('button', { name: 'Start chat' }));
   expect(onStartProfileChat).toHaveBeenCalledWith(busy);
 });

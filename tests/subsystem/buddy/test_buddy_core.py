@@ -376,68 +376,6 @@ def test_buddy_brain_denied_approval_clears_active_workflow(monkeypatch):
     assert idle.message == "Idle"
 
 
-def test_resume_pipeline_denial_emits_buddy_workflow_cancelled(monkeypatch):
-    import row_bot.buddy.events as buddy_events
-    import row_bot.notifications as notifications
-    import row_bot.tasks as tasks
-    import row_bot.threads as threads
-    from row_bot.buddy.events import BuddyEventType
-    from row_bot.tools import registry
-
-    emitted = []
-    statuses = []
-    finishes = []
-
-    monkeypatch.setattr(registry, "get_enabled_tools", lambda: [])
-    monkeypatch.setattr(
-        tasks,
-        "_load_pipeline_state",
-        lambda token: {
-            "run_id": "run-1",
-            "task_id": "task-1",
-            "thread_id": "thread-1",
-            "current_step_index": 0,
-            "step_outputs": {},
-            "config": {},
-        },
-    )
-    monkeypatch.setattr(
-        tasks,
-        "get_task",
-        lambda task_id: {
-            "id": task_id,
-            "name": "Denied Workflow",
-            "steps": [{"id": "approval_1", "type": "approval", "if_denied": "end"}],
-        },
-    )
-    monkeypatch.setattr(tasks, "_update_pipeline_status", lambda run_id, status: statuses.append((run_id, status)))
-    monkeypatch.setattr(
-        tasks,
-        "_finish_run",
-        lambda run_id, status="completed", status_message="": finishes.append((run_id, status, status_message)),
-    )
-    monkeypatch.setattr(threads, "_list_threads", lambda: [])
-    monkeypatch.setattr(threads, "_save_thread_meta", lambda *args, **kwargs: None)
-    monkeypatch.setattr(notifications, "notify", lambda **kwargs: None)
-    monkeypatch.setattr(
-        buddy_events,
-        "emit_buddy_event",
-        lambda event_type, *, source, payload: emitted.append((event_type, source, payload)),
-    )
-
-    tasks._resume_pipeline("resume-token", approved=False)
-
-    assert statuses == [("run-1", "stopped")]
-    assert finishes == [("run-1", "stopped", "Approval denied by user")]
-    assert emitted == [
-        (
-            BuddyEventType.WORKFLOW_CANCELLED,
-            "tasks",
-            {"task_id": "task-1", "thread_id": "thread-1", "label": "Workflow denied"},
-        )
-    ]
-
-
 def test_buddy_config_round_trips_to_temp_data_dir(monkeypatch, tmp_path):
     import row_bot.buddy.config as config_mod
 

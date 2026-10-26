@@ -112,8 +112,8 @@ function AlwaysAskApps({
   if (!apps.length && !gone.length)
     return (
       <InlineEmpty>
-        No apps are set up yet. A step can still ask you with its own Always ask
-        me switch.
+        No apps are set up yet. Once one is, you can choose to approve its
+        actions yourself on every run.
       </InlineEmpty>
     );
   const set = (id: string, on: boolean) =>
@@ -155,7 +155,7 @@ function approvalWords(mode: string | null) {
       'Approvals: Block. This workflow can only read; anything that would change something is refused.',
     approve:
       'Approvals: Ask. This workflow asks you before anything that changes something.',
-    auto: "Approvals: Auto. A reviewer approves what matches this workflow's steps; anything else pauses the run for you.",
+    auto: "Approvals: Auto. A reviewer approves what matches this workflow's messages; anything else pauses the run for you.",
     full: 'Approvals: Hands-off. This workflow makes every change without asking; each one is recorded.',
   }[approvalLevel(mode)];
 }
@@ -164,7 +164,7 @@ function approvalWords(mode: string | null) {
 const LEVEL_NOTES: Record<ApprovalLevel, string> = {
   approve:
     'The run pauses and asks you before anything that changes something.',
-  auto: "A reviewer approves what matches the workflow's steps; anything else pauses the run for you. The profile's limits still apply.",
+  auto: "A reviewer approves what matches the workflow's messages; anything else pauses the run for you.",
   full: 'Nothing pauses for approval; every action runs and is recorded. The profile and sandbox limits still apply.',
   block: 'Anything that would change something is refused.',
 };
@@ -512,7 +512,7 @@ export default function TaskSettingsEditor({
       <div className="task-graph-bar">
         <p className="home-caption">
           {taskName ? `${taskName} · ` : ''}How future runs choose their model,
-          approvals, conversation and trigger. Saving never runs it.
+          approvals and trigger. Saving never runs it.
         </p>
         <span className="home-page-header-spacer" />
         {!loading && (
@@ -567,7 +567,7 @@ export default function TaskSettingsEditor({
             <SettingRow
               label="Agent profile"
               htmlFor={`${inputId}-profile`}
-              description="Its tools and limits apply to every run."
+              description="Its instructions apply to every run. It has the tools a chat has."
             >
               <Select
                 id={`${inputId}-profile`}
@@ -640,7 +640,7 @@ export default function TaskSettingsEditor({
                 fields.workspace_id === snapshot?.fields.workspace_id &&
                 snapshot?.workspace_available === false
                   ? `${snapshot.workspace_name ?? 'This folder'} isn't a code folder any more. Choose another, or None.`
-                  : 'Every step works in it. A child agent step can choose its own.'
+                  : 'Its conversation works in it. A helper agent can choose its own.'
               }
             >
               <Select

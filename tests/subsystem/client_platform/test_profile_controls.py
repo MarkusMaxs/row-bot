@@ -20,7 +20,7 @@ def profile(platform):
     from row_bot import agent_profiles
     agent_profiles.ensure_agent_profiles_schema(force=True)
     return agent_profiles.save_agent_profile(slug="accepted-profile", display_name="Accepted profile",
-        instructions="ORIGINAL accepted instructions", tool_policy_json={"allow_tools": ["read_fixture"]},
+        instructions="ORIGINAL accepted instructions", tool_policy_json={"capability": "write_capable"},
         skill_policy_json={"skills_override": ["accepted-skill"]})
 
 
@@ -76,15 +76,17 @@ def test_selected_profile_reaches_real_runtime_and_queued_dispatch_keeps_snapsho
         assert first.entered.wait(10)
         enqueue(platform, "profile-queued", "Accepted pending input")
         agent_profiles.save_agent_profile({**profile, "instructions": "CHANGED later instructions",
-            "tool_policy_json": {"allow_tools": ["write_fixture"]},
+            "tool_policy_json": {"capability": "read_only"},
             "skill_policy_json": {"skills_override": ["changed-skill"]}, "enabled": False})
         first.release.set()
         assert second.entered.wait(10)
         assert len(captured) == 2
         for config, boundary in captured:
             assert config["agent_profile_frozen"] is True
-            assert boundary["tools"] == ["read_fixture"]
-            assert boundary["allowlist"] == ("read_fixture",)
+            # A profile lists no tools (F31): the turn has the chat's tools, and the accepted capability.
+            assert boundary["tools"] == ["read_fixture", "write_fixture"]
+            assert boundary["allowlist"] is None
+            assert config["agent_profile_snapshot"]["tool_policy_json"]["capability"] == "write_capable"
             assert "ORIGINAL accepted instructions" in boundary["instructions"]
             assert "CHANGED" not in boundary["instructions"]
             assert boundary["skills"]["skills_override"] == ["accepted-skill"]
@@ -114,20 +116,16 @@ def test_frozen_no_profile_does_not_adopt_later_thread_selection(platform, profi
     assert "ORIGINAL accepted instructions" in inspect({"configurable": legacy})["instructions"]
 
 
-def test_profile_restrictions_intersect_explicit_gates_and_preserve_empty_semantics(platform, profile):
+def test_a_profile_never_narrows_a_turn_and_an_explicit_runtime_list_is_kept(platform, profile):
     from row_bot.application.profile_controls import freeze_profile
     from row_bot.application.client_queue import freeze_context
-    from row_bot.agent import _runtime_tool_allowlist
-    for original, expected in ((None, ("read_fixture",)), ([], ()), (["write_fixture"], ())):
-        config = {"agent_profile_id": profile["id"], "tool_allowlist": original}
-        freeze_profile(config)
-        assert _runtime_tool_allowlist(config) == expected
-        frozen = freeze_context({"configurable": config}, (), [])
-        assert frozen["configurable"]["tool_allowlist"] == list(expected)
-    for original in (None, []):
-        config = {"agent_profile_id": "", "tool_allowlist": original}
-        freeze_profile(config)
-        assert freeze_context({"configurable": config}, (), [])["configurable"]["tool_allowlist"] == original
+    for reference in (profile["id"], ""):
+        for original in (None, [], ["write_fixture"]):
+            config = {"agent_profile_id": reference, "tool_allowlist": original}
+            freeze_profile(config)
+            assert config["tool_allowlist"] == original
+            # An explicit [] stays deny-all rather than becoming unrestricted.
+            assert freeze_context({"configurable": config}, (), [])["configurable"]["tool_allowlist"] == original
 
 
 @pytest.mark.parametrize("missing", [False, True])

@@ -250,7 +250,6 @@ def _public_profile(profile: dict[str, Any]) -> dict[str, Any]:
         workspace_policy = {}
     if not isinstance(approval_policy, dict):
         approval_policy = {}
-    allow_tools = tool_policy.get("allow_tools") or []
     return {
         "id": profile.get("id", ""),
         "slug": profile.get("slug", ""),
@@ -261,8 +260,6 @@ def _public_profile(profile: dict[str, Any]) -> dict[str, Any]:
         "source": profile.get("source", ""),
         "enabled": bool(profile.get("enabled", True)),
         "capability": tool_policy.get("capability", "read_only"),
-        "tool_mode": "selected_tools" if allow_tools else "inherit_enabled_tools",
-        "allow_tools": allow_tools,
         "skills": skill_policy.get("skills_override") or [],
         "context_mode": context_policy.get("default_context_mode", "auto"),
         "workspace_mode": workspace_policy.get("workspace_mode_default", "auto"),
@@ -431,7 +428,6 @@ class _AgentProfileSaveInput(BaseModel):
     when_to_use: str = Field(default="", description="When parent agents should choose this profile.")
     instructions: str = Field(description="Focused instructions for agents using this profile.")
     capability: Literal["read_only", "write_capable", "orchestrator"] = "read_only"
-    allow_tools: list[str] = Field(default=[], description="Optional exact tool names this profile may use.")
     skills: list[str] = Field(default=[], description="Manual skills pinned/injected when this profile is used.")
     context_mode: ContextMode = Field(default="focused", description="Default context mode.")
     workspace_mode: Literal["auto", "read_only", "single_writer", "worktree"] = "read_only"
@@ -851,7 +847,6 @@ def _agent_profile_save(
     description: str = "",
     when_to_use: str = "",
     capability: str = "read_only",
-    allow_tools: list[str] | None = None,
     skills: list[str] | None = None,
     context_mode: str = "focused",
     workspace_mode: str = "read_only",
@@ -863,10 +858,7 @@ def _agent_profile_save(
         description=description,
         when_to_use=when_to_use,
         instructions=instructions,
-        tool_policy_json={
-            "capability": capability,
-            "allow_tools": _as_list(allow_tools),
-        },
+        tool_policy_json={"capability": capability},
         skill_policy_json={
             "skills_override": _as_list(skills),
         },

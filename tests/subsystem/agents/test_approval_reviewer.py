@@ -147,7 +147,7 @@ def test_a_workflow_run_is_judged_by_its_saved_instructions_not_its_filled_in_pr
     request = approval_review.current_request({"thread_id": "wf-thread", "background_workflow": True})
 
     assert request.source == "workflow"
-    assert request.messages == ("Workflow: Weekly notes", "Step: Tidy my notes, then {{prev_output}}")
+    assert request.messages == ("Workflow: Weekly notes", "Message: Tidy my notes, then {{prev_output}}")
     assert _INJECTED not in json.dumps(request.messages)
 
 

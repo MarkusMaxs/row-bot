@@ -215,3 +215,31 @@ def test_a_passing_failure_tries_again_but_never_after_something_went_out(workfl
     done = run(workflows, platform, fake, create(workflows, name="Posts once"))
     assert done["status"] == "failed"
     assert len(fake.calls) == 1, "a turn that already posted is never run again"
+
+
+def test_a_run_whose_turn_cannot_start_ends_failed_with_a_reason(workflows, platform, monkeypatch):  # noqa: F811
+    from row_bot.application import conversation_followups
+
+    def no_worker(*args, **kwargs):
+        raise RuntimeError("cannot start new thread")
+
+    monkeypatch.setattr(conversation_followups, "start", no_worker)
+    done = run(workflows, platform, Recording(), create(workflows))
+    assert done["status"] == "failed"
+    assert done["notice"] == "The run couldn't start. Check this workflow's model, then run it again."
+    assert not workflows.get_running_tasks()
+
+
+def test_the_workflows_always_ask_apps_reach_every_turn_of_its_conversation(workflows, platform):  # noqa: F811
+    """N9: the person's own rule holds in the workflow's turns under every approval level."""
+    seen: list[dict] = []
+
+    class Rules(Recording):
+        def stream(self, text, enabled_tools, config, *, stop_event=None):
+            seen.append(dict(config["configurable"].get("person_rules") or {}))
+            yield from super().stream(text, enabled_tools, config, stop_event=stop_event)
+
+    task = create(workflows)
+    workflows.update_task(task["id"], always_ask=["builtin:account:x"], safety_mode="full")
+    run(workflows, platform, Rules(reply("Done.")), workflows.get_task(task["id"]))
+    assert seen == [{"step": False, "items": ["builtin:account:x"]}]

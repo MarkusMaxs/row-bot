@@ -50,7 +50,6 @@ export interface TaskEditorProps {
     label: string;
     selected: boolean;
   }>;
-  /** Open the step graph for this saved workflow. */
   /** Open the saved workflow's model and approval settings. */
   onTaskSettings?: () => void;
 }
@@ -177,7 +176,7 @@ export default function TaskEditor({
     setFields((current) => ({ ...current, [key]: value }));
   }
 
-  // B122: leaving for the step graph or the model settings with unsaved
+  // B122: leaving for the model settings with unsaved
   // changes asks to save first instead of dropping them silently.
   const [leaving, setLeaving] = useState<null | (() => void)>(null);
   const leaveTo = (go: () => void) => () => {

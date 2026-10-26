@@ -98,6 +98,8 @@ def execute_task_run_command(*, owner_id: str, key: str, command: dict,
             conversation = tasks._prepare_task_thread(workflow)
             if admissions.deletion_state(conversation) != "active":
                 raise ClientPlatformError("task_run_target_conflict")
+            if not threads._thread_exists(conversation):  # A reminder has no conversation of its own.
+                threads.create_thread("Workflow run", thread_id=conversation, seed_default_skills=False)
             progress["conversation_id"] = conversation
             admissions.command_progress(owner_id, key, progress)
             validate()

@@ -276,23 +276,6 @@ _RUNTIME_ERROR_TEXT_FRAGMENTS = (
     " does not support tool calling",
 )
 
-_READ_ONLY_DEFAULT_DENY_TOOLS = {
-    "calendar",
-    "custom_tool_builder",
-    "designer",
-    "gmail",
-    "goal",
-    "image_gen",
-    "outlook_calendar",
-    "outlook_mail",
-    "row_bot_updater",
-    "task",
-    "tracker",
-    "video_gen",
-    "x",
-}
-
-
 class AgentRunnerError(ValueError):
     """Raised when a child Agent cannot be created or started."""
 
@@ -334,106 +317,20 @@ def _enabled_tool_names(enabled_tool_names: Sequence[str] | None) -> list[str]:
     return [tool.name for tool in tool_registry.get_enabled_tools()]
 
 
-def _profile_tool_allowlist(profile_snapshot: Mapping[str, Any]) -> list[str]:
-    tool_policy = profile_snapshot.get("tool_policy_json") or {}
-    if not isinstance(tool_policy, dict):
-        return []
-    result: list[str] = []
-    seen: set[str] = set()
-    for item in tool_policy.get("allow_tools") or []:
-        text = str(item or "").strip()
-        if text and text not in seen:
-            seen.add(text)
-            result.append(text)
-    return result
-
-
 def _filter_child_tools(
     enabled_tool_names: Sequence[str],
     profile_snapshot: Mapping[str, Any],
 ) -> list[str]:
-    """Apply profile tool restrictions and deny recursive delegation by default."""
+    """Every tool the chat has, as a chat turn gets them (F31): a profile lists no tools. A read-only
+    profile's helper is refused every action at dispatch (``profile_policy``); only delegation is
+    left out unless the profile allows it."""
     tool_policy = profile_snapshot.get("tool_policy_json") or {}
     if not isinstance(tool_policy, dict):
         tool_policy = {}
     requested = [str(name) for name in enabled_tool_names if str(name or "").strip()]
-    allow = {str(name) for name in tool_policy.get("allow_tools") or [] if str(name or "").strip()}
-    deny: set[str] = set()
-    capability = str(tool_policy.get("capability") or "read_only")
-    if capability == "read_only":
-        deny.update(_READ_ONLY_DEFAULT_DENY_TOOLS)
-    if not tool_policy.get("allow_delegation"):
-        deny.add("agents")
-    filtered = [name for name in requested if name not in deny]
-    if allow:
-        mcp_allowed = "mcp" in allow or any(name.startswith("mcp_") for name in allow)
-        filtered = [
-            name
-            for name in filtered
-            if name in allow or (name == "mcp" and mcp_allowed)
-        ]
-    return filtered
-
-
-def _with_code_folder_reads(
-    profile_snapshot: Mapping[str, Any],
-    *,
-    parent_workspace_id: str,
-    child_workspace_id: str,
-) -> dict[str, Any]:
-    """A read-only helper can read the code folder of the chat that delegated it (B335).
-
-    A chat with a code folder leaves the general file and shell tools out of its
-    turns (its code goes through the Developer tools), and the built-in read-only
-    profiles list no Developer tools, so a review helper could not open the folder it
-    was asked to check. Such a helper now gets the Developer tools on that same folder,
-    and only their reads: its read-only capability refuses every write, delete,
-    branch, commit, push, pull request, import and command at dispatch, before any
-    approval, whatever the chat's approval mode. Write-capable profiles gain nothing,
-    and a person's own profile keeps the tool list they chose for it.
-    """
-    snapshot = dict(profile_snapshot)
-    tool_policy = snapshot.get("tool_policy_json")
-    if (
-        not parent_workspace_id
-        or child_workspace_id != parent_workspace_id
-        or snapshot.get("source") != "builtin"
-        or not isinstance(tool_policy, Mapping)
-        or str(tool_policy.get("capability") or "read_only") != "read_only"
-    ):
-        return snapshot
-    allow = [str(name) for name in tool_policy.get("allow_tools") or []]
-    deny = [str(name) for name in tool_policy.get("deny_tools") or []]
-    if not allow or "developer" in allow or "developer" in deny:
-        return snapshot
-    snapshot["tool_policy_json"] = {**tool_policy, "allow_tools": [*allow, "developer"]}
-    return snapshot
-
-
-def _with_chat_apps(profile_snapshot: Mapping[str, Any], enabled_tool_names: Sequence[str]) -> dict[str, Any]:
-    """A helper keeps the apps of the chat that delegated it (B344).
-
-    The built-in profiles list their tools and none lists the apps, so a research
-    helper could not read the Notion page its chat had on. When the delegating turn
-    has apps, a built-in profile's list gains them: the apps the chat left out stay
-    out (its app scope), and a read-only profile's capability refuses every app tool
-    that isn't a read at dispatch, before any approval. A person's own profile keeps
-    the tool list they chose for it.
-    """
-    snapshot = dict(profile_snapshot)
-    tool_policy = snapshot.get("tool_policy_json")
-    if (
-        "mcp" not in enabled_tool_names
-        or snapshot.get("source") != "builtin"
-        or not isinstance(tool_policy, Mapping)
-    ):
-        return snapshot
-    allow = [str(name) for name in tool_policy.get("allow_tools") or []]
-    deny = [str(name) for name in tool_policy.get("deny_tools") or []]
-    if not allow or "mcp" in deny or any(name == "mcp" or name.startswith("mcp_") for name in allow):
-        return snapshot
-    snapshot["tool_policy_json"] = {**tool_policy, "allow_tools": [*allow, "mcp"]}
-    return snapshot
+    if tool_policy.get("allow_delegation"):
+        return requested
+    return [name for name in requested if name != "agents"]
 
 
 def _profile_child_skills(
@@ -681,7 +578,6 @@ def _build_child_config(
     parent_thread_id: str = "",
     parent_run_id: str = "",
     profile_snapshot: Mapping[str, Any],
-    tool_allowlist: Sequence[str] | None = None,
     app_scope: Mapping[str, Any] | None = None,
     person_rules: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -696,12 +592,6 @@ def _build_child_config(
         "parent_run_id": parent_run_id,
         "agent_run_id": run_id,
     }
-    if tool_allowlist:
-        configurable["tool_allowlist"] = [
-            str(name)
-            for name in tool_allowlist
-            if str(name or "").strip()
-        ]
     if model_override:
         configurable["model_override"] = model_override
     if developer_workspace_id:
@@ -872,12 +762,6 @@ def spawn_agent_run(
         workspace_path = str(worktree_allocation.get("worktree_path") or "")
         if not effective_developer_workspace_id or not workspace_path:
             raise AgentRunnerError("Worktree did not return a usable workspace.")
-    profile_snapshot = _with_code_folder_reads(
-        profile_snapshot,
-        parent_workspace_id=str(parent_defaults.get("developer_workspace_id") or ""),
-        child_workspace_id=effective_developer_workspace_id,
-    )
-    profile_snapshot = _with_chat_apps(profile_snapshot, _enabled_tool_names(enabled_tool_names))
 
     packet = build_child_agent_prompt(
         objective=objective,
@@ -939,7 +823,6 @@ def spawn_agent_run(
                         owned_agent_run_id=run_id)
             raise AgentRunnerError("Child resources could not be inherited safely.") from exc
 
-    tool_allowlist = _profile_tool_allowlist(profile_snapshot)
     child_tools = _filter_child_tools(
         _enabled_tool_names(enabled_tool_names),
         profile_snapshot,
@@ -963,26 +846,9 @@ def spawn_agent_run(
         parent_thread_id=parent_thread_id,
         parent_run_id=parent_run_id,
         profile_snapshot=profile_snapshot,
-        tool_allowlist=tool_allowlist,
         app_scope=app_scope,
         person_rules=_delegating_person_rules(person_rules),
     )
-    if tool_allowlist:
-        try:
-            from row_bot.agent_tool_catalog import count_tool_ids_by_source
-
-            logger.info(
-                "child Agent tool allow-list active: profile=%s selected=%d counts=%s",
-                profile_snapshot.get("slug") or profile_snapshot.get("id") or "",
-                len(tool_allowlist),
-                count_tool_ids_by_source(tool_allowlist),
-            )
-        except Exception:
-            logger.info(
-                "child Agent tool allow-list active: profile=%s selected=%d",
-                profile_snapshot.get("slug") or profile_snapshot.get("id") or "",
-                len(tool_allowlist),
-            )
     run = create_agent_run(
         run_id=run_id,
         kind="subagent",
@@ -1000,7 +866,7 @@ def spawn_agent_run(
         context_mode=packet["mode"],
         context_summary=packet["summary"],
         model_override=model,
-        tools_override=tool_allowlist if tool_allowlist else child_tools,
+        tools_override=child_tools,
         skills_override=child_skills,
         approval_mode=effective_approval,
         workspace_id=effective_developer_workspace_id,
@@ -1152,7 +1018,6 @@ def _pause_agent_for_approval(
     resume_state = {
         "config": config,
         "enabled_tool_names": enabled_tool_names,
-        "tool_allowlist": list(configurable.get("tool_allowlist") or []),
         "interrupts": interrupts,
         "approval_payload": approval_payload,
         "external_discovery_active": any(

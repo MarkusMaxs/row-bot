@@ -57,17 +57,12 @@ type PinPending = {
   commandId: string;
   operation: 'provider.model.pin' | 'provider.model.unpin';
 };
-/** Limits for long work, in plain words; the saved fields are unchanged. */
+/** Limits for long work, in plain words. A run has no step limit to set: it goes on while it makes progress. */
 const agentFields: {
   key: keyof Omit<AgentRuntimeSettingsState, 'schema_version'>;
   label: string;
   help: string;
 }[] = [
-  {
-    key: 'max_iterations',
-    label: 'Steps per run',
-    help: 'Model-and-tool rounds one run may take.',
-  },
   {
     key: 'max_spawn_depth',
     label: 'Helper levels',
@@ -916,7 +911,7 @@ export default function ModelsPanel({
         anchor="long-work"
         meta={
           agents
-            ? `${agents.max_iterations} steps per run · ${agents.max_concurrent_children} helper agents at a time`
+            ? `${agents.max_concurrent_children} helper agents at a time`
             : undefined
         }
       >

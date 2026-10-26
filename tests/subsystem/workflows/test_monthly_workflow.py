@@ -1,4 +1,4 @@
-"""B345: a monthly workflow keeps its schedule as Monthly, and its prompt step names the apps it uses."""
+"""B345: a monthly workflow keeps its schedule as Monthly."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -42,21 +42,3 @@ def test_a_monthly_schedule_is_kept_as_written_and_fires_on_that_day(tool):
     fire = tasks._build_trigger(task).get_next_fire_time(None, datetime(2026, 10, 21, 12, 0).astimezone())
     assert (fire.day, fire.hour, fire.minute) == (1, 8, 0)
     assert fire.month == 11
-
-
-def test_a_prompt_step_keeps_the_apps_it_names(tool):
-    tasks, task_tool = tool
-    reply = task_tool._task_create(name="Month-end close", schedule="cron:0 8 1 * *", steps=[
-        {"type": "prompt", "prompt": "Total last month's Stripe payouts and log them in Notion.",
-         "apps": ["Stripe", "@notion"]}])
-    task = tasks.get_task(_created_id(reply))
-    assert task["steps"][0]["apps"] == ["mcp:stripe", "mcp:notion"]
-
-
-def test_an_app_that_is_not_set_up_is_refused_with_the_apps_that_are(tool):
-    tasks, task_tool = tool
-    reply = task_tool._task_create(name="Close", steps=[
-        {"type": "prompt", "prompt": "Check the books.", "apps": ["Xero"]}])
-    assert reply.startswith("Error creating task:")
-    assert "Xero" in reply and "Notion, Stripe" in reply
-    assert not tasks.list_tasks()

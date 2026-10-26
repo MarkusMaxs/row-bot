@@ -1127,37 +1127,6 @@ def _canonicalize_agent_profile_reference(value: str | None) -> str:
     return str(profile["id"])
 
 
-def _workflow_model_failure_message(model_ref: str | None, exc: Exception) -> str:
-    selected_ref = str(model_ref or "").strip()
-    details = {
-        "selected_ref": selected_ref,
-        "provider_id": "",
-        "runtime_model": "",
-    }
-    if selected_ref:
-        try:
-            from row_bot.providers.resolution import resolve_provider_config
-
-            resolved = resolve_provider_config(selected_ref, allow_legacy_local=True)
-            details["selected_ref"] = resolved.selection_ref
-            details["provider_id"] = resolved.provider_id
-            details["runtime_model"] = resolved.runtime_model
-        except Exception as resolve_exc:
-            details["resolve_error"] = str(resolve_exc)
-    action = (
-        "Check that the selected provider is reachable and that the model is "
-        "loaded/available. For LM Studio or llama.cpp, load the model and avoid "
-        "unloading it while the workflow is running."
-    )
-    return (
-        "Explicit workflow model override failed; not retrying with the default "
-        f"provider. selected_ref={details['selected_ref'] or '(empty)'}; "
-        f"provider_id={details['provider_id'] or 'unknown'}; "
-        f"runtime_model={details['runtime_model'] or 'unknown'}; "
-        f"error={exc}; suggested_action={action}"
-    )
-
-
 def _diagnose_model_override_value(value: str | None, surface: str) -> dict:
     raw = str(value or "").strip()
     diagnostic = {
@@ -1235,7 +1204,6 @@ def create_task(
     trigger: dict | None = None,
     tools_override: list[str] | None = None,
     channels: list[str] | None = None,
-    advanced_mode: bool | None = None,
     agent_profile_id: str | None = None,
     enabled: bool = True,
     apply_default_skills: bool = True,
@@ -1286,8 +1254,6 @@ def create_task(
     now = datetime.now().isoformat()
     if prompts is None:
         prompts = []
-    if advanced_mode is None:
-        advanced_mode = bool(steps)
     model_override = _canonicalize_workflow_model_override(model_override)
     agent_profile_id = _canonicalize_agent_profile_reference(
         agent_profile_id or DEFAULT_WORKFLOW_AGENT_PROFILE_ID
@@ -1300,7 +1266,6 @@ def create_task(
     skills_override = None
     tools_override = None
     concurrency_group = None
-    advanced_mode = False
     if steps:
         if any(isinstance(step, Mapping) and step.get("type") == "approval" for step in steps) \
                 and safety_mode in {"auto", "full"}:
@@ -1335,7 +1300,7 @@ def create_task(
                 json.dumps(trigger) if trigger else None,
                 json.dumps(tools_override) if tools_override else None,
                 json.dumps(channels) if channels is not None else None,
-                int(bool(advanced_mode)),
+                0,  # advanced_mode: workflows are messages (F31)
                 agent_profile_id,
                 profile_migration_status,
                 profile_migration_note,
@@ -1870,7 +1835,7 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
     d["notify_only"] = bool(d.get("notify_only", 0))
     d["delete_after_run"] = bool(d.get("delete_after_run", 0))
     d["enabled"] = bool(d.get("enabled", 1))
-    d["advanced_mode"] = bool(d.get("advanced_mode", 0))
+    d.pop("advanced_mode", None)
     d["allowed_commands"] = json.loads(d.get("allowed_commands") or "[]")
     d["allowed_recipients"] = json.loads(d.get("allowed_recipients") or "[]")
     raw_skills = d.get("skills_override")
@@ -3385,25 +3350,14 @@ def run_task_background(
     task_id: str,
     thread_id: str,
     enabled_tool_names: list[str],
-    start_step: int = 0,
-    notification: bool = True,
-    resume_step_outputs: dict[str, str] | None = None,
-    resume_run_id: str | None = None,
     *, reviewed_capture: dict | None = None, validate: Callable[[], None] | None = None,
     late_for: str = "", trigger: str = "Run",
 ) -> None:
-    """Execute a task in a background thread.
+    """Start a run: its first message as a chat turn in the workflow's own conversation (F31).
 
     *late_for* is the scheduled time a run missed while Row-Bot was closed, when
-    it runs once on start instead (N9).
-
-    If *resume_run_id* is provided the existing run record is reused
-    instead of creating a new one (avoids duplicate Activity entries
-    when resuming after approval).
-
-    For multi-step tasks each prompt is sent to the agent via
-    ``invoke_agent`` sequentially.  For notify-only tasks, a desktop
-    notification is fired immediately with no agent invocation.
+    it runs once on start instead (N9). A reminder (notify-only) notifies at once
+    and finishes, with no turn.
     """
     task = json.loads(json.dumps(reviewed_capture["task"])) if reviewed_capture else get_task(task_id)
     if reviewed_capture and validate is not None:
@@ -3418,8 +3372,7 @@ def run_task_background(
 
     effect_kwargs = {"validate": _validate_effect} if validate is not None or reviewed_capture else {}
 
-    logger.info("run_task_background: starting '%s' (id=%s, step=%d)",
-                task.get("name", "?"), task_id[:8], start_step)
+    logger.info("run_task_background: starting '%s' (id=%s)", task.get("name", "?"), task_id[:8])
     try:
         from row_bot.buddy.events import BuddyEventType, emit_buddy_event
         emit_buddy_event(
@@ -3888,7 +3841,7 @@ def _on_task_fire(task_id: str, late_for: str = "") -> None:
     thread_id = _prepare_task_thread(task)
     enabled = [t.name for t in tool_registry.get_enabled_tools()]
 
-    run_task_background(task_id, thread_id, enabled, notification=True, late_for=late_for,
+    run_task_background(task_id, thread_id, enabled, late_for=late_for,
                         trigger="Scheduled run")
 
     # Auto-remove one-shot `at` tasks after firing
@@ -3960,6 +3913,15 @@ def count_scheduled_workflows() -> int:
     finally:
         conn.close()
     return sum(1 for row in rows if _build_trigger(dict(row)) is not None)
+
+
+def count_waiting_runs() -> int:
+    """How many workflow runs wait on the person's answer to a card in their conversation (F31)."""
+    conn = _get_conn()
+    try:
+        return int(conn.execute("SELECT COUNT(*) FROM task_runs WHERE status = 'waiting'").fetchone()[0])
+    finally:
+        conn.close()
 
 
 # ── Runs missed while Row-Bot was closed (N9) ─────────────────────────────────
@@ -4066,9 +4028,10 @@ def settle_interrupted_runs(before: datetime | None = None) -> list[str]:
     """Mark runs an earlier Row-Bot process left unfinished as stopped.
 
     Their worker died with that process, so they could never report back:
-    they read as running forever and Stop could not settle them. Paused runs
-    are kept because they resume from saved state, and a run that started in
-    this process is never touched. No delivery or notification is sent.
+    they read as running forever and Stop could not settle them. A run waiting
+    on a card is kept: its conversation still holds the card, which goes on
+    when answered. A run that started in this process is never touched. No
+    delivery or notification is sent.
     """
     cutoff = (before or _PROCESS_STARTED_AT).isoformat()
     placeholders = ",".join("?" for _ in _INTERRUPTED_RUN_STATUSES)
@@ -4802,13 +4765,14 @@ _DEFAULT_TASKS = [
         "enabled": False,
     },
     {
-        "name": "Research Brief",
-        "description": "Manual research with sources, ending in a shareable brief",
+        "name": "Research Pipeline With Review",
+        "description": "Manual research with sources, checked against them, ending in a shareable brief",
         "icon": "🔬",
         "prompts": [
             "Research <topic> for <audience> (replace both before enabling the workflow). Find credible, recent "
             "sources and capture the strongest facts, disagreements and source links. Then write a shareable "
-            "brief: executive summary, key evidence, risks and unknowns, and recommended next steps, with sources.",
+            "brief: executive summary, key evidence, risks and unknowns, and recommended next steps, with sources. "
+            "Before you finish, review the brief against the sources and fix or drop anything they don't support.",
         ],
         "schedule": None,
         "enabled": False,
