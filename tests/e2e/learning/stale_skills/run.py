@@ -382,6 +382,7 @@ class StaleRun(PersonRun):
         before_apps = self.apps.state()
         self._recalled = []
         result = self.turn(thread_id, text, request)
+        errors = list(self._errors)
         self._check_limits()
         messages = _messages(threads, thread_id)[before_messages:]
         calls, results = [], []
@@ -401,6 +402,7 @@ class StaleRun(PersonRun):
             "recalled": [text for batch in self._recalled for text in batch],
             "answer": result.answer[:3000],
             "error": result.error,
+            "error_text": errors[:3],
             "lost_card": any(LOST_CARD in item["content"] for item in results),
         }
         return result, seen
