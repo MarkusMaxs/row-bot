@@ -42,27 +42,29 @@ def rule_check(timeline: world.Timeline) -> dict[str, Any]:
             "weekly": all(len(timeline.schedule[item.id]) >= 1 for item in timeline.procedures)}
 
 
-def rescore(timeline: world.Timeline, state: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+def rescore(timeline: world.Timeline, state: dict[str, Any],
+            stored: dict[str, Any] | None = None) -> tuple[dict[str, Any], dict[str, Any]]:
     """Every run and probe scored again from what the run saved (its first attempt's actions; the probe's reply), by
-    the scorer as it is now: the timeline is the only ground truth."""
+    the scorer as it is now: the timeline is the only ground truth. ``stored``: when each change reached memory (the
+    run's ``stale.json``, from the product's operation log)."""
 
     runs = []
     for item in state.get("runs") or ():
         scored = scorer.score_run(timeline, item["id"], item["day"], item["attempts"][0]["actions"]).to_dict()
         item["score"] = scored
         runs.append({**scored, "skill_loaded": item.get("skill_loaded"), "recalled_new": item.get("recalled_new"),
-                     "passed_first": item.get("passed_first")})
+                     "passed_first": item.get("passed_first"), "at": item.get("at")})
     probes = []
     for item in state.get("probes") or ():
         item["verdict"] = scorer.score_probe(item, item.get("answer") or "")
         probes.append(item)
-    return scorer.metrics(timeline, runs), scorer.probe_metrics(probes)
+    return scorer.metrics(timeline, runs, stored), scorer.probe_metrics(probes)
 
 
 def arm_summary(data: dict[str, Any], state: dict[str, Any], timeline: world.Timeline) -> dict[str, Any]:
     gpu = round(float((data.get("gpu") or {}).get("seconds") or 0) / 3600, 2)
     skills = data.get("skills") or {}
-    metrics, probes = rescore(timeline, state)
+    metrics, probes = rescore(timeline, state, data.get("stored"))
     asked = sum(1 for item in state.get("runs") or () if item["score"]["in_window"] and item.get("asked_first", any(
         call["name"] == "ask_person" for call in item["attempts"][0]["calls"])))
     arm = data.get("arm") or {}
@@ -70,6 +72,10 @@ def arm_summary(data: dict[str, Any], state: dict[str, Any], timeline: world.Tim
             "lane": arm.get("lane"), "main_ref": arm.get("main_ref"), "patches": data.get("patches"),
             "approvals": data.get("approvals"), "repairs": data.get("repairs"), "operations": data.get("operations"),
             "date_notes": sum(1 for item in state.get("runs") or () if item.get("date_note")),
+            "date_notes_newer_skill": sum(1 for item in state.get("runs") or () if item.get("date_note")
+                                          and timeline.edit_of(item["procedure"]) is not None
+                                          and item["day"] >= timeline.edit_of(item["procedure"]).day),
+            "edits": data.get("edits") or [],
             "build": (data.get("arm") or {}).get("build"), "days_done": data.get("days_done"),
             "metrics": metrics, "probes": probes, "asked_first_window": asked,
             "simulated_date": bool((data.get("arm") or {}).get("simulated_date")),
@@ -112,6 +118,18 @@ def markdown(summary: dict[str, Any]) -> str:
     row("only window runs that acted (not pre-registered)", lambda a: _frac(a["metrics"]["stale_among_acted"]))
     row("window runs that asked the person before acting", lambda a: str(a["asked_first_window"]))
     row("window verdicts", lambda a: ", ".join(f"{k} {v}" for k, v in a["metrics"]["window_verdicts"].items()))
+    row("**Changes that reached memory** (op log)", lambda a: f"{a['metrics'].get('reached_memory', {}).get('stored', '-')}"
+        f" of {len(summary['changes'])}")
+    row("**Stale-execution rate, changes that reached memory** (their runs from then on)",
+        lambda a: _frac(a["metrics"].get("reached_memory", {}).get("stale_execution")))
+    row("that, with the procedure's skill loaded",
+        lambda a: _frac(a["metrics"].get("reached_memory", {}).get("stale_skill_loaded")))
+    row("that, without it", lambda a: _frac(a["metrics"].get("reached_memory", {}).get("stale_skill_not_loaded")))
+    row("**Wrong switches** (newer skill, older memory; 14 days)", lambda a: _frac(a["metrics"].get("wrong_switch")))
+    row("wrong switches, all runs after the edit", lambda a: _frac(a["metrics"].get("wrong_switch_all_after_edit")))
+    row("newer-skill runs' verdicts", lambda a: ", ".join(f"{k} {v}" for k, v in
+                                                       (a["metrics"].get("newer_skill_verdicts") or {}).items()))
+    row("date notes on newer-skill runs (must be 0)", lambda a: str(a.get("date_notes_newer_skill") or 0))
     row("**Unchanged procedures**: first acting step right", lambda a: _frac(a["metrics"]["unchanged_success"]))
     row("unchanged: first attempt passed (verifier and value)",
         lambda a: f"{a['metrics']['unchanged_verifier_first']['k']}/{a['metrics']['unchanged_verifier_first']['n']}")
@@ -143,7 +161,13 @@ def markdown(summary: dict[str, Any]) -> str:
             lines.append(f"| {procedure} | {fix['change_day']} | {fix['runs_after']} | {fix['days_to_first_right']} | "
                          f"{fix['stale_runs']} | {fix['window']['stale']}/{fix['window']['runs']} |")
         lines.append("")
-    lines += ["## Skills", ""]
+    lines += ["## Changes reaching memory", ""]
+    for arm in summary["arms"]:
+        stored = (arm["metrics"].get("reached_memory") or {}).get("changes") or {}
+        lines.append(f"- {arm['model']}: " + "; ".join(
+            f"{procedure} {'day ' + str(hit['day']) + ' (' + str(hit.get('event')) + ')' if hit else 'never'}"
+            for procedure, hit in stored.items()))
+    lines += ["", "## Skills", ""]
     for arm in summary["arms"]:
         for procedure, skill in sorted(arm["skills"]["by_procedure"].items()):
             lines.append(f"- {arm['model']}, {procedure}: `{skill.get('name')}`, {skill.get('source')} on day "

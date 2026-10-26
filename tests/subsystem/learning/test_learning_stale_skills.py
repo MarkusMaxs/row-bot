@@ -51,7 +51,19 @@ def test_the_changes_follow_the_pre_registered_rule(person, seed):
         # Every changed procedure runs inside the 14-day window after its change.
         assert any(change.day <= item.day < change.day + world.WINDOW_DAYS for item in _runs_of(timeline,
                                                                                                change.procedure))
-    for procedure in unchanged:
+    # Two newer-skill events (the person edits a skill; memory is never told) on procedures the world never changes.
+    edits = list(timeline.edits)
+    assert len(edits) == world.EDITS_PER_PERSON and {edit.procedure for edit in edits} < set(unchanged)
+    assert edits[1].day - edits[0].day >= 7 and all(edit.channel == world.EDIT for edit in edits)
+    for edit in edits:
+        procedure = timeline.procedure(edit.procedure)
+        assert procedure.kind != "policy" and 40 <= edit.day <= 110 and edit.old != edit.new
+        assert edit.old == timeline.start[edit.procedure] == timeline.value(edit.procedure, edit.day - 1)
+        assert timeline.value(edit.procedure, edit.day) == edit.new == timeline.value(edit.procedure, 120)
+        # No world source names its fact (the contacts page leaves it out), so nothing but the skill says it moved.
+        assert all(f"({procedure.title})" not in timeline.runbook(day) for day in (1, edit.day, 120))
+        assert any(edit.day <= item.day < edit.day + world.WINDOW_DAYS for item in _runs_of(timeline, edit.procedure))
+    for procedure in set(unchanged) - {edit.procedure for edit in edits}:  # the six controls
         assert {json.dumps(timeline.value(procedure, day), sort_keys=True) for day in range(1, 121)} == {
             json.dumps(timeline.start[procedure], sort_keys=True)}
 
@@ -175,7 +187,7 @@ def _action(change: world.Change, value: world.Value) -> dict:
 
 
 def _run_id(timeline: world.Timeline, procedure: str, after: bool) -> tuple[str, int]:
-    change = timeline.change_of(procedure)
+    change = timeline.shift_of(procedure)
     item = next(item for item in _runs_of(timeline, procedure) if (item.day >= change.day) == after)
     return item.id, item.day
 
@@ -352,6 +364,10 @@ def test_the_smoke_world_has_two_changes_told_first_thing_and_skills_naming_the_
         skill = run.seeded_skill(procedure, smoke.start[procedure_id], smoke.catalogue.first_name)
         assert world.states(procedure.kind, smoke.start[procedure_id], skill["instructions"])
         assert smoke.catalogue.first_name in skill["instructions"]
+    # The person edits one seeded unchanged procedure's skill on the second morning (a newer-skill event).
+    [edit] = smoke.edits
+    assert (edit.day, edit.procedure in smoke.seeded_skills, smoke.change_of(edit.procedure)) == (2, True, None)
+    assert smoke.value(edit.procedure, 1) == edit.old and smoke.value(edit.procedure, 2) == edit.new
 
 
 def test_each_arm_runs_its_own_product_setting(tmp_path):
@@ -394,3 +410,90 @@ def test_patches_are_scored_true_or_false_from_the_timeline(timeline):
     assert found["candidates"] == {"R": {"proposed": 2, "no_change": 1}}
     early = scorer.patch_metrics(timeline, skills, [{**operations[3], "at": at(change.day - 1)}])
     assert early["false"] == 1  # a patch before the change is a false patch too
+
+
+@pytest.mark.parametrize("person", world.PEOPLE)
+def test_the_persons_edit_moves_every_value_the_skill_states_or_adds_a_dated_line(worlds, person):
+    timeline = worlds[person]
+    for edit in timeline.edits:
+        procedure = timeline.procedure(edit.procedure)
+        skill = run.seeded_skill(procedure, edit.old, timeline.catalogue.first_name)["instructions"]
+        edited, replaced = world.edit_skill_text(procedure, skill, edit)
+        assert replaced and world.states(procedure.kind, edit.new, edited)
+        if procedure.kind == "hours":  # both times move at once (a new end may be the old start)
+            assert f"start {edit.new['start']}, end {edit.new['end']}" in edited
+        else:
+            assert not world.states(procedure.kind, edit.old, edited)
+        assert edited.count("\n") == skill.count("\n")  # the same skill, its value moved
+        # A skill that doesn't state the value gets one dated line saying the new one.
+        plain = f"Use this when {timeline.catalogue.first_name} asks for {procedure.title}."
+        added, replaced = world.edit_skill_text(procedure, plain, edit)
+        assert not replaced and added.startswith(plain) and world.states(procedure.kind, edit.new, added)
+        assert f"Updated on {world.generator.day_date(edit.day).day} " in added
+
+
+def test_a_newer_skill_run_on_the_older_memory_is_a_wrong_switch_and_not_an_unchanged_control(timeline):
+    edit = timeline.edits[0]
+    procedure = timeline.procedure(edit.procedure)
+    after_id, after_day = _run_id(timeline, edit.procedure, after=True)
+    before_id, before_day = _run_id(timeline, edit.procedure, after=False)
+
+    def action(value: world.Value) -> dict:
+        if procedure.kind == "hours":
+            return _event(value["start"], value["end"])
+        if procedure.kind in ("address", "supplier", "role"):
+            return _mail(value["email"])
+        return _mail(procedure.to, f"Reminder: {world.say(procedure.kind, value)}.")
+
+    wrong = scorer.score_run(timeline, after_id, after_day, [action(edit.old)])
+    assert (wrong.verdict, wrong.edited, wrong.after_edit, wrong.changed) == (scorer.OLD, True, True, False)
+    assert wrong.edit_window == (after_day - edit.day < world.WINDOW_DAYS)
+    assert scorer.score_run(timeline, after_id, after_day, [action(edit.new)]).verdict == scorer.CURRENT
+    assert scorer.score_run(timeline, before_id, before_day, [action(edit.old)]).verdict == scorer.CURRENT
+    runs = [{**wrong.to_dict(), "passed_first": False},
+            {**scorer.score_run(timeline, before_id, before_day, [action(edit.old)]).to_dict(), "passed_first": True}]
+    found = scorer.metrics(timeline, runs)
+    assert found["wrong_switch"]["k"] == int(wrong.edit_window)
+    assert found["wrong_switch_all_after_edit"] == {"k": 1, "n": 1, "rate": 1.0, "wilson": scorer.wilson(1, 1)}
+    assert found["unchanged_success"]["n"] == 0  # the edited procedure is not one of the unchanged controls
+
+
+def test_the_second_result_counts_a_changes_runs_only_once_it_reached_memory(timeline):
+    from tests.e2e.learning.seeded import generator
+
+    change, other = timeline.changes[0], timeline.changes[1]
+    said = world.say(change.kind, change.new)
+
+    def at(day: int, hour: int) -> str:
+        return f"{generator.day_date(day).isoformat()}T{hour:02d}:00:00"
+
+    operations = [
+        {"event": "write", "at": at(change.day - 1, 9), "text": f"It is {said}.", "cause": ""},  # before the change
+        {"event": "write", "at": at(change.day, 21), "text": f"Merged: {said}.", "cause": "merge"},  # Dream's tidying
+        {"event": "supersede", "at": at(change.day, 22), "new": f"Now {said}.", "cause": "", "entity_id": "e1",
+         "subject": "It", "origin": "thread:t1"},
+        {"event": "write", "at": at(other.day, 10), "text": "Something else entirely.", "cause": ""},
+    ]
+    stored = scorer.stored_changes(timeline, operations)
+    assert stored[change.procedure] == {"at": at(change.day, 22), "day": change.day, "event": "supersede",
+                                        "subject": "It", "entity_id": "e1", "origin": "thread:t1"}
+    assert stored[other.procedure] is None
+
+    window = [item for item in _runs_of(timeline, change.procedure)
+              if change.day <= item.day < change.day + world.WINDOW_DAYS]
+    runs = [{**scorer.score_run(timeline, item.id, item.day, [_action(change, change.old)]).to_dict(),
+             "at": f"{generator.day_date(item.day).isoformat()}T10:00:00", "passed_first": False} for item in window]
+    found = scorer.metrics(timeline, runs, stored)
+    assert found["stale_execution"]["n"] == len(window)
+    reached = found["reached_memory"]
+    assert reached["stored"] == 1 and reached["changes"][other.procedure] is None
+    # Only the runs after the change reached memory (22:00 on its day) count in the second result.
+    assert reached["stale_execution"]["n"] == len([item for item in window if item.day > change.day])
+
+
+def test_an_edit_moves_both_times_once_when_the_new_end_is_the_old_start():
+    procedure = next(item for item in world.PROCEDURES if item.kind == "hours")
+    edit = world.Change(procedure.id, "hours", 50, {"start": "09:00", "end": "10:00"},
+                        {"start": "10:00", "end": "11:00"}, world.EDIT)
+    edited, replaced = world.edit_skill_text(procedure, "Book it from 09:00 to 10:00 (or 9am-10am).", edit)
+    assert (edited, replaced) == ("Book it from 10:00 to 11:00 (or 10:00-11:00).", True)

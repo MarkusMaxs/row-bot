@@ -16,6 +16,12 @@ Rhys; ``people/<person>`` here, in S1's format, read by S1's generator). Fixed b
 - **How a change arrives**: seeded 50/50 per change, told in a chat of its own or mentioned in passing inside
   another request that day (told when no other procedure is asked that weekday); the world's sources change that
   morning either way (the contacts page, the procedure's policy document, a letter in the inbox).
+- **Newer-skill events** (H-A3's wrong-switch runs; the user's decision, 26 Oct): two a person, where the person edits
+  a skill directly to a new value and memory is never told. Two of the procedures that never change in the world
+  (not a policy: its document states the rule) are drawn, on days drawn uniformly from 40-110 at least 7 days apart,
+  each to a new value from its pool; from that morning the person's procedure uses the new value (the right
+  outcome), the skill is the newer of the two and memory the older. No world source names those procedures' facts
+  (the contacts page leaves them out), and the other six procedures that never change stay the controls.
 - **Canonical entities with aliases**, **homonyms** (two people with one first name), **preference updates** and
   **misstated-then-corrected facts**.
 - **Rendering**: each procedure's first run states the fact; later runs don't. Wording comes from templates, or from
@@ -27,7 +33,8 @@ Rhys; ``people/<person>`` here, in S1's format, read by S1's generator). Fixed b
 ``build(..., smoke=True)`` is the two-day smoke world (phase 2): the person's first two changes on days 1 and 2, told
 first thing each day; those procedures and two that never change run on both days without stating their facts; a
 skill naming the old value is seeded for each of them the first morning, except one unchanged procedure whose skill
-comes through consent on its first passed run.
+comes through consent on its first passed run; the person edits the other unchanged procedure's skill on the second
+morning (a newer-skill event).
 
 **Ground truth comes only from this timeline** (:meth:`Timeline.value`), never from the simulated person or the
 product's verifier. Nothing here imports Row-Bot beyond the pack format.
@@ -68,6 +75,10 @@ KINDS = ("address", "supplier", "hours", "amount", "role", "policy")
 #: The pre-registration's change rule (§4).
 CHANGES_PER_PERSON = 8
 CHANGE_FIRST, CHANGE_LAST, CHANGE_GAP = 20, 110, 7
+#: Newer-skill events (the person edits a skill; memory is never told).
+EDITS_PER_PERSON = 2
+EDIT_FIRST, EDIT_LAST = 40, 110
+EDIT = "skill_edit"
 PROBE_DAYS = (30, 60, 90, 120)
 #: Probes per category on each probe day.
 PROBES_PER_CATEGORY = 2
@@ -290,7 +301,7 @@ class Change:
     old: Value
     new: Value
     channel: str  # "told" (a chat of its own) or "in_passing" (in another request's message that day; drawn, and
-    # "told" when no other procedure is asked that weekday)
+    # "told" when no other procedure is asked that weekday); a newer-skill event's is "skill_edit"
 
     def to_dict(self) -> dict[str, Any]:
         return {"procedure": self.procedure, "kind": self.kind, "day": self.day, "old": self.old, "new": self.new,
@@ -348,6 +359,7 @@ class Timeline:
     smoke: bool = False
     seeded_skills: tuple[str, ...] = ()  # smoke: procedures whose skill is seeded the first morning
     arrivals: dict[str, int] = field(default_factory=dict)  # the day each change reached the conversation
+    edits: tuple[Change, ...] = ()  # newer-skill events: the person edits the skill; memory is never told
 
     # ── Ground truth ──────────────────────────────────────────────────
 
@@ -361,12 +373,22 @@ class Timeline:
     def change_of(self, procedure: str) -> Change | None:
         return next((item for item in self.changes if item.procedure == procedure), None)
 
-    def value(self, procedure: str, day: int) -> Value:
-        """The procedure's fact in effect on ``day`` (a change's own day already has the new value)."""
+    def edit_of(self, procedure: str) -> Change | None:
+        """The procedure's newer-skill event (the person edits its skill), or None."""
 
-        change = self.change_of(procedure)
-        if change is not None and day >= change.day:
-            return change.new
+        return next((item for item in self.edits if item.procedure == procedure), None)
+
+    def shift_of(self, procedure: str) -> Change | None:
+        """When the procedure's value moves: its change in the world, or the person's edit of its skill."""
+
+        return self.change_of(procedure) or self.edit_of(procedure)
+
+    def value(self, procedure: str, day: int) -> Value:
+        """The procedure's fact in effect on ``day`` (a change's or an edit's own day already has the new value)."""
+
+        shift = self.shift_of(procedure)
+        if shift is not None and day >= shift.day:
+            return shift.new
         return self.start[procedure]
 
     def fact_value(self, fact: str, day: int) -> Any:
@@ -436,7 +458,7 @@ class Timeline:
     def to_dict(self) -> dict[str, Any]:
         return {"format": FORMAT, "version": VERSION, "person": self.person, "seed": self.seed, "days": self.days,
                 "phrasing": self.phrasing, "smoke": self.smoke, "seeded_skills": list(self.seeded_skills),
-                "arrivals": self.arrivals,
+                "arrivals": self.arrivals, "edits": [item.to_dict() for item in self.edits],
                 "schedule": {key: list(value) for key, value in self.schedule.items()},
                 "changes": [item.to_dict() for item in self.changes], "start": self.start,
                 "consent_run": self.consent_run, "tells": [item.__dict__ for item in self.tells],
@@ -483,6 +505,8 @@ def runbook_text(timeline: Timeline, day: int) -> str:
     lines = [f"# {timeline.catalogue.runbook_title}", "", timeline.catalogue.runbook_intro,
              f"Last updated {when.day} {when.strftime('%B %Y')}.", ""]
     for procedure in timeline.procedures:
+        if timeline.edit_of(procedure.id) is not None:
+            continue  # a newer-skill event's fact: no world source names it
         value = timeline.value(procedure.id, day)
         lines.append(f"- **{procedure.fact[:1].upper() + procedure.fact[1:]}** ({procedure.title}): "
                      f"{say(procedure.kind, value, with_name=procedure.kind in ('supplier', 'role'))}")
@@ -512,6 +536,33 @@ def rewrite_document(procedure: Procedure, text: str, change: Change, day: int) 
     when = generator.day_date(day)
     note = f"\n\nChanged on {when.day} {when.strftime('%B %Y')}: {procedure.fact} is now {say('policy', change.new)}.\n"
     return text.replace(before, after).rstrip("\n") + note
+
+
+def edit_skill_text(procedure: Procedure, text: str, edit: Change) -> tuple[str, bool]:
+    """The skill as the person edits it to the new value: every way it states the old value replaced (and, for a
+    supplier or a role, the old name), or, when it states none, a dated line added. Returns the text and whether a
+    value was replaced."""
+
+    old, new = edit.old, edit.new
+    if procedure.kind in ("address", "supplier", "role"):
+        patterns = [(re.escape(str(old["email"])), str(new["email"]))]
+        if old.get("name") and new.get("name") and old["name"] != new["name"]:
+            patterns.append((re.escape(str(old["name"])), str(new["name"])))
+    elif procedure.kind == "hours":
+        patterns = [(rf"(?<![\d:])(?:{_hour_pattern(old[key])})(?![\d])", str(new[key])) for key in ("start", "end")]
+    elif procedure.kind == "amount":
+        patterns = [(rf"(?<![\d.:/-]){old['amount']}(?:\.00)?(?![\d:/-])", str(new["amount"]))]
+    else:
+        raise generator.GeneratorError(f"{procedure.id}: a policy's skill isn't edited (its document states the rule)")
+    # One pass over all of them, so a value moved onto another's old value (09:00-10:00 to 10:00-11:00) moves once.
+    either = "|".join(f"(?P<v{number}>{pattern})" for number, (pattern, _) in enumerate(patterns))
+    edited = re.sub(either, lambda match: patterns[int(match.lastgroup[1:])][1], text, flags=re.IGNORECASE)
+    if edited != text:
+        return edited, True
+    when = generator.day_date(edit.day)
+    line = (f"Updated on {when.day} {when.strftime('%B %Y')}: {procedure.fact} is now "
+            f"{say(procedure.kind, new, with_name=procedure.kind in ('supplier', 'role'))}.")
+    return text.rstrip("\n") + "\n\n" + line + "\n", False
 
 
 def letter(catalogue_: Catalogue, change: Change) -> dict[str, Any]:
@@ -719,27 +770,44 @@ def build(*, person: str = PERSON, seed: int | None = None, days: int = DAYS, ph
     changes.sort(key=lambda item: item.day)
     consent = {item.id: 2 + int(draw(seed, person, item.id, "stale_consent") < 0.5) for item in procedures}
     seeded: tuple[str, ...] = ()
+    edits: list[Change] = []
     if smoke:
         # The first two changes move to days 1 and 2 (told first thing); they and two unchanged procedures run on
         # both days; the others don't run.
         days = SMOKE_DAYS
         changes = [Change(item.procedure, item.kind, day, item.old, item.new, "told")
                    for day, item in zip((1, 2), changes[:2])]
-        unchanged = sorted(item.id for item in procedures if item.id not in which)[:2]
-        running = [item.procedure for item in changes] + unchanged
+        unchanged = sorted(item.id for item in procedures if item.id not in which)
+        edited = next(item for item in unchanged if cat.procedure(item).kind != "policy")
+        running = [item.procedure for item in changes] + [edited, next(item for item in unchanged if item != edited)]
         everyday = tuple(sorted({generator.day_date(day).weekday() for day in range(1, SMOKE_DAYS + 1)}))
         schedule = {item.id: everyday if item.id in running else () for item in procedures}
         seeded = tuple(running[:-1])
         consent = {item.id: (1 if item.id == running[-1] else 99) for item in procedures}
+        # The person edits the seeded skill of the first unchanged procedure on the second morning.
+        procedure = cat.procedure(edited)
+        new = rng("edits").choice([item for item in procedure.pool if item != start[edited]])
+        edits = [Change(edited, procedure.kind, 2, start[edited], new, EDIT)]
+    else:
+        # Newer-skill events: their own draws, so the changes above stay as they were.
+        edit_rng = rng("edits")
+        editable = sorted(item.id for item in procedures if item.id not in which and item.kind != "policy")
+        chosen = edit_rng.sample(editable, EDITS_PER_PERSON)
+        days_edited = change_days(edit_rng, count=EDITS_PER_PERSON, first=EDIT_FIRST, last=EDIT_LAST, gap=CHANGE_GAP)
+        for procedure_id, day in zip(chosen, days_edited):
+            procedure = cat.procedure(procedure_id)
+            new = edit_rng.choice([item for item in procedure.pool if item != start[procedure_id]])
+            edits.append(Change(procedure_id, procedure.kind, day, start[procedure_id], new, EDIT))
     change_by = {item.procedure: item for item in changes}
+    edit_by = {item.procedure: item for item in edits}
 
     # Declarative events: preferences (stated early, changed once), misstated facts, the homonyms.
     events = rng("events")
     tells: list[Tell] = []
     facts: dict[str, list[tuple[int, Any]]] = {}
     for procedure in procedures:
-        facts[procedure.id] = [(1, start[procedure.id])] + (
-            [(change_by[procedure.id].day, change_by[procedure.id].new)] if procedure.id in change_by else [])
+        shift = change_by.get(procedure.id) or edit_by.get(procedure.id)
+        facts[procedure.id] = [(1, start[procedure.id])] + ([(shift.day, shift.new)] if shift else [])
     day_items: dict[int, list[tuple[str, Any]]] = {}
     for homonym in cat.homonyms:
         day = events.randint(2, 6)
@@ -808,7 +876,7 @@ def build(*, person: str = PERSON, seed: int | None = None, days: int = DAYS, ph
         hosts_first = sorted(todays, key=lambda item: (item.id not in passing, procedures.index(item)))
         for procedure in hosts_first:
             apps = apps if apps is not None else _apps_for(history, cat, changes, day)
-            change = change_by.get(procedure.id)
+            change = change_by.get(procedure.id) or edit_by.get(procedure.id)
             after = change is not None and day >= change.day
             value = change.new if after else start[procedure.id]
             first = procedure.id not in ran and not smoke  # the smoke never states a fact in a request
@@ -819,7 +887,7 @@ def build(*, person: str = PERSON, seed: int | None = None, days: int = DAYS, ph
     timeline = Timeline(person=person, seed=int(seed), days=days, schedule=schedule, changes=tuple(changes),
                         start=start, runs=tuple(runs), tells=tuple(tells), probes=(), consent_run=consent,
                         facts=facts, phrasing=phrasings.label, history=history, catalogue=cat, smoke=smoke,
-                        seeded_skills=seeded, arrivals=arrivals)
+                        seeded_skills=seeded, arrivals=arrivals, edits=tuple(edits))
     probes = () if smoke else tuple(probe for day in PROBE_DAYS if day <= days
                                     for probe in make_probes(timeline, day, rng(f"probes/{day}"), order=500))
     return Timeline(**{**timeline.__dict__, "probes": probes})
@@ -866,7 +934,7 @@ def make_probes(timeline: Timeline, day: int, rng: random.Random, *, order: int 
     candidates += [("declarative", item["id"]) for item in (*cat.preferences, *cat.misstated)
                    if timeline.fact_value(item["id"], day) is not None]
     rng.shuffle(candidates)
-    unchanged = [item.id for item in cat.procedures if timeline.change_of(item.id) is None]
+    unchanged = [item.id for item in cat.procedures if timeline.shift_of(item.id) is None]
     candidates += [("procedure", rng.choice(unchanged))]
     for source, fact in candidates[:PROBES_PER_CATEGORY]:
         if source == "procedure":
@@ -892,7 +960,8 @@ def make_probes(timeline: Timeline, day: int, rng: random.Random, *, order: int 
             [procedure_json(change.old)], [procedure_json(change.new)], procedure.kind)
     # Alias and homonym: a party by another name; one of the homonyms by name.
     procedure = cat.procedure(rng.choice([item.id for item in cat.procedures
-                                          if item.kind in ("address", "supplier", "role")]))
+                                          if item.kind in ("address", "supplier", "role")
+                                          and timeline.edit_of(item.id) is None]))
     alias = rng.choice(procedure.aliases)
     now = timeline.value(procedure.id, day)
     add("alias_homonym", procedure.id, f"What's the email address for {alias}?", [procedure_json(now)],
@@ -913,7 +982,7 @@ def make_probes(timeline: Timeline, day: int, rng: random.Random, *, order: int 
     return probes
 
 
-__all__ = ["Catalogue", "Change", "DAYS", "KINDS", "PEOPLE", "PERSON", "PROBE_DAYS", "PROCEDURE", "PROCEDURES",
+__all__ = ["EDIT", "EDITS_PER_PERSON", "Catalogue", "Change", "DAYS", "KINDS", "PEOPLE", "PERSON", "PROBE_DAYS", "PROCEDURE", "PROCEDURES",
            "Phrasings", "Probe", "Procedure", "SEED", "SMOKE_DAYS", "Tell", "Timeline", "UNITS", "WINDOW_DAYS", "build",
-           "catalogue", "change_days", "changing_procedures", "letter", "people_dir", "say", "slots", "states",
+           "catalogue", "change_days", "changing_procedures", "edit_skill_text", "letter", "people_dir", "say", "slots", "states",
            "tell_text", "use_people_dir"]

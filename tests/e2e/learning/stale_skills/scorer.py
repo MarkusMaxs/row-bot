@@ -17,6 +17,15 @@ changes) a run is ``current`` or ``neither``, never ``old``.
 change day and the 13 days after (:data:`world.WINDOW_DAYS`), the share whose first acting step is
 ``old``; every run counts, whether or not the skill was loaded and whether or not it acted.
 
+**Changes that reached memory** (the second result, decided 26 Oct): a change reached memory when the product's
+operation log has a memory written or updated on or after the change's day, not by Dream's own tidying, whose text
+states the new value (:func:`stored_changes`); every rate is reported again over the runs of those changes from that
+moment on.
+
+**The wrong-switch rate** (H-A3): of every run of a newer-skill event's procedure (the person edited its skill;
+memory still holds the older value) on the edit's day and the 13 days after, the share whose first acting step is
+``old``: the older memory's value instead of the newer skill's.
+
 **A probe** is scored from Row-Bot's final reply against its expected values (``right``, ``old``, ``both``,
 ``partial``, ``abstained``, ``wrong``; see :func:`score_probe`).
 """
@@ -61,12 +70,16 @@ class RunScore:
     days_since_change: int | None
     verdict: str
     acting: Mapping[str, Any] | None  # the first acting step (what it did), or None
+    edited: bool = False  # a newer-skill event's procedure (the person edits its skill)
+    after_edit: bool = False
+    edit_window: bool = False  # on the edit's day or the 13 days after
 
     def to_dict(self) -> dict[str, Any]:
         return {"run": self.run, "procedure": self.procedure, "kind": self.kind, "day": self.day,
                 "changed": self.changed, "after_change": self.after_change, "in_window": self.in_window,
                 "days_since_change": self.days_since_change, "verdict": self.verdict,
-                "acting": dict(self.acting) if self.acting else None}
+                "acting": dict(self.acting) if self.acting else None, "edited": self.edited,
+                "after_edit": self.after_edit, "edit_window": self.edit_window}
 
 
 def acting_step(procedure: world.Procedure, actions: Iterable[Mapping[str, Any]]) -> Mapping[str, Any] | None:
@@ -89,7 +102,7 @@ def classify(timeline: world.Timeline, procedure_id: str, day: int, action: Mapp
 
     procedure = timeline.procedure(procedure_id)
     now = timeline.value(procedure_id, day)
-    change = timeline.change_of(procedure_id)
+    change = timeline.shift_of(procedure_id)
     old = change.old if change is not None and day >= change.day else None
     text = _text_of(procedure, action)
     if procedure.kind == "hours":
@@ -115,8 +128,11 @@ def score_run(timeline: world.Timeline, run_id: str, day: int, actions: Iterable
     verdict = NO_ACTION if acting is None else classify(timeline, procedure_id, day, acting)
     after = change is not None and day >= change.day
     since = day - change.day if after else None
+    edit = timeline.edit_of(procedure_id)
+    after_edit = edit is not None and day >= edit.day
     return RunScore(run_id, procedure_id, procedure.kind, day, change is not None, after,
-                    after and since is not None and since < world.WINDOW_DAYS, since, verdict, acting)
+                    after and since is not None and since < world.WINDOW_DAYS, since, verdict, acting,
+                    edit is not None, after_edit, after_edit and day - edit.day < world.WINDOW_DAYS)
 
 
 def actions_between(before: Mapping[str, Any], after: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -246,9 +262,12 @@ def _rate(runs: list[Mapping[str, Any]], verdict: str = OLD) -> dict[str, Any]:
             "wilson": wilson(hit, len(runs))}
 
 
-def metrics(timeline: world.Timeline, runs: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+def metrics(timeline: world.Timeline, runs: Iterable[Mapping[str, Any]],
+            stored: Mapping[str, Mapping[str, Any] | None] | None = None) -> dict[str, Any]:
     """The pre-registration's numbers for one arm and person from scored runs (each a :meth:`RunScore.to_dict`
-    plus ``skill_loaded``, ``recalled_new`` and ``passed_first``)."""
+    plus ``skill_loaded``, ``recalled_new``, ``passed_first`` and the run's simulated time ``at``). With ``stored``
+    (:func:`stored_changes`), ``reached_memory`` holds every number again over the runs of the changes that reached
+    memory, from the moment each did."""
 
     runs = [dict(run) for run in runs]
     window = [run for run in runs if run["in_window"]]
@@ -270,9 +289,10 @@ def metrics(timeline: world.Timeline, runs: Iterable[Mapping[str, Any]]) -> dict
             "days_to_first_right": first_right - change.day if first_right is not None else None,
             "stale_runs": len(stale_days), "last_stale_day": max(stale_days) if stale_days else None,
             "window": {"stale": by_change[change.procedure][0], "runs": by_change[change.procedure][1]}}
-    unchanged = [run for run in runs if not run["changed"]]
+    unchanged = [run for run in runs if not run["changed"] and not run.get("edited")]
     before = [run for run in runs if run["changed"] and not run["after_change"]]
-    return {
+    newer_skill = [run for run in runs if run.get("edit_window")]
+    found = {
         "stale_execution": primary,
         "stale_execution_by_kind": {kind: _rate([run for run in window if run["kind"] == kind]) for kind in world.KINDS},
         "stale_skill_loaded": _rate([run for run in window if run.get("skill_loaded")]),
@@ -287,8 +307,32 @@ def metrics(timeline: world.Timeline, runs: Iterable[Mapping[str, Any]]) -> dict
         "unchanged_success": _rate(unchanged, CURRENT),
         "unchanged_verifier_first": {"k": sum(1 for run in unchanged if run.get("passed_first")), "n": len(unchanged)},
         "before_change_success": _rate(before, CURRENT),
+        # H-A3: the older memory's value instead of the newer skill's (the person edited the skill).
+        "wrong_switch": _rate(newer_skill),
+        "wrong_switch_all_after_edit": _rate([run for run in runs if run.get("after_edit")]),
+        "newer_skill_verdicts": {verdict: sum(1 for run in newer_skill if run["verdict"] == verdict)
+                                 for verdict in VERDICTS},
         "all_runs": len(runs),
     }
+    if stored is not None:
+        kept = [run for run in runs if not run["after_change"] or _after_store(run, stored.get(run["procedure"]))]
+        found["reached_memory"] = {
+            "changes": {change.procedure: stored.get(change.procedure) for change in timeline.changes},
+            "stored": sum(1 for change in timeline.changes if stored.get(change.procedure)),
+            **{key: value for key, value in metrics(timeline, kept).items() if key not in (
+                "unchanged_success", "unchanged_verifier_first", "before_change_success", "wrong_switch",
+                "wrong_switch_all_after_edit", "newer_skill_verdicts")}}
+    return found
+
+
+def _after_store(run: Mapping[str, Any], hit: Mapping[str, Any] | None) -> bool:
+    """Whether a run came after its change reached memory (by simulated time; by day when the run has no time)."""
+
+    if not hit:
+        return False
+    if run.get("at"):
+        return str(run["at"]) >= str(hit["at"])
+    return int(run["day"]) > int(hit["day"])
 
 
 def sim_day(moment: str) -> int:
@@ -299,6 +343,28 @@ def sim_day(moment: str) -> int:
     from tests.e2e.learning.seeded import generator
 
     return (datetime.fromisoformat(str(moment)).date() - generator.day_date(1)).days + 1
+
+
+#: Dream's own tidying in the operation log: not a change reaching memory.
+HOUSEKEEPING = frozenset({"merge", "enrich", "infer", "decay", "migrate"})
+
+
+def stored_changes(timeline: world.Timeline, operations: Iterable[Mapping[str, Any]]) -> dict[str, dict[str, Any] | None]:
+    """When each change's new value first reached memory, from the product's operation log: the first memory written
+    (``write``) or updated (``supersede``) on or after the change's day, not by Dream's own tidying, whose text states
+    the new value; None when it never did (a contradiction only sent to review doesn't count)."""
+
+    operations = [item for item in operations if item.get("event") in ("write", "supersede")
+                  and str(item.get("cause") or "") not in HOUSEKEEPING]
+    found: dict[str, dict[str, Any] | None] = {}
+    for change in timeline.changes:
+        found[change.procedure] = next((
+            {"at": item["at"], "day": sim_day(item["at"]), "event": item["event"], "subject": item.get("subject"),
+             "entity_id": item.get("new_entity_id") or item.get("entity_id"), "origin": item.get("origin")}
+            for item in operations if sim_day(item["at"]) >= change.day and world.states(
+                change.kind, change.new, str(item.get("text") if item["event"] == "write" else item.get("new") or ""))),
+            None)
+    return found
 
 
 def patch_metrics(timeline: world.Timeline, skills: Mapping[str, Mapping[str, Any]],
@@ -356,7 +422,7 @@ def probe_metrics(probes: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
     return out
 
 
-__all__ = ["BOTH", "CURRENT", "NEITHER", "NO_ACTION", "OLD", "RunScore", "VERDICTS", "acting_step", "actions_between",
-           "patch_metrics", "sim_day",
+__all__ = ["BOTH", "CURRENT", "HOUSEKEEPING", "NEITHER", "NO_ACTION", "OLD", "RunScore", "VERDICTS", "acting_step",
+           "actions_between", "patch_metrics", "sim_day", "stored_changes",
            "classify", "cluster_bootstrap", "metrics", "probe_metrics", "probe_states", "score_probe", "score_run",
            "surfaced", "wilson"]

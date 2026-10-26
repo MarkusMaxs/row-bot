@@ -25,8 +25,9 @@ setting, written into the profile before anything else (so the past's memories h
   arms' drafts run on it; the simulated person's words still come from the ChatGPT lane. Each simulated day books
   the card.
 
-Each simulated day, in order (:func:`steps`): the morning (the world's files and inbox change on a change's day; arm
-R's approvals; in the smoke world, the seeded skills on day 1), the day's items (what the person tells, the recurring
+Each simulated day, in order (:func:`steps`): the morning (the world's files and inbox change on a change's day; the
+person edits a skill on a newer-skill event's day; arm R's approvals; in the smoke world, the seeded skills on day
+1), the day's items (what the person tells, the recurring
 runs, the probes on probe days), the evening's background memory extraction, and the night (S1's: Dream, the vault's
 refresh). **Every step is saved** in ``state.json`` as it ends, and a run started again continues at the first step
 not done.
@@ -35,6 +36,10 @@ not done.
 Row-Bot's offer, or ask for one; Row-Bot drafts it and its approval card asks the person, who approves (the skill-save
 fixes #559 and #560 made this work; phase 1's harness stand-in for the lost card is gone). If Row-Bot saves no skill,
 the template skill (:func:`seeded_skill`) is seeded that day, and counted.
+
+**A newer-skill event** (H-A3): on its morning the person edits the procedure's skill directly to the new value
+(:func:`world.edit_skill_text`, through the product's own ``update_skill``; recorded with the cause ``person_edit``);
+memory is never told. A procedure with no skill by then gets the template skill first (seeded, and counted).
 
 The run stops cleanly at the token cap and at once on any usage or rate-limit error (exit 76).
 """
@@ -261,7 +266,7 @@ class StaleRun(PersonRun):
         self._errors: list[str] = []
         data = self.state.data
         for key in ("runs", "tells", "probes", "evenings", "mornings", "redone", "unprompted_skills", "approvals",
-                    "repairs"):
+                    "repairs", "edits"):
             data.setdefault(key, [])
         data.setdefault("skills", {})
         data.setdefault("started", [])
@@ -484,10 +489,33 @@ class StaleRun(PersonRun):
                     self._seed_skill(self.timeline.procedure(procedure_id), day, why="the smoke world's skill")
             finally:
                 stale_skills.set_clock(lambda: self.clock.now().replace(tzinfo=None))
+        for edit in [item for item in self.timeline.edits if item.day == day]:
+            self._edit_skill(edit)
         if self.study_arm in ("R", "A"):
             self._approve_reconciliations(day)
         self.state.data["mornings"].append(day)
         self.save()
+
+    def _edit_skill(self, edit: world.Change) -> None:
+        """A newer-skill event: the person edits the procedure's skill to the new value (memory is never told)."""
+
+        from row_bot import skills, stale_skills
+
+        procedure = self.timeline.procedure(edit.procedure)
+        seeded = not self.state.data["skills"].get(procedure.id, {}).get("name")
+        if seeded:
+            self._seed_skill(procedure, edit.day, why="the person's edit found no skill")
+        name = self.state.data["skills"][procedure.id]["name"]
+        skills.load_skills()
+        found = skills.get_skill(name)
+        text, replaced = world.edit_skill_text(procedure, str(found.instructions or ""), edit)
+        with stale_skills.cause("person_edit"):
+            updated = skills.update_skill(name, instructions=text)
+        self.state.data["edits"].append({"day": edit.day, "procedure": procedure.id, "skill": name, "seeded": seeded,
+                                         "replaced": replaced, "ok": updated is not None,
+                                         "names_new": world.states(procedure.kind, edit.new, text)})
+        self.note(f"day {edit.day}: the person edited {name!r} to {world.say(procedure.kind, edit.new)} "
+                  f"({'replaced' if replaced else 'a dated line added'})")
 
     def _approve_reconciliations(self, day: int) -> None:
         """Arm R's policy: the person approves every reconciliation proposal the next morning (the product's apply,
@@ -590,6 +618,7 @@ class StaleRun(PersonRun):
         skill = self._skill_state(procedure)
         skills_before = self._user_skills()
         record: dict[str, Any] = {"id": request.id, "day": request.day, "procedure": procedure.id,
+                                  "at": self.clock.now().replace(tzinfo=None).isoformat(timespec="seconds"),
                                   "thread": thread_id, "prompt": request.prompt, "attempts": [], "reaction": [],
                                   "skill": skill, "build": self.build}
         text = request.prompt
@@ -701,7 +730,7 @@ class StaleRun(PersonRun):
             return {}
         found = skills.get_skill(entry["name"])
         text = _skill_text(found)
-        change = self.timeline.change_of(procedure.id)
+        change = self.timeline.shift_of(procedure.id)
         entry.update({"exists": found is not None, "enabled": bool(found and skills.is_enabled(found.name)),
                       "names_start": world.states(procedure.kind, self.timeline.start[procedure.id], text),
                       "names_new": bool(change and world.states(procedure.kind, change.new, text)),
@@ -785,15 +814,18 @@ class StaleRun(PersonRun):
 
         data = self.state.data
         scored = [{**item["score"], "skill_loaded": item["skill_loaded"], "recalled_new": item["recalled_new"],
-                   "passed_first": item["passed_first"]} for item in data["runs"]]
+                   "passed_first": item["passed_first"], "at": item.get("at")} for item in data["runs"]]
         operations = stale_skills.operations()
+        stored = scorer.stored_changes(self.timeline, operations)
         return {
             "format": "row_bot.learning.stale_skills_arm", "version": 2, "arm": data.get("arm"),
             "person": self.person_id, "seed": self.args.seed, "days_asked": self.args.days, "smoke": self.args.smoke,
             "days_done": len([day for day, night in data["nights"].items() if night.get("done")]),
             "timeline": self.timeline.fingerprint(), "phrasing": self.timeline.phrasing,
             "changes": [item.to_dict() for item in self.timeline.changes], "arrivals": self.timeline.arrivals,
-            "metrics": scorer.metrics(self.timeline, scored), "probes": scorer.probe_metrics(data["probes"]),
+            "newer_skill_events": [item.to_dict() for item in self.timeline.edits], "edits": data["edits"],
+            "stored": stored, "metrics": scorer.metrics(self.timeline, scored, stored),
+            "probes": scorer.probe_metrics(data["probes"]),
             "patches": scorer.patch_metrics(self.timeline, data["skills"], operations),
             "operations": {event: sum(1 for item in operations if item["event"] == event)
                            for event in sorted({item["event"] for item in operations})},
