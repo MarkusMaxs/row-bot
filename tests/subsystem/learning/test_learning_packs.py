@@ -102,6 +102,17 @@ def test_a_reply_that_commits_to_one_answer_with_context_still_passes(task_id: s
     assert verify(task, Outcome(answer=answer)).passed
 
 
+def test_days_of_a_month_and_qualifiers_are_not_other_answers():
+    # The main model's own committed replies on S1's seeded people (all 70 answer checks read the same under both
+    # versions once these were right): days written beside their month, and "or newer".
+    from row_bot.learning.packs.verify import offers_several
+
+    assert not offers_several("The utilities total is **57.00** for 19–21 November 2026 inclusive. No entries "
+                              "appear on 19 or 20 November.", 57.0, match="number")
+    assert not offers_several("The tools require Python 3.12 or newer, per docs/BUILDING.md.", "3.12")
+    assert offers_several("Python 3.12 or 3.11, depending on the guide.", "3.12")
+
+
 def test_a_reply_that_names_the_known_wrong_value_as_context_after_the_right_one_passes() -> None:
     policy = next(task for task in visible_tasks() if task.id == "doc_14")  # POL-114; decoy POL-097
     assert verify(policy, Outcome(answer="POL-114 applies now; POL-097 was superseded by it.")).passed

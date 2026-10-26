@@ -206,10 +206,11 @@ def _check_json(task: PackTask, answer: str) -> Verdict:
 # - the message hedges ("not sure", "it depends", "one of", "possible values", "candidates", …).
 #
 # A phrase also offers alternatives when it is joined to other words by "or" or "/" ("Ines Duarte or Tomas
-# Berg"). Context that names another value without offering it ("52,500 EUR is approved; the draft said 50,000")
-# still commits to one answer. Numbers that are part of an identifier, a date or a time, follow a reference word
-# ("section 3", "page 2"), restate the task's own numbers or are years are not candidates. Two or more different
-# JSON answers in one message offer several.
+# Berg"), but not by a qualifier ("Python 3.12 or newer"). Context that names another value without offering it
+# ("52,500 EUR is approved; the draft said 50,000") still commits to one answer. Numbers that are part of an
+# identifier, a date (a day of a month too: "19 or 20 November") or a time, follow a reference word ("section 3",
+# "page 2"), restate the task's own numbers or are years are not candidates. Two or more different JSON answers
+# in one message offer several.
 
 GUARD_DETAIL = "offered more than one answer"
 
@@ -238,6 +239,13 @@ _HEDGE = re.compile(r"\bnot sure\b|\bunsure\b|\bunclear\b|\bcan(?:'|’)?t tell\
                     r"\bit depends\b|\bdepending on\b|\bone of\b|\bpossible (?:values|answers)\b|\bcandidates?\b|"
                     r"\bpossibilities\b|\boptions\b", re.I)
 _BREAK = re.compile(r"[.!?;\n](?:\s|$)|\n")
+# "or" followed by one of these qualifies the answer ("3.12 or newer"); it offers no other one.
+_QUALIFIER = r"(?:newer|later|higher|above|more|less|greater|fewer|earlier|before|after|so|thereabouts|similar|" \
+             r"equivalent|better|above|below|over|under)\b"
+_NUMERIC = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
+# Days of a month written beside it, one or several ("19 or 20 November", "19-21 November", "November 19").
+_DAYS_OF = re.compile(rf"\b\d{{1,2}}(?:st|nd|rd|th)?(?:\s*(?:[-–—,/]|or|and|to)\s*\d{{1,2}}(?:st|nd|rd|th)?)*\s+"
+                      rf"(?:{_MONTH_WORDS})\b|\b(?:{_MONTH_WORDS})\.?\s+\d{{1,2}}(?:st|nd|rd|th)?\b", re.I)
 
 
 @dataclass(frozen=True)
@@ -255,6 +263,8 @@ def _kind_of(expected: Any, match: str) -> str:
     if match == "number":
         return "number"
     text = str(expected[0] if isinstance(expected, (list, tuple)) and expected else expected or "").strip()
+    if _NUMERIC.fullmatch(text):
+        return "number"
     if _ISO_DATE.fullmatch(text) or _DAY_MONTH.fullmatch(text) or _MONTH_DAY.fullmatch(text):
         return "date"
     if _TIME.fullmatch(text):
@@ -288,7 +298,7 @@ def _masked(text: str, *patterns: re.Pattern[str]) -> str:
 
 
 def _number_values(text: str) -> list[_Found]:
-    masked = _masked(text, _EMAIL, _ISO_DATE, _DAY_MONTH, _MONTH_DAY, _TIME, _IDENTIFIER)
+    masked = _masked(text, _EMAIL, _ISO_DATE, _DAY_MONTH, _MONTH_DAY, _DAYS_OF, _TIME, _IDENTIFIER)
     found = []
     for m in _NUMBER.finditer(masked):
         if _REFERENCE.search(masked[max(0, m.start() - 24):m.start()]):
@@ -308,7 +318,7 @@ def _candidates(answer: str, expected: Any, kind: str, *, wrong: str, prompt: st
     """Every value of the expected kind the message gives, in order (values normalized)."""
 
     if kind == "number":
-        target = float(expected)
+        target = float(str(expected[0] if isinstance(expected, (list, tuple)) else expected).replace(",", ""))
         asked = [item.value for item in _number_values(prompt)]
         found = []
         for item in _number_values(answer):
@@ -357,7 +367,9 @@ def _joined_phrase(answer: str, found: Sequence[_Found]) -> bool:
             continue
         after = text[item.end:item.end + 16]
         before = text[max(0, item.start - 16):item.start]
-        if re.match(r"\s*,?\s*(?:or\b|/)\s*[\w\"'“(]", after) or re.search(r"(?:\bor|/|\beither)\s*$", before):
+        offered_after = re.match(r"\s*,?\s*(?:or\b|/)\s*[\w\"'“(]", after) and not re.match(
+            rf"\s*,?\s*or\s+{_QUALIFIER}", text[item.end:item.end + 32])
+        if offered_after or re.search(r"(?:\bor|/|\beither)\s*$", before):
             return True
     return False
 
