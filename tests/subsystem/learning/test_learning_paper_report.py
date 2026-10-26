@@ -597,3 +597,135 @@ def test_the_main_reference_needs_the_eval_profile(profile, folders, capsys):
                         "--profile", str(profile), "--scratch", str(scratch), "--out", str(out), "--yes"],
                        hooks=report.Hooks(ask=_never_asked, installed=lambda: False))
     assert code == 2 and "must be the eval profile" in capsys.readouterr().out and not out.exists()
+
+
+# ── A10: the exploratory 27B on Hugging Face (opt-in, typed agreement) ─────────
+
+
+def _trained_on_the_profiles_rows(profile: Path, chats: Any) -> tuple[int, int]:
+    """v2's record of its rows, as the planner writes it when it trains (the product's compiler, 16 GB recipe)."""
+
+    from row_bot.learning.training import dataset as dataset_module
+    from row_bot.learning.training import recipes
+
+    compiled = dataset_module.compile_dataset(LearningStore(profile), recipes.load("16gb"), lookup=chats,
+                                              measure=lambda rows, _max: [(100, 10)] * len(rows), refresh_vault=False)
+    _write_json(profile / "learning_models" / "versions" / "v2" / "dataset.json", compiled.manifest())
+    return compiled.examples, len(compiled.validation)
+
+
+class _Exploratory:
+    """A fake Hugging Face for the copy: a fake Hub and sign-in; the job finishes while the script waits."""
+
+    def __init__(self) -> None:
+        from tests.fixtures.hugging_face import FakeHub
+
+        self.hub = FakeHub()
+        self.trainer = None
+        self.asked: list[str] = []
+
+    def factory(self, copy: Path):
+        from row_bot.learning.remote import hub as hub_module
+        from row_bot.learning.remote.training import RemoteTrainer
+        from row_bot.learning.training import jobs as jobs_module
+        from tests.fixtures.hugging_face import FakeFetcher, FakeSignIn
+
+        self.trainer = RemoteTrainer(copy, jobs=jobs_module.TrainingJobs(copy), hub=self.hub, sign_in=FakeSignIn(),
+                                     fetcher=FakeFetcher(self.hub), card_mib=lambda: 32_607, start_threads=False,
+                                     flavors=lambda: [hub_module.Flavor("l40sx1", "Nvidia L40S", 48, 0.03)])
+        return self.trainer
+
+    def sleep(self, _seconds: float) -> None:
+        from row_bot.learning.remote import training as remote_training
+
+        for remote in self.hub.jobs.values():
+            if remote.stage != "COMPLETED":
+                job_id = remote.labels["row-bot-job"]
+                record = remote_training.read_record(job_id, self.trainer.root)
+                self.hub.finish(remote.id, output_repo=record.output_repo, base=True, running_seconds=5_400)
+
+    def ask(self, answer: str):
+        def asked(prompt: str) -> str:
+            self.asked.append(prompt)
+            return answer
+        return asked
+
+
+def _exploratory_hooks(fake: _Exploratory, answer: str, chats: Any = None) -> report.Hooks:
+    from row_bot.learning.training import serving
+
+    def prepare(copy, version):
+        number = version["version"]
+        return report.Prepared({"start": f"model:fake:start-{number}", "personal": f"model:fake:personal-{number}"},
+                               32768, "row_bot")
+
+    def release_server(runtime, **options):
+        return serving.ServeOutcome("ready", runtime, model_ref="model:fake:ready", probe={"agent_ready": True},
+                                    tool_turn={"ok": True})
+
+    return report.Hooks(prepare=prepare, runner=lambda arms: Packs(), container=lambda: False,
+                        client=ScriptedClient(lambda *_: AIMessage(content="no idea"), local=True),
+                        ask=fake.ask(answer), installed=lambda: False, hugging_face=fake.factory,
+                        release_server=release_server, sleep=fake.sleep, lookup=chats)
+
+
+def test_the_exploratory_27b_trains_on_exactly_v2s_rows_after_a_typed_upload_and_is_reported_apart(
+        profile, folders, capsys, chats):
+    scratch, out = folders
+    rows, validation = _trained_on_the_profiles_rows(profile, chats)
+    assert rows > 0
+    before = _hashes(profile)
+    ids = _ids(profile)
+    fake = _Exploratory()
+
+    code = report.main(["--freeze", "--as-of", "2030-01-01", "--hugging-face-27b", "--profile", str(profile),
+                        "--scratch", str(scratch), "--out", str(out), "--yes"],
+                       hooks=_exploratory_hooks(fake, "upload", chats))
+
+    printed = capsys.readouterr()
+    assert code == 0, printed.out
+    written = _written(out)
+    _assert_private(printed.out + printed.err + json.dumps(written), profile, scratch, ids)
+    report.validate(written, report.FREEZE)
+    assert fake.asked and "upload" in fake.asked[0]  # asked even with --yes: the upload is typed, never skipped
+    found = written["exploratory_27b"]
+    assert (found["state"], found["model"], found["recipe"]) == ("run", "qwen3.8-27b", "hf-27b-v1")
+    assert found["rows"] == {"examples": rows, "validation": validation, "matched": True} and found["upload_bytes"] > 0
+    assert (found["uploads_deleted"], found["minutes"], found["cost_usd"]) == (True, 90, 2.7)  # 90 min at $1.80/h
+    assert set(found["contrasts"]) == {"personal27 vs start27", "personal27 vs personal"}
+    assert set(found["arms"]) == {"start27", "personal27", "personal"}
+    # Apart from the confirmatory family: Holm still covers H1 and H2 only.
+    assert written["holm"]["family"] == ["H1", "H2"] and "personal27" not in json.dumps(written["hypotheses"])
+    uploaded = b"".join(value for repo in fake.hub.repos.values() for value in repo["files"].values())
+    assert not fake.hub.repos and uploaded == b""  # everything uploaded was deleted
+    assert fake.hub.deleted  # the private dataset and the run's model repository
+    assert _hashes(profile) == before
+
+
+def test_without_the_typed_upload_nothing_leaves_and_the_27b_is_not_run(profile, folders, capsys, chats):
+    scratch, out = folders
+    _trained_on_the_profiles_rows(profile, chats)
+    fake = _Exploratory()
+
+    code = report.main(["--freeze", "--as-of", "2030-01-01", "--hugging-face-27b", "--profile", str(profile),
+                        "--scratch", str(scratch), "--out", str(out), "--yes"],
+                       hooks=_exploratory_hooks(fake, "y", chats))
+
+    assert code == 0
+    found = _written(out)["exploratory_27b"]
+    assert (found["state"], found["reason"]) == ("not_run", "declined")
+    assert fake.hub.calls == [] and not fake.hub.repos  # nothing uploaded, no job
+
+
+def test_rows_that_cant_be_rebuilt_exactly_are_never_uploaded(profile, folders):
+    scratch, out = folders
+    fake = _Exploratory()  # v2's record names rows the copy doesn't hold (the profile fixture's own)
+
+    code = report.main(["--freeze", "--as-of", "2030-01-01", "--hugging-face-27b", "--profile", str(profile),
+                        "--scratch", str(scratch), "--out", str(out), "--yes"],
+                       hooks=_exploratory_hooks(fake, "upload"))
+
+    assert code == 0
+    found = _written(out)["exploratory_27b"]
+    assert (found["state"], found["reason"], found["rows"]["matched"]) == ("not_run", "rows_not_reproducible", False)
+    assert fake.asked == [] and fake.hub.calls == []
