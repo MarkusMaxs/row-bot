@@ -82,7 +82,7 @@ function notice(page: Page, text: string | RegExp) {
   return page.locator('.toast-message').filter({ hasText: text });
 }
 
-const GPU = 'NVIDIA GeForce RTX 5070 Laptop (8 GB)';
+const GPU = 'NVIDIA GeForce RTX 5080 Laptop (16 GB)';
 
 async function turnOn(page: Page) {
   await l1a(page, 'preview');
@@ -94,7 +94,7 @@ async function turnOn(page: Page) {
   await sheet.getByRole('button', { name: 'Turn on Learning' }).click();
   await page
     .getByRole('dialog', {
-      name: 'Download the training engine and Qwen3.5 2B?',
+      name: 'Download the training engine and Qwen3.5 9B?',
     })
     .getByRole('button', { name: 'Not now', exact: true })
     .click();

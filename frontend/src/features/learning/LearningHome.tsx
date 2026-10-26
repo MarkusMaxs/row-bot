@@ -585,7 +585,12 @@ function PersonalModel({
   return (
     <div className="learning-section-list">
       {model.room && (
-        <CardRoomNotice io={io} room={model.room} model={starting.name} />
+        <CardRoomNotice
+          io={io}
+          room={model.room}
+          model={starting.name}
+          onOpenSettings={() => onOpenSettings('personal-model')}
+        />
       )}
       {model.stronger_model && !model.room && (
         <StrongerModelNotice io={io} model={model.stronger_model} />

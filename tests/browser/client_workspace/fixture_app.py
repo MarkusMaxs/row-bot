@@ -5085,6 +5085,8 @@ def l1a_learning(action: str, x_fixture_token: str = Header(default="")) -> dict
         _l1a_saved["check"] = hardware.check
         _l1a_saved["peek"] = hardware.peek
         _l1a_saved["used"] = spending.used_this_month
+        _l1a_saved["gpu_memory"] = hardware.gpu_memory
+        _l1a_saved["memory_free"] = hardware.memory_free_for_training
     if action == "preview":
         learning._PREVIEW = True  # the start-up flag, as if launched with ROW_BOT_LEARNING_PREVIEW=1
         learning.invalidate()
@@ -5092,10 +5094,17 @@ def l1a_learning(action: str, x_fixture_token: str = Header(default="")) -> dict
         from row_bot.learning.training import downloads as _downloads
         _downloads._downloads = _FixtureDownloads()
     elif action in {"gpu", "no-gpu"}:
-        found = (hardware.classify([hardware.Gpu("NVIDIA GeForce RTX 5070 Laptop GPU", 8151, "596.08")])
+        # A 16 GB laptop card (the 9B's smallest tier, O124) on a computer with memory to spare: the fake
+        # card's memory and this computer's, never the real ones (a busy card or a computer short of
+        # memory would make training wait in the spec).
+        memory = hardware.SystemMemory(limit_mib=65_536, free_mib=40_960)
+        found = (hardware.classify([hardware.Gpu("NVIDIA GeForce RTX 5080 Laptop GPU", 16_303, "596.08")], memory)
                  if action == "gpu" else hardware.HardwareCheck("no_gpu"))
         hardware.check = lambda *, refresh=False, detector=None: found
         hardware.peek = lambda: found  # what reads that mustn't wait see (Runs in, the recipe's need)
+        hardware.gpu_memory = lambda **kwargs: (600, 16_303) if action == "gpu" else None
+        memory_free = _l1a_saved["memory_free"]
+        hardware.memory_free_for_training = lambda *, reader=None: memory_free(reader=reader or (lambda: memory))
     elif action == "paused":
         from row_bot.application.settings_commands import write_learning_settings
         write_learning_settings({"paused": True})
@@ -5135,6 +5144,8 @@ def l1a_learning(action: str, x_fixture_token: str = Header(default="")) -> dict
         hardware.check = _l1a_saved["check"]
         hardware.peek = _l1a_saved["peek"]
         spending.used_this_month = _l1a_saved["used"]
+        hardware.gpu_memory = _l1a_saved["gpu_memory"]
+        hardware.memory_free_for_training = _l1a_saved["memory_free"]
         past = sys.modules.get("row_bot.learning.past_chats")
         if past is not None:
             past.stop_background(10)
@@ -5399,25 +5410,25 @@ class _FixtureDownloads:
         self.reset()
         if name == "installed":
             self.engine_state, self.engine_bytes = "installed", 4_033_251_988
-            self.model_state, self.model_bytes = "downloaded", 4_571_279_000
+            self.model_state, self.model_bytes = "downloaded", 19_331_993_000
         elif name == "damaged":
             self.engine_state, self.engine_bytes = "damaged", 0
-            self.model_state, self.model_bytes = "downloaded", 4_571_279_000
+            self.model_state, self.model_bytes = "downloaded", 19_331_993_000
         elif name in ("downloading", "model", "installing"):
             self.state = "downloading"
             self.phase = {"downloading": "engine", "model": "model", "installing": "installing"}[name]
-            self.done = {"engine": 1_190_000_000, "model": 4_930_000_000, "installing": 2_218_000_000}[self.phase]
-            self.total = 6_789_270_885
+            self.done = {"engine": 1_190_000_000, "model": 12_930_000_000, "installing": 21_549_991_432}[self.phase]
+            self.total = 21_549_991_432
         elif name == "paused":
-            self.state, self.done, self.total = "paused", 3_120_000_000, 6_789_270_885
+            self.state, self.done, self.total = "paused", 3_120_000_000, 21_549_991_432
         elif name == "disk":
-            self.state, self.needs, self.free = "not_enough_disk", 9_420_000_000, 6_030_000_000
-            self.total = 6_789_270_885
+            self.state, self.needs, self.free = "not_enough_disk", 24_180_000_000, 6_030_000_000
+            self.total = 21_549_991_432
         elif name == "failed":
-            self.state, self.failure, self.done, self.total = "failed", "network", 2_480_000_000, 6_789_270_885
+            self.state, self.failure, self.done, self.total = "failed", "network", 2_480_000_000, 21_549_991_432
         elif name == "server":  # L2x: an engine from before Row-Bot's own model server, only that missing
             self.engine_state, self.engine_bytes = "installed", 4_033_251_988
-            self.model_state, self.model_bytes = "downloaded", 4_571_279_000
+            self.model_state, self.model_bytes = "downloaded", 19_331_993_000
             self.state, self.total = "ready", 578_117_583
         elif name != "ready":
             raise HTTPException(404, "Unknown download state")
@@ -5487,7 +5498,7 @@ def l2b_learning(action: str, name: str = "", x_fixture_token: str = Header(defa
             raise HTTPException(409, "Turn on the preview first")
         current.set(name)
     elif action == "old-driver":
-        found = hardware.classify([hardware.Gpu("NVIDIA GeForce RTX 3080 Laptop GPU", 8192, "560.94")])
+        found = hardware.classify([hardware.Gpu("NVIDIA GeForce RTX 4090 Laptop GPU", 16_376, "560.94")])
         hardware.check = lambda *, refresh=False, detector=None: found
     else:
         raise HTTPException(404, "Unknown Learning fixture action")
@@ -5497,6 +5508,7 @@ def l2b_learning(action: str, name: str = "", x_fixture_token: str = Header(defa
 # ── Learning (preview), L2x: Row-Bot's own model server, "Runs in" and the larger tiers ──
 
 _l2x: dict[str, object] = {}
+_l2x_models: list[tuple[object, str, object]] = []  # what two-models replaced, put back by restore
 
 
 _c1: dict[str, object] = {}
@@ -5634,6 +5646,9 @@ def l2x_learning(action: str, name: str = "", x_fixture_token: str = Header(defa
             if original is not None:
                 setattr(owner, attribute, original)
         _l2x.clear()
+        while _l2x_models:
+            owner, attribute, original = _l2x_models.pop()
+            setattr(owner, attribute, original)
         hardware.forget_memory_reading()
         from row_bot.learning import runner as runner_module
         from row_bot.learning import versions as learning_versions
@@ -5643,19 +5658,29 @@ def l2x_learning(action: str, name: str = "", x_fixture_token: str = Header(defa
         return {"action": action}
     for module, attribute, owner in patched:
         _l2x.setdefault(f"{module}.{attribute}", getattr(owner, attribute))
+    if action == "two-models":  # O112, O124: a stand-in smaller model beside the 9B (before "card")
+        from row_bot.learning.training import weights
+        from tests.fixtures.learning import stand_in_small_model
+
+        def patch(owner: object, attribute: str, value: object) -> None:
+            _l2x_models.append((owner, attribute, getattr(owner, attribute)))
+            setattr(owner, attribute, value)
+
+        stand_in_small_model(patch, weights.QWEN35_2B.files)  # the download is the fixture's stand-in
+        return {"action": action}
     if action == "card":
         # name: 5090 (the 32 GB tier, with 128 GB of RAM and virtual memory), 5090-short (memory that can't
-        # hold its largest certified tier, O105), 4060-low (an 8 GB card on a computer whose memory can't
-        # hold even the 8 GB tier), 4080-busy (a 16 GB card whose display and apps hold 6.5 GB: Row-Bot
-        # recommends the 2B, O112) or none (no NVIDIA card: not on this computer)
+        # hold its largest certified tier, O105; with two-models), 5090-busy (its display and apps hold
+        # 22.5 GB: with two-models Row-Bot recommends the smaller model, O112), 4080-low (a 16 GB card on a
+        # computer whose memory can't hold even its tier) or none (no NVIDIA card: not on this computer)
         needs = sorted(tier.system_memory_mib for tier in hardware.TIERS if tier.certified and tier.system_memory_mib)
         # 5090-short: room for the smallest tier only (the next one would offer a larger model).
         # Looked up only for the cards that need it: an OS with fewer measured tiers has fewer needs.
-        limit = needs[1] - 1024 if name == "5090-short" else needs[0] - 3072 if name == "4060-low" else 131_072
+        limit = needs[1] - 1024 if name == "5090-short" else needs[0] - 3072 if name == "4080-low" else 131_072
         memory = hardware.SystemMemory(limit_mib=limit, free_mib=min(limit, 90_000) // 2)
-        gpus = ([] if name == "none" else [hardware.Gpu("NVIDIA GeForce RTX 4060", 8_188, "596.08", 300)]
-                if name == "4060-low" else [hardware.Gpu("NVIDIA GeForce RTX 4080", 16_376, "596.08", 6_600)]
-                if name == "4080-busy" else [hardware.Gpu("NVIDIA GeForce RTX 5090", 32_607, "610.60", 2_400)])
+        gpus = ([] if name == "none" else [hardware.Gpu("NVIDIA GeForce RTX 4080", 16_376, "596.08", 300)]
+                if name == "4080-low" else [hardware.Gpu("NVIDIA GeForce RTX 5090", 32_607, "596.08", 23_000)]
+                if name == "5090-busy" else [hardware.Gpu("NVIDIA GeForce RTX 5090", 32_607, "610.60", 2_400)])
         found = hardware.classify(gpus, memory)
         hardware.check = lambda *, refresh=False, detector=None: found
         hardware.peek = lambda: found

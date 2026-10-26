@@ -151,37 +151,14 @@ def test_the_hardware_check_says_what_training_needs_of_the_computers_memory(wor
     assert view["memory"]["system"] in ("windows", "linux", "other")
 
 
-def _two_certified_models(found, monkeypatch, *, small_need_mib: int = 8_192):
-    """A stand-in smaller model certified for 16 GB cards and up beside the 9B (the 32 GB tier's): the
-    smaller- and stronger-model offers need two (O112, O124; Part 4 brings other families). Its (fake)
-    files are on the download world's index."""
+def _two_certified_models(found, monkeypatch):
+    """The stand-in smaller model beside the 9B (O112, O124), its (fake) files on the download world's index."""
 
-    import dataclasses
+    from tests.fixtures.learning import stand_in_small_model
 
-    from row_bot.learning.training import recipes, weights
-
-    small = weights.PinnedModel("test-small", "A small model", "Test/Small", "c" * 40, "Apache 2.0", "apache-2.0",
-                                found.model.files)
+    small = stand_in_small_model(monkeypatch.setattr, found.model.files)
     for item in small.files:
         found.index.redirects[f"/{small.repo}/resolve/{small.revision}/{item.name}"] = f"/cdn/{item.sha256}"
-    monkeypatch.setattr(weights, "MODELS", {**weights.MODELS, small.id: small})
-    monkeypatch.setattr(hardware, "STARTING_MODELS", {**hardware.STARTING_MODELS,
-                                                     small.id: hardware._starting(small)})  # noqa: SLF001
-    from row_bot import learning
-
-    monkeypatch.setattr(learning, "STARTING_MODELS", (small.id, *learning.STARTING_MODELS))
-    nine = recipes.load("32gb")
-    tiny = dataclasses.replace(recipes.load("16gb"), starting_model=small.id, memory_mib=small_need_mib)
-    loaded = {"16gb": tiny, "24gb": recipes.load("24gb"), "32gb": nine}
-    monkeypatch.setattr(recipes, "load", lambda recipe_id: loaded[recipe_id])
-    table = (
-        hardware.Tier("16gb", "16 GB", 15_000, True, "Can train small models on your tasks.",
-                      (hardware._starting(small),), None, small_need_mib),  # noqa: SLF001
-        hardware.Tier("24gb", "24 GB", 23_000, False, "measured soon"),
-        hardware.Tier("32gb", "32 GB", 30_000, True, "Can train models up to about 9B on your tasks.",
-                      (hardware.QWEN35_9B,), None, nine.memory_mib),
-    )
-    monkeypatch.setattr(hardware, "TIERS", table)
     return small
 
 

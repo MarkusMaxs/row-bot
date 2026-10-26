@@ -95,12 +95,12 @@ async function turnOn(
   await page.getByRole('button', { name: 'Turn on Learning' }).click();
   const sheet = page.getByRole('dialog', { name: 'Turn on Learning' });
   await expect(
-    sheet.getByText('NVIDIA GeForce RTX 5070 Laptop (8 GB)'),
+    sheet.getByText('NVIDIA GeForce RTX 5080 Laptop (16 GB)'),
   ).toBeVisible();
   if (screens) await shoot(page, info, 'setup-gpu');
   await sheet.getByRole('button', { name: 'Turn on Learning' }).click();
   const ask = page.getByRole('dialog', {
-    name: 'Download the training engine and Qwen3.5 2B?',
+    name: 'Download the training engine and Qwen3.5 9B?',
   });
   await expect(ask).toBeVisible();
   if (screens) await shoot(page, info, 'download-ask');
@@ -284,13 +284,13 @@ test('the Learning tab: paused, limit reached, reading past chats, its other vie
     page.getByRole('heading', { name: 'No personal model yet' }),
   ).toBeVisible();
   await expect(
-    page.getByText('NVIDIA GeForce RTX 5070 Laptop (8 GB)'),
+    page.getByText('NVIDIA GeForce RTX 5080 Laptop (16 GB)'),
   ).toBeVisible();
   await shoot(page, info, 'model-not-set-up');
   await page.getByRole('button', { name: 'Download…' }).click();
   await page
     .getByRole('dialog', {
-      name: 'Download the training engine and Qwen3.5 2B?',
+      name: 'Download the training engine and Qwen3.5 9B?',
     })
     .getByRole('button', { name: 'Download', exact: true })
     .click();
