@@ -151,6 +151,8 @@ _CREATE_TABLE_SQL = {
             late_for        TEXT DEFAULT '',
             notice          TEXT DEFAULT '',
             fix             TEXT DEFAULT '',
+            first_message_id TEXT DEFAULT '',
+            actions_json    TEXT DEFAULT '[]',
             FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
         )
     """,
@@ -313,6 +315,10 @@ _COLUMN_MIGRATIONS = {
         ("notice", "TEXT DEFAULT ''"),
         # The one thing the person can do about how it ended: "choose_folder" (its folder was removed).
         ("fix", "TEXT DEFAULT ''"),
+        # The run's first message in its conversation: where its turns start (F31).
+        ("first_message_id", "TEXT DEFAULT ''"),
+        # What the run did outside Row-Bot, from its tools' results: [{tool, title, result, link}] (F31).
+        ("actions_json", "TEXT DEFAULT '[]'"),
     ],
     "pipeline_state": [
         ("current_step_index", "INTEGER DEFAULT 0"),
@@ -358,6 +364,7 @@ _REQUIRED_COLUMNS = {
         "id", "task_id", "thread_id", "started_at", "finished_at", "status",
         "status_message", "steps_total", "steps_done", "pipeline_state_id",
         "task_name", "task_icon", "workspace_id", "workspace_name", "late_for", "notice", "fix",
+        "first_message_id", "actions_json",
     },
     "pipeline_state": {
         "run_id", "task_id", "thread_id", "current_step_index",
@@ -3128,7 +3135,7 @@ def _record_run_recall_notices(run_id: str, generation_id: str) -> None:
 @_schema_retry
 def _finish_run(run_id: str, status: str = "completed",
                 status_message: str = "", terminal_reason: str = "", notice: str = "",
-                fix: str = "") -> None:
+                fix: str = "", actions: list[dict] | None = None) -> None:
     conn = _get_conn()
     row = conn.execute(
         "SELECT status, status_message FROM task_runs WHERE id = ?",
@@ -3136,9 +3143,8 @@ def _finish_run(run_id: str, status: str = "completed",
     ).fetchone()
     if (
         row
-        and str(row["status"] or "")
-        in {"completed", "completed_delivery_failed", "failed", "stopped", "blocked"}
-        and status not in {"completed", "completed_delivery_failed", "failed", "stopped", "blocked"}
+        and str(row["status"] or "") in TERMINAL_RUN_STATUSES
+        and status not in TERMINAL_RUN_STATUSES
     ):
         conn.close()
         return
@@ -3157,12 +3163,15 @@ def _finish_run(run_id: str, status: str = "completed",
         conn.execute("UPDATE task_runs SET notice = ? WHERE id = ?", (notice, run_id))
     if fix:
         conn.execute("UPDATE task_runs SET fix = ? WHERE id = ?", (fix, run_id))
+    if actions is not None:
+        conn.execute("UPDATE task_runs SET actions_json = ? WHERE id = ?",
+                     (json.dumps(actions, ensure_ascii=False), run_id))
     if status in ("completed", "completed_delivery_failed"):
         # A finished run is done, however it got there: a last notify step, "next": "end", a condition that
         # ended early or a resumed approval all used to leave it at "2 of 3 steps" (B313).
         conn.execute("UPDATE task_runs SET steps_done = steps_total WHERE id = ?", (run_id,))
     # Clean up pipeline_state for terminal statuses (no longer needed)
-    if status in ("completed", "completed_delivery_failed", "failed", "stopped", "blocked"):
+    if status in TERMINAL_RUN_STATUSES:
         conn.execute("DELETE FROM pipeline_state WHERE run_id = ?", (run_id,))
     conn.commit()
     conn.close()
@@ -3286,6 +3295,12 @@ def get_upcoming_tasks(limit: int = 5) -> list[dict]:
 
 _active_runs: dict[str, dict] = {}  # thread_id -> {task_id, run_id, step, total, name}
 _active_lock = threading.Lock()
+# A run still going: its turn runs, or it waits for the person on an approval card (F31).
+ACTIVE_RUN_STATUSES = ("running", "waiting")
+# How a run ended. Denied: the person said no on a card. Expired: a newer run replaced it while it
+# waited. Unsure: a tool couldn't confirm its action went through.
+TERMINAL_RUN_STATUSES = frozenset({"completed", "completed_delivery_failed", "failed", "stopped", "blocked",
+                                   "denied", "expired", "unsure", "skipped"})
 
 
 def _workflow_entry_failed(run_id: str, thread_id: str, exc: BaseException) -> None:
@@ -3311,10 +3326,145 @@ def get_running_tasks() -> dict[str, dict]:
         return dict(_active_runs)
 
 
+def active_run_for_conversation(thread_id: str) -> dict | None:
+    """The workflow run going on in this conversation, if any (F31)."""
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT id, task_id, thread_id, status, started_at, steps_done, steps_total, first_message_id "
+            f"FROM task_runs WHERE thread_id = ? AND status IN ({', '.join('?' * len(ACTIVE_RUN_STATUSES))}) "
+            "ORDER BY started_at DESC LIMIT 1", (thread_id, *ACTIVE_RUN_STATUSES),
+        ).fetchone()
+    finally:
+        conn.close()
+    return dict(row) if row else None
+
+
+def _active_run_for_task(task_id: str, *, besides: str = "") -> dict | None:
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT id, task_id, thread_id, status, started_at FROM task_runs WHERE task_id = ? AND id != ? "
+            f"AND status IN ({', '.join('?' * len(ACTIVE_RUN_STATUSES))}) ORDER BY started_at DESC LIMIT 1",
+            (task_id, besides, *ACTIVE_RUN_STATUSES),
+        ).fetchone()
+    finally:
+        conn.close()
+    return dict(row) if row else None
+
+
+def forget_active_run(thread_id: str) -> None:
+    with _active_lock:
+        _active_runs.pop(thread_id, None)
+
+
+@_schema_retry
+def note_run_first_message(run_id: str, message_id: str) -> None:
+    conn = _get_conn()
+    try:
+        conn.execute("UPDATE task_runs SET first_message_id = ? WHERE id = ?", (message_id, run_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+@_publishes_live("runs")
+@_schema_retry
+def note_run_retry(run_id: str, notice: str) -> None:
+    """A run about to try a failed turn again says so, and why."""
+    conn = _get_conn()
+    try:
+        conn.execute("UPDATE task_runs SET status = 'running', notice = ? WHERE id = ?", (notice[:512], run_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _pending_question(thread_id: str) -> str:
+    """The question on the approval card a conversation waits on, in its own words."""
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT message FROM approval_requests WHERE source_thread_id = ? AND status = 'pending' "
+            "ORDER BY requested_at DESC LIMIT 1", (thread_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    return " ".join(str(row[0] or "").split())[:240] if row else ""
+
+
+@_publishes_live("runs", "approvals", "conversations")
+@_schema_retry
+def mark_run_waiting(run_id: str, task: Mapping[str, Any]) -> None:
+    """The run's turn paused on an approval card: it waits for the person, and they hear about it."""
+    conn = _get_conn()
+    try:
+        row = conn.execute("SELECT thread_id, status FROM task_runs WHERE id = ?", (run_id,)).fetchone()
+        if row is None or row["status"] not in ACTIVE_RUN_STATUSES:
+            return
+        question = _pending_question(str(row["thread_id"])) or "It needs your approval to go on."
+        conn.execute("UPDATE task_runs SET status = 'waiting', notice = ? WHERE id = ?", (question, run_id))
+        conn.commit()
+    finally:
+        conn.close()
+    forget_active_run(str(row["thread_id"]))
+    from row_bot.notifications import notify
+    notify(title=f"{task.get('name') or 'A workflow'} needs your approval", message=question,
+           sound="workflow", toast_type="warning", source="workflow", in_app=False)
+
+
+def after_run_finished(task: dict, run_id: str, thread_id: str, status: str, notice: str,
+                       delivery_status: str, delivery_detail: str) -> None:
+    """What follows a finished run: its notices, the workflows that run after it, a one-time workflow's removal."""
+    from row_bot.notifications import notify
+    if status != "stopped":
+        update_task(task["id"], last_run=datetime.now().isoformat())
+    if status in {"completed", "completed_delivery_failed"}:
+        _emit_buddy_workflow_event("done", task_id=task["id"], thread_id=thread_id, label=task.get("name", ""))
+        notify(title=f"{task['name']} finished", message=notice, sound="workflow", source="workflow",
+               requested=True)
+        try:
+            _fire_completion_triggers(task["id"])
+        except Exception:
+            logger.error("Workflows after %s could not start", task["name"], exc_info=True)
+    elif status == "stopped":
+        _emit_buddy_workflow_event("cancelled", task_id=task["id"], thread_id=thread_id, label=task.get("name", ""))
+    else:
+        _emit_buddy_workflow_event("error", task_id=task["id"], thread_id=thread_id,
+                                   label=task.get("name", ""), error=notice)
+        notify(title=f"{task['name']}: {_RUN_ENDING_WORDS.get(status, 'needs a look')}", message=notice,
+               sound="workflow", toast_type="warning", source="workflow")
+    if delivery_status == "delivery_failed":
+        notify(title="Delivery failed", message=f"{task['name']} — {delivery_detail}", sound="timer",
+               toast_type="warning", source="workflow")
+    if task.get("delete_after_run") and status != "stopped":
+        delete_task(task["id"])
+
+
+_RUN_ENDING_WORDS = {"denied": "you said no", "unsure": "not sure it went through", "failed": "didn't finish",
+                     "expired": "replaced by a newer run"}
+
+
+def stop_workflow_run(run: Mapping[str, Any], *, status: str = "stopped", notice: str = "") -> None:
+    """End a run that is going: its turn stops, and the card it waits on is withdrawn."""
+    from row_bot.application.client_platform import client_platform_service
+    thread_id = str(run["thread_id"])
+    waiting = str(run.get("status") or "") == "waiting"
+    client_platform_service.stop_conversation(thread_id)
+    if waiting or not client_platform_service.registry.active(thread_id):
+        # No turn is running, so none ends to finish the run: it is finished here.
+        forget_active_run(thread_id)
+        _finish_run(str(run["id"]), status, notice=notice or ("You stopped it." if status == "stopped" else ""))
+
+
 def stop_task(thread_id: str) -> bool:
     """Signal a running task to stop.  Returns True if found & signalled."""
     from row_bot.runtime.executions import generation_registry
 
+    run = active_run_for_conversation(thread_id)
+    if run is not None:
+        stop_workflow_run(run)
+        return True
     registered = generation_registry.stop(thread_id)
     with _active_lock:
         info = _active_runs.get(thread_id)
@@ -4189,7 +4339,7 @@ def run_task_background(
     resume_step_outputs: dict[str, str] | None = None,
     resume_run_id: str | None = None,
     *, reviewed_capture: dict | None = None, validate: Callable[[], None] | None = None,
-    late_for: str = "",
+    late_for: str = "", trigger: str = "Run",
 ) -> None:
     """Execute a task in a background thread.
 
@@ -4309,33 +4459,35 @@ def run_task_background(
                 _finish_run(run_id, "stopped" if isinstance(exc, InterruptedError) else "failed", status_message=code)
             raise
 
-    # ── Multi-step prompt tasks ──────────────────────────────────────
-    prompts = task["prompts"]
-    steps = task["steps"]
-    if not steps and not prompts:
-        _emit_buddy_workflow_event(
-            "done",
-            task_id=task_id,
-            thread_id=thread_id,
-            label=task.get("name", "Workflow done"),
-        )
+    # ── A run is a chat turn in the workflow's own conversation (F31) ──
+    from row_bot import workflow_turns
+
+    total = len(workflow_turns.messages(task))
+    run_id = str(reviewed_capture["run_id"]) if reviewed_capture else ""
+    earlier = _active_run_for_task(task_id, besides=run_id)
+    if earlier is not None and earlier["status"] == "waiting":
+        # A run still waiting on its card is replaced: what it asked about is a day old.
+        stop_workflow_run(earlier, status="expired", notice="A newer run replaced it before it was approved.")
+    elif earlier is not None:
+        message = "Skipped: the run before it was still going."
+        if run_id:
+            _finish_run(run_id, "skipped", notice=message)
+        else:
+            _record_skipped_run(task, thread_id, message)
         return
-    # Use steps as the authoritative step list
-    if not steps:
-        steps = _prompts_to_steps(prompts)
-    total = len(steps)
-    if reviewed_capture and not resume_run_id:
-        run_id = str(reviewed_capture["run_id"])
-    elif resume_run_id:
-        run_id = resume_run_id
-        _update_run_progress(run_id, start_step)
+    if reviewed_capture:
+        try:
+            _reviewed_run_enter(run_id, task_id, thread_id, reviewed_capture, validate)
+        except BaseException as exc:
+            _workflow_entry_failed(run_id, thread_id, exc)
+            raise
+        _set_run_total(run_id, total)
     else:
         run_id = _record_run_start(task_id, thread_id, total,
                                    task_name=task["name"], task_icon=task["icon"], late_for=late_for)
 
-    if not resume_run_id and start_step == 0 and task.get("workspace_id"):
-        # The workflow's own code folder (N9): bound to the run's conversation before the run's
-        # resources are captured, so every step works in it. A removed folder stops the run here.
+    if task.get("workspace_id"):
+        # The workflow's own code folder (N9): bound to its conversation before the turn starts.
         try:
             folder_id, folder_name, refusal = _open_workflow_folder(task, thread_id)
         except Exception:
@@ -4344,1185 +4496,48 @@ def run_task_background(
             refusal = f"Row-Bot couldn't open {folder_name or 'the code folder'} for this run. Try again."
         _note_run_folder(run_id, folder_id, folder_name)
         if refusal:
-            _update_pipeline_status(run_id, "blocked")
             _finish_run(run_id, "blocked", status_message=refusal, terminal_reason="code_folder_unavailable",
                         notice=refusal, fix="choose_folder")
             _emit_buddy_workflow_event("error", task_id=task_id, thread_id=thread_id,
                                        label="Workflow needs attention", error=refusal)
             return
 
-    def _run():
-        if reviewed_capture:
-            try:
-                _reviewed_run_enter(run_id, task_id, thread_id, reviewed_capture, validate)
-            except BaseException as exc:
-                _workflow_entry_failed(run_id, thread_id, exc)
-                raise
-        from row_bot.agent import invoke_agent, TaskStoppedError
-        from row_bot.models import NoModelChosenError
-        from row_bot.threads import _save_thread_meta, _list_threads
+    with _active_lock:
+        _active_runs[thread_id] = {
+            "task_id": task_id, "run_id": run_id, "step": 0, "total": total, "name": task["name"],
+            "icon": task.get("icon", "⚡"), "started_at": datetime.now().isoformat(), "step_label": "", "log": [],
+        }
+    if late_for:
+        trigger = "Late run"
+    workflow_turns.start(task, thread_id, run_id, trigger=trigger)
 
-        def _thread_exists(tid):
-            return any(t[0] == tid for t in _list_threads())
 
-        from row_bot.cancellation import current_cancellation_scope
-        scope = current_cancellation_scope()
-        _stop_event = scope.stop_event if scope else threading.Event()
+@_publishes_live("runs")
+@_schema_retry
+def _set_run_total(run_id: str, total: int) -> None:
+    conn = _get_conn()
+    try:
+        conn.execute("UPDATE task_runs SET steps_total = ? WHERE id = ?", (total, run_id))
+        conn.commit()
+    finally:
+        conn.close()
 
-        def _task_log(msg: str) -> None:
-            """Append a log line visible to the Command Center UI."""
-            with _active_lock:
-                entry = _active_runs.get(thread_id)
-                if entry and "log" in entry:
-                    entry["log"].append(msg)
 
-        with _active_lock:
-            _active_runs[thread_id] = {
-                "task_id": task_id,
-                "run_id": run_id,
-                "step": start_step,
-                "total": total,
-                "name": task["name"],
-                "icon": task.get("icon", "⚡"),
-                "started_at": datetime.now().isoformat(),
-                "step_label": "",
-                "log": [],
-                "stop_event": _stop_event,
-            }
-
-        last_response = ""
-        stopped = False
-        paused = False  # set True when pausing for approval
-        paused_message = "Waiting for approval"
-        failure_message = ""
-        step_outputs: dict[str, str] = resume_step_outputs.copy() if resume_step_outputs else {}
-        # If resuming, seed last_response from the last step output
-        if step_outputs:
-            last_response = list(step_outputs.values())[-1]
-
-        # Reviewed runs use the exact admitted profile without legacy fallback.
-        if reviewed_capture:
-            runtime_policy = json.loads(json.dumps(reviewed_capture["policy"]))
-        else:
-            # Determine effective approval level (block/approve/auto/full)
-            try:
-                runtime_policy = _workflow_profile_runtime_policy(task, enabled_tool_names)
-            except _WorkflowEffectDenied:
-                raise
-            except Exception:
-                logger.exception(
-                    "Task '%s' could not resolve Agent Profile policy; falling back to Default profile",
-                    task.get("name", ""),
-                )
-                fallback_task = {**task, "agent_profile_id": DEFAULT_WORKFLOW_AGENT_PROFILE_ID}
-                runtime_policy = _workflow_profile_runtime_policy(fallback_task, enabled_tool_names)
-
-        approval_mode = str(runtime_policy["approval_mode"])
-        effective_tool_names = list(runtime_policy["effective_tool_names"])
-        profile_snapshot = dict(runtime_policy["agent_profile_snapshot"])
-        profile_skills = list(runtime_policy["skills_override"])
-        tool_allowlist = list(runtime_policy["tool_allowlist"])
-
-        from row_bot.threads import _set_thread_agent_profile, _set_thread_approval_mode, set_thread_skills_override
-
-        _set_thread_agent_profile(thread_id, str(runtime_policy["agent_profile_id"]))
-        _set_thread_approval_mode(thread_id, approval_mode)
-        set_thread_skills_override(thread_id, profile_skills)
-
-        if tool_allowlist:
-            logger.info(
-                "Task '%s' using Agent Profile tool allow-list - %d tool(s): %s",
-                task["name"], len(effective_tool_names), effective_tool_names,
-            )
-
-        try:
-            from row_bot.agent import _approval_mode_var, _background_workflow_var, _persistent_thread_var
-            _background_workflow_var.set(True)
-            _approval_mode_var.set(approval_mode)
-            _persistent_thread_var.set(bool(task.get("persistent_thread_id")))
-
-            config = {
-                "configurable": {
-                    "thread_id": thread_id,
-                    "runtime_surface": "workflow",
-                    "runtime_mode": "agent",
-                    "approval_mode": approval_mode,
-                    "agent_profile_id": str(runtime_policy["agent_profile_id"]),
-                    "agent_profile_snapshot": profile_snapshot,
-                },
-            }
-            if reviewed_capture:
-                config["_reviewed_task_run"] = reviewed_capture
-            if tool_allowlist:
-                config["configurable"]["tool_allowlist"] = tool_allowlist
-
-            def _format_interrupt_details(interrupts: list[dict]) -> list[str]:
-                return [_approval_detail(intr) for intr in interrupts]
-
-            def _create_graph_interrupt_approval(step_id: str, approval_msg: str,
-                                                 terms: dict | None = None) -> tuple[str, str]:
-                return create_approval_request(
-                    run_id=run_id, task_id=task_id,
-                    step_id=step_id, message=approval_msg, **(terms or {}),
-                )
-
-            def _save_graph_interrupt_state(
-                current_step_index: int,
-                current_step_outputs: dict,
-                current_config: dict,
-                resume_token: str,
-            ) -> None:
-                _save_pipeline_state(
-                    run_id=run_id,
-                    task_id=task_id,
-                    thread_id=thread_id,
-                    current_step_index=current_step_index,
-                    step_outputs=current_step_outputs,
-                    config=current_config,
-                    resume_token=resume_token,
-                    status="paused",
-                    graph_interrupted=True,
-                )
-
-            def _notify_approval_channels(
-                approval_id: str,
-                resume_token: str,
-                approval_msg: str,
-            ) -> None:
-                _push_approval_to_channels(
-                    task, approval_id, resume_token, approval_msg, **effect_kwargs,
-                )
-
-            # Model override
-            if task.get("model_override"):
-                config["configurable"]["model_override"] = task["model_override"]
-                # Set on thread immediately so the UI shows the correct model
-                # while the task is still running.
-                from row_bot.threads import _set_thread_model_override
-                _set_thread_model_override(thread_id, task["model_override"])
-
-            step_index = start_step
-            while step_index < total:
-                if validate is not None:
-                    _validate_effect()
-                if reviewed_capture and (read_task_run(run_id) or {}).get("status") == "stopping":
-                    stopped = True
-                    break
-                step = steps[step_index]
-                step_id = step.get("id", f"step_{step_index + 1}")
-                step_type = step.get("type", "prompt")
-
-                # ── Check stop before each step ──────────────────────
-                if _stop_event.is_set():
-                    stopped = True
-                    logger.info("Task '%s' stopped before step %d/%d",
-                                task["name"], step_index + 1, total)
-                    break
-
-                with _active_lock:
-                    _active_runs[thread_id]["step"] = step_index
-
-                # ── Dispatch by step type ────────────────────────────
-                if step_type == "prompt":
-                    prompt = step.get("prompt", "")
-                    _step_label = (prompt[:60] + "…") if len(prompt) > 60 else prompt
-                    with _active_lock:
-                        _ar = _active_runs.get(thread_id)
-                        if _ar:
-                            _ar["step_label"] = _step_label
-                    _task_log(f"▸ Step {step_index + 1}/{total}: {_step_label}")
-                    try:
-                        from row_bot.buddy.events import BuddyEventType, emit_buddy_event
-                        emit_buddy_event(
-                            BuddyEventType.WORKFLOW_STEP,
-                            source="tasks",
-                            payload={
-                                "task_id": task_id,
-                                "thread_id": thread_id,
-                                "step": step_index + 1,
-                                "total": total,
-                                "label": _step_label,
-                            },
-                        )
-                    except _WorkflowEffectDenied:
-                        raise
-                    except Exception:
-                        logger.debug("Buddy workflow step event failed", exc_info=True)
-                    # Apply per-step model override if present
-                    step_model = step.get("model_override")
-                    if step_model:
-                        config["configurable"]["model_override"] = step_model
-                    elif task.get("model_override"):
-                        config["configurable"]["model_override"] = task["model_override"]
-
-                    prompt = expand_template_vars(
-                        prompt, task_id=task_id,
-                        prev_output=last_response,
-                        step_outputs=step_outputs,
-                    )
-
-                    # Per-step error recovery settings
-                    step_on_error = step.get("on_error", "stop")
-                    step_max_retries = step.get("max_retries", 1)
-                    step_retry_delay = step.get("retry_delay_seconds", 5)
-                    step_attempt = 0
-                    step_succeeded = False
-                    step_failure = ""  # Why its last attempt failed, in plain words.
-
-                    while step_attempt < step_max_retries:
-                        step_attempt += 1
-                        if step_attempt > 1:
-                            import time as _time
-                            logger.info(
-                                "Task '%s' step %d: retry %d/%d (delay %ds)",
-                                task["name"], step_index + 1,
-                                step_attempt, step_max_retries, step_retry_delay,
-                            )
-                            _task_log(f"↻ Step {step_index + 1}: retry {step_attempt}/{step_max_retries}")
-                            _time.sleep(step_retry_delay)
-                            if _stop_event.is_set():
-                                stopped = True
-                                break
-                        try:
-                            generation_id = (
-                                f"workflow:{run_id}:{step_id}:{step_attempt}"
-                            )
-                            config["configurable"]["generation_id"] = generation_id
-                            config["configurable"]["root_objective"] = prompt
-                            _use_step_apps(config, step)
-                            _use_person_rules(config, task, step)
-                            try:
-                                result = invoke_agent(
-                                    prompt,
-                                    effective_tool_names,
-                                    config,
-                                    stop_event=_stop_event,
-                                )
-                            finally:
-                                try:
-                                    _record_run_recall_notices(run_id, generation_id)
-                                except _WorkflowEffectDenied:
-                                    raise
-                                except Exception:
-                                    logger.debug(
-                                        "Could not persist workflow memory fallback notice",
-                                        exc_info=True,
-                                    )
-                            if not isinstance(result, dict):
-                                from row_bot.agent_orchestrator import get_generation_orchestration
-
-                                orchestration = get_generation_orchestration(
-                                    thread_id,
-                                    generation_id,
-                                )
-                                if (
-                                    orchestration
-                                    and int(orchestration.get("required_total") or 0) > 0
-                                    and str(orchestration.get("parent_state") or "") == "waiting"
-                                ):
-                                    _save_pipeline_state(
-                                        run_id=run_id,
-                                        task_id=task_id,
-                                        thread_id=thread_id,
-                                        current_step_index=step_index,
-                                        step_outputs=step_outputs,
-                                        config=config,
-                                        resume_token=f"orchestration:{orchestration['id']}",
-                                        status=_CHILD_AGENT_WAIT_STATUS,
-                                        graph_interrupted=_orchestration_wait_payload(
-                                            str(orchestration["id"]),
-                                            step_id,
-                                        ),
-                                    )
-                                    paused = True
-                                    paused_message = "Waiting for required child Agents"
-                                    _task_log(
-                                        f"Step {step_index + 1}: Waiting for required child Agents"
-                                    )
-                                    break
-                            if isinstance(result, dict) and result.get("type") == "terminal":
-                                terminal_reason = str(result.get("terminal_reason") or "")
-                                message = str(result.get("message") or "Workflow step stopped incomplete.")
-                                step_outputs[step_id] = message
-                                _update_pipeline_status(run_id, "blocked")
-                                _finish_run(
-                                    run_id,
-                                    "blocked",
-                                    status_message=message,
-                                    terminal_reason=terminal_reason,
-                                )
-                                _emit_buddy_workflow_event(
-                                    "error",
-                                    task_id=task_id,
-                                    thread_id=thread_id,
-                                    label="Workflow needs attention",
-                                    error=message,
-                                )
-                                return
-                            # ── Interrupt detection (approve mode) ───
-                            if isinstance(result, dict) and result.get("type") == "interrupt":
-                                # Check stop event first — avoid creating
-                                # an approval for a task that was cancelled.
-                                if _stop_event.is_set():
-                                    stopped = True
-                                    break
-
-                                interrupts = result.get("interrupts", [])
-                                from row_bot.questions import question_item
-
-                                asked = question_item(interrupts)
-                                if asked is not None:
-                                    # Row-Bot asks the person; no approval level answers for them (N4).
-                                    _pause_for_question(
-                                        task=task, run_id=run_id, thread_id=thread_id, step=step,
-                                        step_id=step_id, step_index=step_index, total=total,
-                                        step_outputs=step_outputs, config=config, interrupts=interrupts,
-                                        asked=asked, validate=effect_kwargs.get("validate"),
-                                    )
-                                    paused = True
-                                    paused_message = "Row-Bot has a question"
-                                    _task_log(f"⏸ Step {step_index + 1}: Row-Bot has a question")
-                                    break
-                                if not interrupts:
-                                    # Empty interrupt list — auto-continue
-                                    logger.warning(
-                                        "Task '%s' step %d: empty interrupt list — auto-continuing",
-                                        task["name"], step_index + 1,
-                                    )
-                                    from row_bot.agent import resume_invoke_agent
-                                    result = resume_invoke_agent(
-                                        effective_tool_names, config,
-                                        approved=True, stop_event=_stop_event,
-                                    )
-                                    if isinstance(result, str) and result:
-                                        last_response = result
-                                        step_outputs[step_id] = result
-                                    step_succeeded = True
-                                    break
-
-                                # An interrupt reaching the run: the person is asked. Block refuses
-                                # it; Hands-off approves it (an approval never asks under Hands-off;
-                                # anything else that waits, such as a setup card, goes on); under Ask,
-                                # and under Auto when the reviewer asked, the run pauses and notifies.
-                                # The person's own "Always ask me" card always waits for them (N9).
-                                person_held = _person_only_interrupt(interrupts)
-                                if approval_mode == "block" and not person_held:
-                                    logger.info(
-                                        "Task '%s' step %d: interrupt in block mode — refusing",
-                                        task["name"], step_index + 1,
-                                    )
-                                    from row_bot.agent import resume_invoke_agent
-                                    result = resume_invoke_agent(
-                                        effective_tool_names, config,
-                                        approved=False, stop_event=_stop_event,
-                                    )
-                                    if isinstance(result, str) and result:
-                                        last_response = result
-                                        step_outputs[step_id] = result
-                                    step_succeeded = True
-                                    break
-
-                                if approval_mode == "full" and not person_held:
-                                    logger.info(
-                                        "Task '%s' step %d: interrupt under Hands-off — approving",
-                                        task["name"], step_index + 1,
-                                    )
-                                    from row_bot.agent import resume_invoke_agent
-                                    result = resume_invoke_agent(
-                                        effective_tool_names, config,
-                                        approved=True, stop_event=_stop_event,
-                                    )
-                                    if isinstance(result, str) and result:
-                                        last_response = result
-                                        step_outputs[step_id] = result
-                                    step_succeeded = True
-                                    break
-
-                                # Build approval message from actual tool details
-                                details = _format_interrupt_details(interrupts)
-                                approval_msg = (
-                                    f"Step {step_index + 1}/{total}: "
-                                    + "; ".join(details)
-                                )
-                                resume_token, approval_req_id = _create_graph_interrupt_approval(
-                                    step_id, approval_msg, _person_approval_terms(person_held, step),
-                                )
-                                _save_graph_interrupt_state(
-                                    step_index, step_outputs, config, resume_token,
-                                )
-                                paused = True
-                                logger.info(
-                                    "Task '%s' paused at step %d/%d — tool interrupt: %s",
-                                    task["name"], step_index + 1, total, approval_msg,
-                                )
-                                _task_log(f"⏸ Step {step_index + 1}: Paused for approval")
-                                _push_approval_to_channels(
-                                    task, approval_req_id, resume_token, approval_msg, **effect_kwargs,
-                                )
-                                if notification:
-                                    from row_bot.notifications import notify
-                                    _validate_effect()
-                                    notify(
-                                        title="⏸️ Approval Required",
-                                        message=f"{task['name']}: {approval_msg}",
-                                        sound="workflow",
-                                        toast_type="warning",
-                                        source="workflow",
-                                        in_app=False,  # the app lists pending approvals itself
-                                    )
-                                break  # exit retry loop — approval will resume graph
-                            if result:
-                                last_response = result
-                                step_outputs[step_id] = result
-                            step_succeeded = True
-                            _task_log(f"✓ Step {step_index + 1} complete")
-                            break  # success — exit retry loop
-                        except TaskStoppedError:
-                            stopped = True
-                            _task_log(f"⏹ Step {step_index + 1}: Stopped")
-                            logger.info("Task '%s' stopped during step %d/%d",
-                                        task["name"], step_index + 1, total)
-                            break
-                        except _WorkflowEffectDenied:
-                            raise
-                        except NoModelChosenError as exc:
-                            # No preset and no fallback (decision 9): stop at once
-                            # with the one "choose a model" reason, no retries.
-                            failure_message = str(exc)
-                            _task_log(f"✗ {failure_message}")
-                            step_on_error = "stop"
-                            break
-                        except Exception as exc:
-                            _task_log(f"✗ Step {step_index + 1} error: {str(exc)[:80]}")
-                            step_failure = (f"Step {step_index + 1} failed: "
-                                            f"{str(exc).lstrip('⚠️ ').strip() or type(exc).__name__}")
-                            err_str = str(exc).lower()
-                            override = config["configurable"].get("model_override")
-                            if (override
-                                    and ("model failed to load" in err_str
-                                         or "status code: 500" in err_str)):
-                                failure_message = _workflow_model_failure_message(override, exc)
-                                logger.error(
-                                    "Task %s step %d explicit model override failed: %s",
-                                    task["name"], step_index + 1, failure_message,
-                                )
-                                _task_log(f"✗ {failure_message[:160]}")
-                            else:
-                                logger.error(
-                                    "Task %s step %d attempt %d failed: %s",
-                                    task["name"], step_index + 1, step_attempt, exc,
-                                )
-                            try:
-                                from row_bot.agent import repair_orphaned_tool_calls
-                                # The call it was making is settled: its chat never reads "Running a command".
-                                repair_orphaned_tool_calls(effective_tool_names, config,
-                                                           orphan_message="[Did not finish: the step failed]",
-                                                           marker_message=f"⚠️ *[{step_failure}]*")
-                            except _WorkflowEffectDenied:
-                                raise
-                            except Exception:
-                                pass
-
-                    if stopped:
-                        break
-                    if paused:
-                        break  # interrupt-based approval — exit step loop
-                    # Apply on_error policy if all retries exhausted
-                    if not step_succeeded:
-                        if step_on_error == "skip":
-                            failure_message = ""
-                            logger.info(
-                                "Task '%s' step %d: on_error=skip — continuing",
-                                task["name"], step_index + 1,
-                            )
-                        elif step_on_error == "stop":
-                            logger.info(
-                                "Task '%s' step %d: on_error=stop — halting pipeline",
-                                task["name"], step_index + 1,
-                            )
-                            # A step that ended in an error fails the run (B417).
-                            failure_message = failure_message or step_failure
-                            stopped = True
-                            break
-
-                # ── Approval step type ────────────────────────────────
-                elif step_type == "approval":
-                    approval_msg = step.get("message", f"Approval required to continue task '{task['name']}'")
-                    approval_msg = expand_template_vars(
-                        approval_msg, task_id=task_id,
-                        prev_output=last_response,
-                        step_outputs=step_outputs,
-                    )
-                    timeout_min = step.get("timeout_minutes") or 0
-                    resume_token, approval_req_id = create_approval_request(
-                        run_id=run_id,
-                        task_id=task_id,
-                        step_id=step_id,
-                        message=approval_msg,
-                        timeout_minutes=timeout_min,
-                    )
-                    # Save pipeline state for later resume
-                    _save_pipeline_state(
-                        run_id=run_id,
-                        task_id=task_id,
-                        thread_id=thread_id,
-                        current_step_index=step_index,
-                        step_outputs=step_outputs,
-                        config=config,
-                        resume_token=resume_token,
-                        status="paused",
-                    )
-                    step_outputs[step_id] = approval_msg
-                    paused = True
-                    _task_log(f"⏸ Step {step_index + 1}: Waiting for approval")
-                    logger.info(
-                        "Task '%s' paused at step %d/%d for approval (token=%s…)",
-                        task["name"], step_index + 1, total, resume_token[:8],
-                    )
-                    _notify_approval_channels(
-                        approval_req_id, resume_token, approval_msg,
-                    )
-                    # Notify user an approval is pending
-                    if notification:
-                        from row_bot.notifications import notify
-                        _validate_effect()
-                        notify(
-                            title="⏸️ Approval Required",
-                            message=f"{task['name']}: {approval_msg}",
-                            sound="workflow",
-                            toast_type="warning",
-                            source="workflow",
-                            in_app=False,  # the app lists pending approvals itself
-                        )
-                    break  # exit the step loop — resume will continue
-
-                # ── Condition step type ────────────────────────────────
-                elif step_type == "condition":
-                    cond_expr = step.get("condition", "true")
-                    cond_context = {
-                        "prev_output": last_response,
-                        "step_outputs": step_outputs,
-                        "task_id": task_id,
-                        "thread_id": thread_id,
-                        "model_override": task.get("model_override") or "",
-                    }
-                    result = evaluate_condition(cond_expr, cond_context)
-                    target = step.get("if_true") if result else step.get("if_false")
-                    logger.info(
-                        "Task '%s' condition step %d: '%s' → %s → jump to %s",
-                        task["name"], step_index + 1, cond_expr, result, target,
-                    )
-                    step_outputs[step_id] = str(result)
-                    if target:
-                        resolved = _resolve_step_index(steps, target)
-                        if resolved is None:
-                            # "end" — terminate pipeline
-                            break
-                        if resolved == step_index:
-                            logger.error(
-                                "Task '%s' condition step %d would jump to itself — stopping",
-                                task["name"], step_index + 1,
-                            )
-                            break
-                        step_index = resolved
-                        _update_run_progress(run_id, step_index)
-                        continue  # skip the step_index += 1 below
-                    # No target specified — fall through to next step
-
-                # ── Subtask step type ─────────────────────────────────
-                elif step_type == "subtask":
-                    child_task_id = step.get("task_id", "")
-                    pass_output = step.get("pass_output", True)
-                    child_task = get_task(child_task_id)
-                    if not child_task:
-                        logger.error(
-                            "Task '%s' step %d: subtask '%s' not found — skipping",
-                            task["name"], step_index + 1, child_task_id,
-                        )
-                    else:
-                        current_depth = _subtask_depth_var.get()
-                        if current_depth >= _MAX_SUBTASK_DEPTH:
-                            logger.error(
-                                "Task '%s' step %d: subtask depth limit (%d) reached — skipping",
-                                task["name"], step_index + 1, _MAX_SUBTASK_DEPTH,
-                            )
-                        else:
-                            child_result = _run_subtask_sync(
-                                child_task, thread_id, effective_tool_names,
-                                config, _stop_event,
-                                parent_output=last_response if pass_output else "",
-                                depth=current_depth + 1,
-                                **effect_kwargs,
-                            )
-                            if child_result is not None:
-                                last_response = child_result
-                                step_outputs[step_id] = child_result
-                            if _stop_event.is_set():
-                                stopped = True
-                                break
-
-                # ── Notify step type ──────────────────────────────────
-                elif step_type == "delegate_agent":
-                    objective = expand_template_vars(
-                        step.get("objective") or step.get("prompt", ""),
-                        task_id=task_id,
-                        prev_output=last_response,
-                        step_outputs=step_outputs,
-                    ).strip()
-                    context = expand_template_vars(
-                        step.get("context", ""),
-                        task_id=task_id,
-                        prev_output=last_response,
-                        step_outputs=step_outputs,
-                    ).strip()
-                    if not objective:
-                        failure_message = "Child Agent step is missing an objective."
-                        logger.error(
-                            "Task '%s' step %d: %s",
-                            task["name"],
-                            step_index + 1,
-                            failure_message,
-                        )
-                        if step.get("on_error", "stop") == "skip":
-                            step_outputs[step_id] = failure_message
-                        else:
-                            stopped = True
-                            break
-                    else:
-                        child_run_id = ""
-                        requested_worktree = (
-                            bool(step.get("use_worktree"))
-                            or str(step.get("editing_safety") or "").strip() == "worktree"
-                            or str(step.get("workspace_mode") or "").strip() == "worktree"
-                        )
-                        try:
-                            from row_bot.agent_runner import spawn_agent_run
-                            from row_bot.threads import _get_thread_developer_workspace
-
-                            profile_ref = str(
-                                step.get("profile")
-                                or step.get("agent_profile_id")
-                                or "worker"
-                            ).strip()
-                            developer_workspace_id = str(
-                                step.get("developer_workspace_id")
-                                or _get_thread_developer_workspace(thread_id)
-                                or ""
-                            ).strip()
-                            editing_safety = str(step.get("editing_safety") or "").strip()
-                            use_worktree = bool(step.get("use_worktree")) or editing_safety == "worktree"
-                            workspace_mode = str(step.get("workspace_mode") or "").strip()
-                            if use_worktree and not workspace_mode:
-                                workspace_mode = "worktree"
-                            return_mode = str(step.get("return_mode") or "").strip().lower()
-                            wait_for_result = bool(step.get("wait", True))
-                            if return_mode in {"background", "start_in_background"}:
-                                wait_for_result = False
-                            _task_log(f"Step {step_index + 1}/{total}: Child Agent")
-                            from row_bot.agent_orchestrator import create_or_get_orchestration
-                            from row_bot.models import get_current_model
-
-                            delegation_generation_id = (
-                                f"workflow:{run_id}:{step_id}:delegate"
-                            )
-                            orchestration = create_or_get_orchestration(
-                                parent_thread_id=thread_id,
-                                parent_generation_id=delegation_generation_id,
-                                parent_run_id=run_id,
-                                root_objective=objective,
-                                model_ref=str(
-                                    step.get("model_override")
-                                    or config["configurable"].get("model_override")
-                                    or get_current_model()
-                                ),
-                                approval_mode=approval_mode,
-                                runtime_surface="workflow",
-                                delivery_context={
-                                    "workflow_run_id": run_id,
-                                    "workflow_step_id": step_id,
-                                },
-                                orchestration_version=2,
-                            )
-                            child_run = spawn_agent_run(
-                                objective,
-                                parent_thread_id=thread_id,
-                                parent_run_id=run_id,
-                                profile=profile_ref,
-                                display_name=str(step.get("display_name") or ""),
-                                context=context,
-                                context_mode=str(step.get("context_mode") or "auto"),
-                                enabled_tool_names=effective_tool_names,
-                                model_override=str(step.get("model_override") or ""),
-                                approval_mode=approval_mode,
-                                developer_workspace_id=developer_workspace_id,
-                                workspace_mode=workspace_mode,
-                                use_worktree=use_worktree,
-                                orchestration_id=str(orchestration.get("id") or ""),
-                                orchestration_required=wait_for_result,
-                                wait=False,
-                                # "Always ask me" goes with the agent this step starts (N9).
-                                person_rules={"step": bool(step.get("always_ask")),
-                                              "items": [str(item) for item in task.get("always_ask") or []]}
-                                if step.get("always_ask") or task.get("always_ask") else {},
-                            )
-                            child_run_id = str((child_run or {}).get("id") or "")
-                            if wait_for_result:
-                                from row_bot.agent_orchestrator import arm_parent_wait
-                                from row_bot.agent_runs import get_agent_run
-
-                                child_run = get_agent_run(child_run_id) or child_run
-                                child_output = _child_agent_output(child_run)
-                                step_outputs[step_id] = json.dumps(
-                                    child_output,
-                                    sort_keys=True,
-                                )
-                                _save_pipeline_state(
-                                    run_id=run_id,
-                                    task_id=task_id,
-                                    thread_id=thread_id,
-                                    current_step_index=step_index,
-                                    step_outputs=step_outputs,
-                                    config=config,
-                                    resume_token=f"orchestration:{orchestration['id']}",
-                                    status=_CHILD_AGENT_WAIT_STATUS,
-                                    graph_interrupted=_orchestration_wait_payload(
-                                        str(orchestration["id"]),
-                                        step_id,
-                                    ),
-                                )
-                                arm_parent_wait(
-                                    str(orchestration["id"]),
-                                    continuation_state={
-                                        "config": config,
-                                        "enabled_tool_names": effective_tool_names,
-                                        "workflow_run_id": run_id,
-                                        "workflow_step_id": step_id,
-                                        "workflow_direct_child": True,
-                                    },
-                                    delivery_context={
-                                        "runtime_surface": "workflow",
-                                        "workflow_run_id": run_id,
-                                    },
-                                )
-                                paused = True
-                                paused_message = (
-                                    "Child Agent is waiting for approval"
-                                    if child_output["status"] == "waiting_approval"
-                                    else "Waiting for required child Agent"
-                                )
-                                _task_log(
-                                    f"Step {step_index + 1}: Waiting for required child Agent"
-                                )
-                                break
-                            child_status = str((child_run or {}).get("status") or "")
-                            summary = str((child_run or {}).get("summary") or "")
-                            child_output = _child_agent_output(child_run)
-                            step_outputs[step_id] = json.dumps(child_output, sort_keys=True)
-                            last_response = summary or step_outputs[step_id]
-                            _task_log(
-                                "Step "
-                                f"{step_index + 1}: Agent {child_output['agent_run_id']} "
-                                f"{child_status or 'started'}"
-                            )
-                        except _WorkflowEffectDenied:
-                            raise
-                        except Exception as exc:
-                            failure_message = str(exc)
-                            step_outputs[step_id] = failure_message
-                            logger.error(
-                                "Task '%s' step %d delegate Agent failed: %s",
-                                task["name"],
-                                step_index + 1,
-                                exc,
-                            )
-                            _task_log(
-                                f"Step {step_index + 1} delegate failed: {failure_message[:80]}"
-                            )
-                            if _is_child_agent_setup_failure(
-                                exc,
-                                child_run_id=child_run_id,
-                                use_worktree=requested_worktree,
-                            ):
-                                stopped = True
-                                break
-                            if step.get("on_error", "stop") == "skip":
-                                failure_message = ""
-                            else:
-                                stopped = True
-                                break
-
-                elif step_type == "wait_for_agents":
-                    try:
-                        run_ids: list[str] = []
-                        raw_run_ids = step.get("run_ids") or []
-                        if isinstance(raw_run_ids, str):
-                            raw_run_ids = [
-                                item.strip()
-                                for item in raw_run_ids.split(",")
-                                if item.strip()
-                            ]
-                        if isinstance(raw_run_ids, list):
-                            run_ids.extend(
-                                str(item).strip()
-                                for item in raw_run_ids
-                                if str(item).strip()
-                            )
-                        if not run_ids:
-                            for raw_output in step_outputs.values():
-                                try:
-                                    parsed_output = json.loads(raw_output)
-                                except _WorkflowEffectDenied:
-                                    raise
-                                except Exception:
-                                    continue
-                                candidate = str(parsed_output.get("agent_run_id") or "").strip()
-                                if candidate:
-                                    run_ids.append(candidate)
-                        seen_run_ids: set[str] = set()
-                        run_ids = [
-                            child_run_id
-                            for child_run_id in run_ids
-                            if not (child_run_id in seen_run_ids or seen_run_ids.add(child_run_id))
-                        ]
-                        if run_ids:
-                            from row_bot.agent_orchestrator import (
-                                arm_parent_wait,
-                                create_or_get_orchestration,
-                                get_member_for_run,
-                                register_member,
-                                transfer_member,
-                            )
-                            from row_bot.agent_runs import get_agent_run
-                            from row_bot.models import get_current_model
-
-                            orchestration = create_or_get_orchestration(
-                                parent_thread_id=thread_id,
-                                parent_generation_id=f"workflow:{run_id}:{step_id}:wait",
-                                parent_run_id=run_id,
-                                root_objective=f"Wait for {len(run_ids)} delegated Agent run(s).",
-                                model_ref=str(
-                                    config["configurable"].get("model_override")
-                                    or get_current_model()
-                                ),
-                                approval_mode=approval_mode,
-                                runtime_surface="workflow",
-                                delivery_context={"workflow_run_id": run_id},
-                                orchestration_version=2,
-                            )
-                            for child_run_id in run_ids:
-                                existing_member = get_member_for_run(child_run_id)
-                                if existing_member:
-                                    transfer_member(
-                                        str(orchestration["id"]),
-                                        child_run_id,
-                                        required=True,
-                                    )
-                                    continue
-                                child_run = get_agent_run(child_run_id)
-                                if not child_run:
-                                    raise ValueError(
-                                        f"Agent Run {child_run_id} was not found."
-                                    )
-                                register_member(
-                                    str(orchestration["id"]),
-                                    child_run_id,
-                                    required=True,
-                                )
-                            step_outputs[step_id] = json.dumps(
-                                {"agent_run_ids": run_ids},
-                                sort_keys=True,
-                            )
-                            _save_pipeline_state(
-                                run_id=run_id,
-                                task_id=task_id,
-                                thread_id=thread_id,
-                                current_step_index=step_index,
-                                step_outputs=step_outputs,
-                                config=config,
-                                resume_token=f"orchestration:{orchestration['id']}",
-                                status=_CHILD_AGENT_WAIT_STATUS,
-                                graph_interrupted=_orchestration_wait_payload(
-                                    str(orchestration["id"]),
-                                    step_id,
-                                ),
-                            )
-                            arm_parent_wait(
-                                str(orchestration["id"]),
-                                continuation_state={
-                                    "config": config,
-                                    "enabled_tool_names": effective_tool_names,
-                                    "workflow_run_id": run_id,
-                                    "workflow_step_id": step_id,
-                                    "workflow_direct_child": True,
-                                },
-                                delivery_context={
-                                    "runtime_surface": "workflow",
-                                    "workflow_run_id": run_id,
-                                },
-                            )
-                            paused = True
-                            paused_message = "Waiting for required child Agents"
-                            _task_log(
-                                f"Step {step_index + 1}: Waiting for {len(run_ids)} required Agent run(s)"
-                            )
-                            break
-                    except _WorkflowEffectDenied:
-                        raise
-                    except Exception as exc:
-                        failure_message = str(exc)
-                        step_outputs[step_id] = failure_message
-                        logger.error(
-                            "Task '%s' step %d wait for Agents failed: %s",
-                            task["name"],
-                            step_index + 1,
-                            exc,
-                        )
-                        if step.get("on_error", "stop") == "skip":
-                            failure_message = ""
-                        else:
-                            stopped = True
-                            break
-
-                elif step_type == "notify":
-                    notify_msg = step.get("message", "")
-                    notify_msg = expand_template_vars(
-                        notify_msg, task_id=task_id,
-                        prev_output=last_response,
-                        step_outputs=step_outputs,
-                    )
-                    notify_channel = step.get("channel", "desktop")
-                    if step.get("always_ask") or f"builtin:channel:{notify_channel}" in (task.get("always_ask") or []):
-                        # "Always ask me" (N9): the message goes out only once the person approved
-                        # exactly this text to this destination.
-                        card = _delivery_card(task, notify_channel, notify_msg)
-                        from row_bot.tools.approval_gate import call_binding
-
-                        binding = call_binding("notify", {"channel": notify_channel,
-                                                          "destination": card["destination"], "text": notify_msg})
-                        if not _claim_person_approval(run_id, step_id, binding):
-                            approval_msg = f"Step {step_index + 1}/{total}: Send to {card['destination']}"
-                            resume_token, approval_req_id = create_approval_request(
-                                run_id=run_id, task_id=task_id, step_id=step_id, message=approval_msg,
-                                timeout_minutes=int(step.get("timeout_minutes") or PERSON_APPROVAL_TIMEOUT_MINUTES),
-                                approval_payload_json=_person_payload(binding, card),
-                            )
-                            _save_pipeline_state(
-                                run_id=run_id, task_id=task_id, thread_id=thread_id,
-                                current_step_index=step_index, step_outputs=step_outputs,
-                                config=config, resume_token=resume_token, status="paused",
-                            )
-                            paused = True
-                            _task_log(f"⏸ Step {step_index + 1}: Waiting for your approval")
-                            _notify_approval_channels(approval_req_id, resume_token, approval_msg)
-                            break
-                    if notify_channel == "desktop":
-                        from row_bot.notifications import notify as _notify
-                        _validate_effect()
-                        _notify(
-                            title=f"📋 {task['name']}",
-                            message=notify_msg,
-                            sound="workflow",
-                            source="workflow",
-                            requested=True,
-                        )
-                    else:
-                        # Use task's delivery channel mechanism
-                        try:
-                            _validate_effect()
-                            _deliver_to_channel(
-                                {**task, "delivery_channel": notify_channel},
-                                notify_msg, **effect_kwargs,
-                            )
-                        except _WorkflowEffectDenied:
-                            raise
-                        except Exception as exc:
-                            logger.error(
-                                "Task '%s' step %d notify failed: %s",
-                                task["name"], step_index + 1, exc,
-                            )
-                    step_outputs[step_id] = notify_msg
-                    last_response = notify_msg
-                    logger.info(
-                        "Task '%s' step %d: notify via %s",
-                        task["name"], step_index + 1, notify_channel,
-                    )
-
-                # Unknown step types — log and skip
-                else:
-                    logger.warning(
-                        "Task %s step %d: unknown step type '%s' — skipping",
-                        task["name"], step_index + 1, step_type,
-                    )
-
-                # ── Optional "next" override on any step ─────────────
-                next_target = step.get("next")
-                if next_target:
-                    resolved = _resolve_step_index(steps, next_target)
-                    if resolved is None:
-                        # "end" — terminate pipeline
-                        break
-                    step_index = resolved
-                    _update_run_progress(run_id, step_index)
-                    continue  # skip the default step_index += 1
-
-                _update_run_progress(run_id, step_index + 1)
-                step_index += 1
-
-            # ── Handle stopped task ────────────────────────────────────
-            if stopped:
-                # Repair any orphaned tool calls left mid-step
-                try:
-                    from row_bot.agent import repair_orphaned_tool_calls
-                    repair_orphaned_tool_calls(effective_tool_names, config)
-                except _WorkflowEffectDenied:
-                    raise
-                except Exception:
-                    pass
-                if failure_message:
-                    _finish_run(run_id, "failed", status_message=failure_message)
-                    _emit_buddy_workflow_event(
-                        "error",
-                        task_id=task_id,
-                        thread_id=thread_id,
-                        label="Workflow error",
-                        error=failure_message,
-                    )
-                    if _thread_exists(thread_id):
-                        thread_name = (f"⚡ {task['name']} (failed) — "
-                                       f"{datetime.now().strftime('%b %d, %I:%M %p')}")
-                        _save_thread_meta(thread_id, thread_name)
-                    return
-                _finish_run(run_id, "stopped")
-                _emit_buddy_workflow_event(
-                    "cancelled",
-                    task_id=task_id,
-                    thread_id=thread_id,
-                    label="Workflow stopped",
-                )
-                if _thread_exists(thread_id):
-                    thread_name = (f"⚡ {task['name']} (stopped) — "
-                                   f"{datetime.now().strftime('%b %d, %I:%M %p')}")
-                    _save_thread_meta(thread_id, thread_name)
-                if notification:
-                    from row_bot.notifications import notify
-                    _validate_effect()
-                    notify(
-                        title=f"{task['name']} stopped",
-                        message="",
-                        sound="workflow",
-                        source="workflow",
-                    )
-                return  # skip delivery, skip delete_after_run
-
-            # ── Handle paused task (waiting for approval) ─────────────
-            if paused:
-                _finish_run(run_id, "paused",
-                            status_message=paused_message)
-                if _thread_exists(thread_id):
-                    thread_name = (f"⚡ {task['name']} (paused) — "
-                                   f"{datetime.now().strftime('%b %d, %I:%M %p')}")
-                    _save_thread_meta(thread_id, thread_name)
-                return  # the resume mechanism will continue execution
-
-            # ── Determine final status ────────────────────────────────
-            deliver_text = last_response or f"✅ Task '{task['name']}' completed."
-            _validate_effect()
-            delivery_status, delivery_detail = _deliver_to_channels(
-                task, deliver_text, **effect_kwargs,
-            )
-
-            final_status = _workflow_final_status_for_delivery(delivery_status)
-            _finish_run(run_id, final_status, status_message=delivery_detail)
-            if not (reviewed_capture and task.get("delete_after_run")):
-                update_task(task_id, last_run=datetime.now().isoformat())
-            logger.info("run_task_background: '%s' finished with status=%s",
-                        task.get("name", "?"), final_status)
-            _emit_buddy_workflow_event(
-                "done",
-                task_id=task_id,
-                thread_id=thread_id,
-                label=task.get("name", "Workflow done"),
-            )
-
-            # Fire any tasks triggered by this task's completion
-            if final_status.startswith("completed"):
-                try:
-                    _validate_effect()
-                    _fire_completion_triggers(task_id, **effect_kwargs)
-                except _WorkflowEffectDenied:
-                    raise
-                except Exception as exc:
-                    logger.error("Completion trigger error for %s: %s",
-                                 task["name"], exc)
-
-            # Thread naming (skip if thread was deleted while running)
-            if _thread_exists(thread_id):
-                thread_name = f"⚡ {task['name']} — {datetime.now().strftime('%b %d, %I:%M %p')}"
-                _save_thread_meta(thread_id, thread_name)
-
-            # Desktop + in-app notification (always)
-            if notification:
-                from row_bot.notifications import notify
-                _validate_effect()
-                # "Tea haiku test finished", named as workflows are elsewhere (U17); where it went, if it
-                # was delivered. A failed delivery has its own notice below.
-                notify(
-                    title=f"{task['name']} finished",
-                    message=delivery_detail if delivery_status == "delivered" else "",
-                    sound="workflow",
-                    source="workflow",
-                    requested=True,
-                )
-                if delivery_status == "delivery_failed":
-                    _validate_effect()
-                    notify(
-                        title="Delivery failed",
-                        message=f"{task['name']} — {delivery_detail}",
-                        sound="timer",
-                        toast_type="warning",
-                        source="workflow",
-                    )
-
-            # Auto-delete one-shot tasks
-            if task.get("delete_after_run"):
-                _validate_effect()
-                delete_task(task_id, **({"expected_revision": reviewed_capture["task_revision"], "validate": _validate_effect, "preserve_conversations": True} if reviewed_capture else {}))
-
-        except Exception as exc:
-            logger.error("Task %s crashed: %s", task["name"], exc)
-            _emit_buddy_workflow_event(
-                "error",
-                task_id=task_id,
-                thread_id=thread_id,
-                label="Workflow error",
-                error=str(exc),
-            )
-            _finish_run(run_id, "failed", status_message=str(exc))
-        finally:
-            with _active_lock:
-                _active_runs.pop(thread_id, None)
-            # Release the browser tab owned by this thread (if any)
-            try:
-                from row_bot.tools.browser_tool import get_session_manager as _get_bsm
-                _get_bsm().kill_session(thread_id)
-            except _WorkflowEffectDenied:
-                raise
-            except Exception:
-                pass
-
-    from row_bot.runtime.executions import current_execution, generation_registry
-    owner = current_execution()
-    if (reviewed_capture and owner is not None and owner.domain == "workflow"
-            and owner.domain_id == run_id and owner.conversation_id == thread_id):
-        # Graph resume continues the same owned producer. Do not register a
-        # competing segment or acknowledge quiescence before its tail returns.
-        _run()
-        return
-    t = generation_registry.thread(target=_run, conversation_id=thread_id,
-                                   stop_event=threading.Event(), domain="workflow",
-                                   domain_id=run_id if reviewed_capture else str(uuid.uuid4()), name=f"task-{task_id}", resource_context=True,
-                                   on_entry_failure=lambda exc: _workflow_entry_failed(run_id, thread_id, exc))
-    t.start()
+@_publishes_live("runs", "conversations")
+def _record_skipped_run(task: Mapping[str, Any], thread_id: str, message: str) -> None:
+    now = datetime.now().isoformat()
+    conn = _get_conn()
+    try:
+        conn.execute(
+            "INSERT INTO task_runs (id, task_id, thread_id, started_at, finished_at, status, notice, "
+            "steps_total, steps_done, task_name, task_icon) VALUES (?, ?, ?, ?, ?, 'skipped', ?, 0, 0, ?, ?)",
+            (uuid.uuid4().hex[:12], task["id"], thread_id, now, now, message, task.get("name", ""),
+             task.get("icon", "")),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    logger.info("Skipped a run of '%s': %s", task.get("name", ""), message)
 
 
 # ── Scheduler (APScheduler) ──────────────────────────────────────────────────
@@ -5778,13 +4793,19 @@ def _prepare_task_thread(task: dict) -> str:
         _set_thread_model_override,
     )
 
-    thread_id = task.get("persistent_thread_id") or uuid.uuid4().hex[:12]
-    if not task.get("notify_only"):
-        thread_name = (
-            f"\u26a1 {task['name']} \u2014 "
-            f"{datetime.now().strftime('%b %d, %I:%M %p')}"
-        )
-        _save_thread_meta(thread_id, thread_name)
+    from row_bot.threads import _thread_exists, _thread_write_blocked, create_thread
+
+    thread_id = str(task.get("persistent_thread_id") or "")
+    if task.get("notify_only"):
+        return thread_id or uuid.uuid4().hex[:12]
+    # Every workflow has one conversation of its own; each run is a new turn in it (F31).
+    if not thread_id or not _thread_exists(thread_id):
+        thread_id = thread_id if thread_id and not _thread_write_blocked(thread_id) else uuid.uuid4().hex[:12]
+        create_thread(f"\u26a1 {task['name']}", thread_id=thread_id, name_source="manual",
+                      seed_default_skills=False)
+        update_task(task["id"], persistent_thread_id=thread_id)
+    else:
+        _save_thread_meta(thread_id, f"\u26a1 {task['name']}")
     if task.get("model_override"):
         _set_thread_model_override(thread_id, task["model_override"])
     try:

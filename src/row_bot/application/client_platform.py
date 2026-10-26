@@ -1652,6 +1652,10 @@ class ClientPlatformService:
                                         assistant_text=final_text, model_ref=model_ref,
                                         goal_id=str((started_goal or {}).get("id") or ""),
                                         error_text=error_text)
+                with _turn_end_step(conversation_id, "the workflow's run"):
+                    # A workflow's run moves on when its turn ends: its next message, or its outcome (F31).
+                    from row_bot.workflow_turns import after_turn as after_workflow_turn
+                    after_workflow_turn(conversation_id, status=status, reply=final_text, error_text=error_text)
                 self.finish_execution(handle, status)
                 from row_bot.application.conversation_naming import after_turn
                 after_turn(self, conversation_id, status=status, reply=final_text, model_ref=model_ref)
