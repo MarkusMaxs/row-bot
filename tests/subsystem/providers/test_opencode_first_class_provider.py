@@ -1175,13 +1175,11 @@ def test_phase6_workflow_model_overrides_store_opencode_refs(tmp_path, monkeypat
         "OpenCode workflow",
         prompts=["say hi"],
         model_override="model:opencode_go:glm-5.1",
-        steps=[{"type": "prompt", "prompt": "step hi", "model_override": "model:opencode_go:mimo-v2.5-pro"}],
     )
     tasks.update_task(task_id, model_override="model:opencode_zen:nemotron-3-super-free")
 
     task = tasks.get_task(task_id)
     assert task["model_override"] == "model:opencode_zen:nemotron-3-super-free"
-    assert task["steps"][0]["model_override"] == "model:opencode_go:mimo-v2.5-pro"
 
 
 def test_phase6_channel_model_override_preserves_opencode_ref(tmp_path, monkeypatch, reload_for_data_dir):

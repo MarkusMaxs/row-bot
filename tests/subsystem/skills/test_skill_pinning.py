@@ -140,26 +140,6 @@ def test_surface_defaults_are_additive_for_designer_and_developer(tmp_path, relo
     ]
 
 
-def test_task_advanced_mode_is_persisted(tmp_path, reload_for_data_dir):
-    _skills, _activation, _threads, tasks = _reload_skill_pinning_modules(tmp_path, reload_for_data_dir)
-
-    advanced_id = tasks.create_task(
-        name="Prompt-only advanced task",
-        prompts=["say hi"],
-        advanced_mode=True,
-    )
-    assert tasks.get_task(advanced_id)["advanced_mode"] is True
-
-    tasks.update_task(advanced_id, advanced_mode=False)
-    assert tasks.get_task(advanced_id)["advanced_mode"] is False
-
-    stepped_id = tasks.create_task(
-        name="Stepped task",
-        steps=[{"type": "prompt", "prompt": "say hi"}],
-    )
-    assert tasks.get_task(stepped_id)["advanced_mode"] is True
-
-
 def test_custom_tool_builder_uses_tool_guide_not_manual_skill(tmp_path, reload_for_data_dir):
     skills, _activation, _threads, _tasks = _reload_skill_pinning_modules(tmp_path, reload_for_data_dir)
     skills.load_skills()

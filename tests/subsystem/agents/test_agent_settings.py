@@ -5,6 +5,7 @@ import json
 import pytest
 
 from row_bot.agent_settings import (
+    MAX_ROUNDS,
     AgentRuntimeSettings,
     agent_runtime_settings_path,
     load_agent_runtime_settings,
@@ -19,8 +20,21 @@ def test_missing_settings_use_reviewed_defaults(tmp_path, monkeypatch) -> None:
     settings = load_agent_runtime_settings()
 
     assert settings == AgentRuntimeSettings()
-    assert settings.max_iterations == 90
     assert not agent_runtime_settings_path().exists()
+
+
+def test_rounds_are_a_safety_ceiling_not_a_setting(tmp_path, monkeypatch) -> None:
+    """F31: a turn goes on while it makes progress; a saved "steps per run" from before is ignored."""
+    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path))
+    agent_runtime_settings_path().write_text(
+        json.dumps({**AgentRuntimeSettings().to_dict(), "max_iterations": 90}), encoding="utf-8"
+    )
+
+    loaded = load_agent_runtime_settings()
+
+    assert loaded == AgentRuntimeSettings()
+    assert loaded.max_iterations == MAX_ROUNDS == 1000
+    assert "max_iterations" not in loaded.to_dict()
 
 
 def test_settings_round_trip_atomically_at_call_time(tmp_path, monkeypatch) -> None:
@@ -29,7 +43,6 @@ def test_settings_round_trip_atomically_at_call_time(tmp_path, monkeypatch) -> N
     monkeypatch.setenv("ROW_BOT_DATA_DIR", str(first))
     saved = save_agent_runtime_settings(
         AgentRuntimeSettings(
-            max_iterations=120,
             max_spawn_depth=4,
             max_concurrent_children=7,
             max_active_children_global=16,
@@ -46,8 +59,7 @@ def test_settings_round_trip_atomically_at_call_time(tmp_path, monkeypatch) -> N
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("max_iterations", 0),
-        ("max_iterations", True),
+        ("max_spawn_depth", True),
         ("max_spawn_depth", -1),
         ("max_concurrent_children", 1.5),
         ("max_active_children_global", 0),
@@ -61,7 +73,7 @@ def test_invalid_complete_form_does_not_replace_prior_settings(
     value: object,
 ) -> None:
     monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path))
-    prior = save_agent_runtime_settings(AgentRuntimeSettings(max_iterations=91))
+    prior = save_agent_runtime_settings(AgentRuntimeSettings(max_spawn_depth=2))
     raw = prior.__dict__ | {field: value}
 
     with pytest.raises(ValueError):
@@ -81,26 +93,26 @@ def test_corrupt_file_falls_back_without_rewriting(tmp_path, monkeypatch) -> Non
 
 def test_reset_persists_defaults(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path))
-    save_agent_runtime_settings(AgentRuntimeSettings(max_iterations=140))
+    save_agent_runtime_settings(AgentRuntimeSettings(max_concurrent_children=5))
 
     reset = reset_agent_runtime_settings()
 
     assert reset == AgentRuntimeSettings()
     assert json.loads(agent_runtime_settings_path().read_text(encoding="utf-8"))[
-        "max_iterations"
-    ] == 90
+        "max_concurrent_children"
+    ] == 3
 
 
 def test_goal_turn_limit_defaults_to_none_and_older_files_keep_their_values(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path))
     assert load_agent_runtime_settings().goal_max_turns == 0
-    older = {**AgentRuntimeSettings(max_iterations=120).to_dict()}
+    older = {**AgentRuntimeSettings(max_spawn_depth=2).to_dict()}
     older.pop("goal_max_turns")
     agent_runtime_settings_path().write_text(json.dumps(older), encoding="utf-8")
 
     loaded = load_agent_runtime_settings()
 
-    assert (loaded.max_iterations, loaded.goal_max_turns) == (120, 0)
+    assert (loaded.max_spawn_depth, loaded.goal_max_turns) == (2, 0)
     saved = save_agent_runtime_settings(loaded.to_dict() | {"goal_max_turns": 30})
     assert load_agent_runtime_settings() == saved
     assert saved.goal_max_turns == 30

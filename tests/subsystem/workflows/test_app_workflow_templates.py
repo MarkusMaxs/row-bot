@@ -1,12 +1,13 @@
 """Workflows with apps: templates are created switched off and scheduled, never with a webhook, and only
-once their app is connected; a step that names its apps leaves every other app out. Fakes only."""
+once their app is connected. Each is one message, run as a chat turn with every tool a chat has (F31).
+Fakes only."""
 from __future__ import annotations
 
 import pytest
 
 from row_bot.application import client_integrations as api
 from row_bot.application.client_platform import ClientPlatformError
-from row_bot.integrations import scope, workflow_templates
+from row_bot.integrations import scope
 
 pytestmark = pytest.mark.subsystem
 
@@ -40,7 +41,7 @@ def test_templates_say_which_apps_are_connected_and_offer_connect_otherwise(task
     assert tasks.list_tasks() == []
 
 
-def test_a_template_makes_a_switched_off_scheduled_workflow_limited_to_its_app(tasks):
+def test_a_template_makes_a_switched_off_scheduled_one_message_workflow(tasks):
     created = api.use_workflow_template("github_pr_digest")
     again = api.use_workflow_template("github_pr_digest")
     assert again["name"] == "GitHub pull-request digest (2)"  # Never overwrites one the person has.
@@ -48,16 +49,8 @@ def test_a_template_makes_a_switched_off_scheduled_workflow_limited_to_its_app(t
     assert task["name"] == "GitHub pull-request digest" and task["enabled"] in (False, 0)
     assert task["schedule"] == "daily:09:00" and not task.get("trigger")  # Scheduled; never a webhook.
     assert task["safety_mode"] == "approve"
-    prompt = task["steps"][0]
-    assert prompt["type"] == "prompt" and prompt["apps"] == ["mcp:github"]
-    assert task["steps"][1]["type"] == "notify" and task["steps"][1]["channel"] == "desktop"
-
-
-def test_a_step_that_names_apps_leaves_every_other_app_out(tasks):
-    narrowed = scope.step_scope(["mcp:github"])
-    assert narrowed == {"exclude_servers": ["Notion"], "exclude_tools": ["gmail"], "focus": ["mcp:github"], "skills": []}
-    assert scope.step_scope([]) is None and scope.step_scope(None) is None
-    assert scope.step_scope(["mcp:gone"])["exclude_servers"] == ["GitHub", "Notion"]  # A removed app: nothing else.
+    [message] = task["prompts"]
+    assert message.startswith("Using GitHub,")
 
 
 @pytest.mark.parametrize("template", ["web_daily_brief", "weekly_chat_summary"])
@@ -71,4 +64,4 @@ def test_templates_without_apps_work_with_nothing_connected(tasks, monkeypatch, 
     task = tasks.get_task(created["task_id"])
     assert task["enabled"] in (False, 0) and task["schedule"] and not task.get("trigger")
     assert task["safety_mode"] == "approve"
-    assert task["steps"][0]["type"] == "prompt" and "apps" not in task["steps"][0]
+    assert len(task["prompts"]) == 1

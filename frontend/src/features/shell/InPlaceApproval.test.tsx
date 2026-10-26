@@ -53,7 +53,7 @@ afterEach(() => {
   localStorage.clear();
 });
 
-it('answers in place with the same reviewed command as the approval card', async () => {
+it('opens a waiting approval on its own card, never approving from the list (F31)', async () => {
   const resolved = vi.fn();
   render(
     <ApprovalDecision
@@ -62,52 +62,27 @@ it('answers in place with the same reviewed command as the approval card', async
       onResolved={resolved}
     />,
   );
-  const answer = screen.getByRole('group', { name: 'Answer: Daily News' });
-  await act(async () =>
-    fireEvent.click(within(answer).getByRole('button', { name: 'Approve' })),
-  );
-  expect(approval).toHaveBeenCalledWith('approval-news');
-  expect(intent).toHaveBeenCalledWith(
-    'approval-news',
-    'approval.resolve',
-    { decision: 'approve', nonce: 'nonce-news' },
-    '0',
-  );
-  expect(screen.getByRole('status')).toHaveTextContent('Approved');
-  expect(resolved).toHaveBeenCalledOnce();
+  expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Review: Daily News' }));
+  expect(open).toHaveBeenCalledOnce();
+  const dialog = open.mock.calls[0][0];
+  expect(dialog.title).toBe('Review and approve');
+  expect(dialog.description).toBe('Daily News');
+  // The dialog holds the approval card itself: its exact action, then Approve or Deny there.
+  expect(dialog.content.props.id).toBe('approval-news');
+  expect(intent).not.toHaveBeenCalled();
 });
 
-it('denies in place, and an approval answered elsewhere just leaves the list', async () => {
-  const resolved = vi.fn();
-  const { unmount } = render(
-    <ApprovalDecision approvalId="approval-news" subject="Daily News" />,
-  );
-  await act(async () =>
-    fireEvent.click(screen.getByRole('button', { name: 'Deny' })),
-  );
-  expect(intent).toHaveBeenCalledWith(
-    'approval-news',
-    'approval.resolve',
-    { decision: 'reject', nonce: 'nonce-news' },
-    '0',
-  );
-  expect(screen.getByRole('status')).toHaveTextContent('Denied');
-  unmount();
-
-  approval.mockRejectedValueOnce({ code: 'approval_already_resolved' });
+it("answers Row-Bot's question on its card (N4)", () => {
   render(
     <ApprovalDecision
-      approvalId="approval-news"
+      approvalId="question-news"
       subject="Daily News"
-      onResolved={resolved}
+      kind="question"
     />,
   );
-  await act(async () =>
-    fireEvent.click(screen.getByRole('button', { name: 'Approve' })),
-  );
-  expect(screen.getByRole('status')).toHaveTextContent('Already answered');
-  expect(resolved).toHaveBeenCalledOnce();
-  expect(intent).toHaveBeenCalledOnce();
+  fireEvent.click(screen.getByRole('button', { name: 'Answer: Daily News' }));
+  expect(open.mock.calls[0][0].title).toBe('Row-Bot has a question');
 });
 
 it('lists each approval with what it is, since when it waits, and where it was asked', () => {
@@ -142,7 +117,9 @@ it('lists each approval with what it is, since when it waits, and where it was a
   expect(
     within(trip).getByRole('link', { name: 'Open the conversation' }),
   ).toHaveAttribute('href', '/conversations/conversation-trip');
-  expect(within(trip).getByRole('button', { name: 'Approve' })).toBeEnabled();
+  expect(
+    within(trip).getByRole('button', { name: 'Review: Trip planning' }),
+  ).toBeEnabled();
 });
 
 it('says since when an approval waits in plain words', () => {

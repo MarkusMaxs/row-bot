@@ -5,7 +5,7 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react';
-import { ArrowUp, Check, GitBranch, GripVertical, Plus, X } from 'lucide-react';
+import { ArrowUp, Check, GripVertical, Plus, X } from 'lucide-react';
 import {
   useTaskEditSession,
   useTaskEditValue,
@@ -50,8 +50,6 @@ export interface TaskEditorProps {
     label: string;
     selected: boolean;
   }>;
-  /** Open the step graph for this saved workflow. */
-  onAdvancedSteps?: () => void;
   /** Open the saved workflow's model and approval settings. */
   onTaskSettings?: () => void;
 }
@@ -93,7 +91,6 @@ export default function TaskEditor({
   onSaved,
   onCancel,
   deliveryChannels = [],
-  onAdvancedSteps,
   onTaskSettings,
   session: injectedSession,
 }: TaskEditorProps) {
@@ -179,7 +176,7 @@ export default function TaskEditor({
     setFields((current) => ({ ...current, [key]: value }));
   }
 
-  // B122: leaving for the step graph or the model settings with unsaved
+  // B122: leaving for the model settings with unsaved
   // changes asks to save first instead of dropping them silently.
   const [leaving, setLeaving] = useState<null | (() => void)>(null);
   const leaveTo = (go: () => void) => () => {
@@ -225,13 +222,12 @@ export default function TaskEditor({
     setSaving(true);
     setError('');
     try {
-      const submitted =
-        fields.notify_only && !snapshot?.advanced
-          ? {
-              ...fields,
-              prompts: fields.prompts.filter((prompt) => prompt.trim()),
-            }
-          : fields;
+      const submitted = fields.notify_only
+        ? {
+            ...fields,
+            prompts: fields.prompts.filter((prompt) => prompt.trim()),
+          }
+        : fields;
       const next = meta.uncertain
         ? await session.retryOperation<TaskSaveResult>()
         : await session.run(() =>
@@ -262,7 +258,6 @@ export default function TaskEditor({
     }
   }
 
-  const advanced = snapshot?.advanced ?? false;
   const legacyDelivery = snapshot?.legacy_delivery ?? false;
   const locked =
     saving || loading || meta.uncertain || stale || (!!taskId && !snapshot);
@@ -399,7 +394,6 @@ export default function TaskEditor({
             <Field label="Task type">
               <Select
                 value={fields.notify_only ? 'reminder' : 'workflow'}
-                disabled={advanced}
                 onChange={(event) =>
                   change('notify_only', event.target.value === 'reminder')
                 }
@@ -408,25 +402,8 @@ export default function TaskEditor({
                 <option value="reminder">Reminder</option>
               </Select>
             </Field>
-            {taskId && onAdvancedSteps && !fields.notify_only && (
-              <Button
-                variant="ghost"
-                className="small task-builder-graph"
-                onClick={leaveTo(onAdvancedSteps)}
-              >
-                <GitBranch size={14} aria-hidden /> Open step graph
-              </Button>
-            )}
           </div>
-          {advanced && (
-            <p className="task-builder-note">
-              This workflow uses branches, approvals or agents. Its steps are
-              kept as they are; open the step graph to see or change them.
-            </p>
-          )}
-          {advanced &&
-          !fields.notify_only &&
-          !fields.prompts.length ? null : fields.notify_only ? (
+          {fields.notify_only ? (
             <Field label="Reminder text">
               <textarea
                 className="input"
@@ -439,7 +416,7 @@ export default function TaskEditor({
           ) : (
             <StepList
               prompts={fields.prompts}
-              readOnly={advanced}
+              readOnly={false}
               onChange={(prompts) => change('prompts', prompts)}
             />
           )}
@@ -590,8 +567,9 @@ export default function TaskEditor({
 }
 
 /**
- * Prompt steps in run order. Drag a handle, use its arrow keys, or the move
- * buttons; each step keeps its accessible name ("Prompt 2").
+ * The messages each run sends, in order, as chat turns in the workflow's own
+ * conversation (F31). Drag a handle, use its arrow keys, or the move buttons;
+ * each keeps its accessible name ("Message 2").
  */
 function StepList({
   prompts,
@@ -611,15 +589,16 @@ function StepList({
     const [item] = next.splice(from, 1);
     next.splice(to, 0, item);
     onChange(next);
-    setAnnouncement(`Step ${from + 1} moved to position ${to + 1}.`);
+    setAnnouncement(`Message ${from + 1} moved to position ${to + 1}.`);
   };
   return (
-    <div className="task-steps" role="group" aria-label="Workflow prompts">
+    <div className="task-steps" role="group" aria-label="Workflow messages">
       <div className="task-steps-head">
-        <h3>Steps</h3>
+        <h3>Messages</h3>
         <span className="home-caption">
-          Steps run in order; each sees the previous output.
-          {!readOnly && ' Type {{ in a step to add the date or its result.'}
+          Each run sends these to its own conversation, like you would in a
+          chat. Say what to do if there is nothing to do.
+          {!readOnly && ' Type {{ to add the date.'}
         </span>
       </div>
       <ol className="task-step-list">
@@ -651,7 +630,7 @@ function StepList({
                 type="button"
                 className="task-step-handle"
                 draggable
-                aria-label={`Reorder step ${index + 1}`}
+                aria-label={`Reorder message ${index + 1}`}
                 title="Drag, or use the arrow keys, to reorder"
                 onDragStart={(event) => {
                   event.dataTransfer.effectAllowed = 'move';
@@ -692,7 +671,7 @@ function StepList({
             <span className="task-step-number" aria-hidden>
               {index + 1}
             </span>
-            <Field label={`Prompt ${index + 1}`}>
+            <Field label={`Message ${index + 1}`}>
               <PromptTextarea
                 className="input"
                 rows={3}
@@ -702,8 +681,8 @@ function StepList({
                 maxLength={16384}
                 placeholder={
                   index === 0
-                    ? 'What should Row-Bot do first?'
-                    : 'Then what? It can use the previous output.'
+                    ? 'What should Row-Bot do?'
+                    : 'Then what? It sees the reply to the message before.'
                 }
                 onChange={(next) =>
                   onChange(
@@ -718,7 +697,7 @@ function StepList({
               <div className="task-step-actions">
                 <IconButton
                   size="sm"
-                  label={`Move prompt ${index + 1} up`}
+                  label={`Move message ${index + 1} up`}
                   disabled={index === 0}
                   onClick={() => move(index, index - 1)}
                 >
@@ -726,7 +705,7 @@ function StepList({
                 </IconButton>
                 <IconButton
                   size="sm"
-                  label={`Remove prompt ${index + 1}`}
+                  label={`Remove message ${index + 1}`}
                   disabled={prompts.length === 1}
                   onClick={() =>
                     onChange(
@@ -748,7 +727,7 @@ function StepList({
           disabled={prompts.length >= 100}
           onClick={() => onChange([...prompts, ''])}
         >
-          <Plus size={14} aria-hidden /> Add step
+          <Plus size={14} aria-hidden /> Add message
         </Button>
       )}
       <p className="visually-hidden" aria-live="polite">

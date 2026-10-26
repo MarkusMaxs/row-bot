@@ -3,14 +3,6 @@
     "ProfileFields": {
       "additionalProperties": false,
       "properties": {
-        "allow_tools": {
-          "items": {
-            "type": "string"
-          },
-          "maxItems": 100,
-          "title": "Allow Tools",
-          "type": "array"
-        },
         "approval_mode": {
           "enum": [
             "inherit",
@@ -108,7 +100,6 @@
         "when_to_use",
         "instructions",
         "capability",
-        "allow_tools",
         "skills",
         "context_mode",
         "workspace_mode",

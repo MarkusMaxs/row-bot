@@ -5933,14 +5933,6 @@
     "ProfileFields": {
       "additionalProperties": false,
       "properties": {
-        "allow_tools": {
-          "items": {
-            "type": "string"
-          },
-          "maxItems": 100,
-          "title": "Allow Tools",
-          "type": "array"
-        },
         "approval_mode": {
           "enum": [
             "inherit",
@@ -6038,7 +6030,6 @@
         "when_to_use",
         "instructions",
         "capability",
-        "allow_tools",
         "skills",
         "context_mode",
         "workspace_mode",
@@ -8959,94 +8950,6 @@
       "title": "SubscriptionProbePayload",
       "type": "object"
     },
-    "TaskApprovalCommand": {
-      "additionalProperties": false,
-      "properties": {
-        "client_session_id": {
-          "format": "uuid",
-          "title": "Client Session Id",
-          "type": "string"
-        },
-        "command_id": {
-          "format": "uuid",
-          "title": "Command Id",
-          "type": "string"
-        },
-        "expected_revision": {
-          "pattern": "^(0|[1-9][0-9]{0,19})$",
-          "title": "Expected Revision",
-          "type": "string"
-        },
-        "payload": {
-          "$ref": "#/$defs/TaskApprovalPayload"
-        },
-        "type": {
-          "const": "task.approval",
-          "title": "Type",
-          "type": "string"
-        }
-      },
-      "required": [
-        "command_id",
-        "client_session_id",
-        "expected_revision",
-        "type",
-        "payload"
-      ],
-      "title": "TaskApprovalCommand",
-      "type": "object"
-    },
-    "TaskApprovalPayload": {
-      "additionalProperties": false,
-      "properties": {
-        "approval_id": {
-          "maxLength": 128,
-          "minLength": 1,
-          "pattern": "^[A-Za-z0-9:_-]+$",
-          "title": "Approval Id",
-          "type": "string"
-        },
-        "approval_revision": {
-          "pattern": "^[a-f0-9]{64}$",
-          "title": "Approval Revision",
-          "type": "string"
-        },
-        "approved": {
-          "title": "Approved",
-          "type": "boolean"
-        },
-        "nonce": {
-          "maxLength": 128,
-          "minLength": 1,
-          "title": "Nonce",
-          "type": "string"
-        },
-        "run_id": {
-          "maxLength": 128,
-          "minLength": 1,
-          "pattern": "^[A-Za-z0-9:_-]+$",
-          "title": "Run Id",
-          "type": "string"
-        },
-        "task_id": {
-          "maxLength": 128,
-          "minLength": 1,
-          "pattern": "^[A-Za-z0-9:_-]+$",
-          "title": "Task Id",
-          "type": "string"
-        }
-      },
-      "required": [
-        "task_id",
-        "run_id",
-        "approval_id",
-        "approval_revision",
-        "approved",
-        "nonce"
-      ],
-      "title": "TaskApprovalPayload",
-      "type": "object"
-    },
     "TaskCreateCommand": {
       "additionalProperties": false,
       "properties": {
@@ -9392,446 +9295,6 @@
       "title": "TaskEditableFields",
       "type": "object"
     },
-    "TaskGraphFields": {
-      "additionalProperties": false,
-      "properties": {
-        "always_ask": {
-          "anyOf": [
-            {
-              "type": "boolean"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Always Ask"
-        },
-        "apps": {
-          "anyOf": [
-            {
-              "items": {
-                "maxLength": 512,
-                "minLength": 3,
-                "type": "string"
-              },
-              "maxItems": 8,
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Apps"
-        },
-        "channel": {
-          "anyOf": [
-            {
-              "maxLength": 16384,
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Channel"
-        },
-        "condition": {
-          "anyOf": [
-            {
-              "maxLength": 16384,
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Condition"
-        },
-        "context": {
-          "anyOf": [
-            {
-              "maxLength": 16384,
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Context"
-        },
-        "developer_workspace_id": {
-          "anyOf": [
-            {
-              "maxLength": 16384,
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Developer Workspace Id"
-        },
-        "editing_safety": {
-          "anyOf": [
-            {
-              "maxLength": 16384,
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Editing Safety"
-        },
-        "if_approved": {
-          "anyOf": [
-            {
-              "maxLength": 16384,
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "If Approved"
-        },
-        "if_denied": {
-          "anyOf": [
-            {
-              "maxLength": 16384,
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "If Denied"
-        },
-        "if_false": {
-          "anyOf": [
-            {
-              "maxLength": 16384,
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "If False"
-        },
-        "if_true": {
-          "anyOf": [
-            {
-              "maxLength": 16384,
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "If True"
-        },
-        "max_retries": {
-          "anyOf": [
-            {
-              "maximum": 10,
-              "minimum": 1,
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Max Retries"
-        },
-        "message": {
-          "anyOf": [
-            {
-              "maxLength": 16384,
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Message"
-        },
-        "next": {
-          "anyOf": [
-            {
-              "maxLength": 16384,
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Next"
-        },
-        "objective": {
-          "anyOf": [
-            {
-              "maxLength": 16384,
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Objective"
-        },
-        "on_error": {
-          "anyOf": [
-            {
-              "maxLength": 16384,
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "On Error"
-        },
-        "pass_output": {
-          "anyOf": [
-            {
-              "type": "boolean"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Pass Output"
-        },
-        "profile": {
-          "anyOf": [
-            {
-              "maxLength": 16384,
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Profile"
-        },
-        "prompt": {
-          "anyOf": [
-            {
-              "maxLength": 16384,
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Prompt"
-        },
-        "retry_delay_seconds": {
-          "anyOf": [
-            {
-              "maximum": 300,
-              "minimum": 0,
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Retry Delay Seconds"
-        },
-        "return_mode": {
-          "anyOf": [
-            {
-              "maxLength": 16384,
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Return Mode"
-        },
-        "run_ids": {
-          "anyOf": [
-            {
-              "items": {
-                "maxLength": 128,
-                "type": "string"
-              },
-              "maxItems": 100,
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Run Ids"
-        },
-        "task_id": {
-          "anyOf": [
-            {
-              "maxLength": 16384,
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Task Id"
-        },
-        "timeout_minutes": {
-          "anyOf": [
-            {
-              "maximum": 1440,
-              "minimum": 0,
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Timeout Minutes"
-        },
-        "timeout_seconds": {
-          "anyOf": [
-            {
-              "maximum": 7200,
-              "minimum": 1,
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Timeout Seconds"
-        }
-      },
-      "title": "TaskGraphFields",
-      "type": "object"
-    },
-    "TaskGraphStepEdit": {
-      "additionalProperties": false,
-      "properties": {
-        "fields": {
-          "$ref": "#/$defs/TaskGraphFields"
-        },
-        "id": {
-          "maxLength": 128,
-          "minLength": 1,
-          "title": "Id",
-          "type": "string"
-        },
-        "type": {
-          "maxLength": 128,
-          "minLength": 1,
-          "title": "Type",
-          "type": "string"
-        }
-      },
-      "required": [
-        "id",
-        "type",
-        "fields"
-      ],
-      "title": "TaskGraphStepEdit",
-      "type": "object"
-    },
-    "TaskGraphUpdateCommand": {
-      "additionalProperties": false,
-      "properties": {
-        "client_session_id": {
-          "format": "uuid",
-          "title": "Client Session Id",
-          "type": "string"
-        },
-        "command_id": {
-          "format": "uuid",
-          "title": "Command Id",
-          "type": "string"
-        },
-        "expected_revision": {
-          "pattern": "^(0|[1-9][0-9]{0,19})$",
-          "title": "Expected Revision",
-          "type": "string"
-        },
-        "payload": {
-          "$ref": "#/$defs/TaskGraphUpdatePayload"
-        },
-        "type": {
-          "const": "task.graph.update",
-          "title": "Type",
-          "type": "string"
-        }
-      },
-      "required": [
-        "command_id",
-        "client_session_id",
-        "expected_revision",
-        "type",
-        "payload"
-      ],
-      "title": "TaskGraphUpdateCommand",
-      "type": "object"
-    },
-    "TaskGraphUpdatePayload": {
-      "additionalProperties": false,
-      "properties": {
-        "steps": {
-          "items": {
-            "$ref": "#/$defs/TaskGraphStepEdit"
-          },
-          "maxItems": 100,
-          "minItems": 1,
-          "title": "Steps",
-          "type": "array"
-        },
-        "task_id": {
-          "maxLength": 128,
-          "minLength": 1,
-          "pattern": "^[A-Za-z0-9:_-]+$",
-          "title": "Task Id",
-          "type": "string"
-        },
-        "task_revision": {
-          "pattern": "^[a-f0-9]{64}$",
-          "title": "Task Revision",
-          "type": "string"
-        }
-      },
-      "required": [
-        "task_id",
-        "task_revision",
-        "steps"
-      ],
-      "title": "TaskGraphUpdatePayload",
-      "type": "object"
-    },
     "TaskRunCommand": {
       "additionalProperties": false,
       "properties": {
@@ -9927,18 +9390,6 @@
           "title": "Approval Mode",
           "type": "string"
         },
-        "concurrency_group": {
-          "anyOf": [
-            {
-              "maxLength": 128,
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "title": "Concurrency Group"
-        },
         "missed_runs": {
           "default": "skip",
           "enum": [
@@ -9959,10 +9410,6 @@
             }
           ],
           "title": "Model Override"
-        },
-        "persistent_enabled": {
-          "title": "Persistent Enabled",
-          "type": "boolean"
         },
         "trigger_task_id": {
           "anyOf": [
@@ -10000,13 +9447,11 @@
         }
       },
       "required": [
-        "concurrency_group",
         "trigger_type",
         "trigger_task_id",
         "model_override",
         "agent_profile_id",
-        "approval_mode",
-        "persistent_enabled"
+        "approval_mode"
       ],
       "title": "TaskSettingsFields",
       "type": "object"
@@ -11379,12 +10824,10 @@
       "skill.preference": "#/$defs/SkillPreferenceCommand",
       "skill.proposal.apply": "#/$defs/SkillProposalApplyCommand",
       "skill.proposal.reject": "#/$defs/SkillProposalRejectCommand",
-      "task.approval": "#/$defs/TaskApprovalCommand",
       "task.create": "#/$defs/TaskCreateCommand",
       "task.delete": "#/$defs/TaskDeleteCommand",
       "task.delivery.update": "#/$defs/TaskDeliveryUpdateCommand",
       "task.duplicate": "#/$defs/TaskDuplicateCommand",
-      "task.graph.update": "#/$defs/TaskGraphUpdateCommand",
       "task.run": "#/$defs/TaskRunCommand",
       "task.settings.update": "#/$defs/TaskSettingsUpdateCommand",
       "task.stop": "#/$defs/TaskStopCommand",
@@ -11520,9 +10963,6 @@
       "$ref": "#/$defs/ArtifactShareCommand"
     },
     {
-      "$ref": "#/$defs/TaskGraphUpdateCommand"
-    },
-    {
       "$ref": "#/$defs/TaskCreateCommand"
     },
     {
@@ -11548,9 +10988,6 @@
     },
     {
       "$ref": "#/$defs/TaskStopCommand"
-    },
-    {
-      "$ref": "#/$defs/TaskApprovalCommand"
     },
     {
       "$ref": "#/$defs/WorkspaceEditCommand"

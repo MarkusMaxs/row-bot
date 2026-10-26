@@ -1,20 +1,15 @@
 import { useCallback, useRef, useSyncExternalStore } from 'react';
 import type { ClientController } from '../../api/controller';
-import type {
-  TaskGraphSnapshot,
-  TaskSaveResult,
-  TaskSettingsSnapshot,
-} from '../../api/types';
+import type { TaskSaveResult, TaskSettingsSnapshot } from '../../api/types';
 import { clientError } from '../../api/errors';
 import {
   DEFINITE_TASK_REFUSALS,
   taskEdits,
   type TaskCommandOwner,
 } from './task-edits';
-import { taskGraphs } from './task-graphs';
 import { taskSettings } from './task-settings';
 
-export type TaskEditKind = 'task' | 'graph' | 'settings';
+export type TaskEditKind = 'task' | 'settings';
 type Meta = {
   active: boolean;
   dirty: boolean;
@@ -185,7 +180,6 @@ export type TaskEditEntry = {
   label: string;
   session: TaskEditSession;
   edits: ReturnType<typeof taskEdits>;
-  graph: ReturnType<typeof taskGraphs>;
   settings: ReturnType<typeof taskSettings>;
 };
 
@@ -240,7 +234,6 @@ export function createTaskEditSessions(
       label: string;
       session: TaskEditSession;
       edits: ReturnType<typeof taskEdits>;
-      graph: ReturnType<typeof taskGraphs>;
       settings: ReturnType<typeof taskSettings>;
     }
   >();
@@ -317,7 +310,7 @@ export function createTaskEditSessions(
     if (
       disposed ||
       !authentication ||
-      !['task', 'graph', 'settings'].includes(kind) ||
+      !['task', 'settings'].includes(kind) ||
       taskId.length > 128 ||
       (kind !== 'task' && !taskId)
     )
@@ -338,7 +331,6 @@ export function createTaskEditSessions(
         return null;
       }
       const editOwner: TaskCommandOwner<TaskSaveResult> = { pending: null };
-      const graphOwner: TaskCommandOwner<TaskGraphSnapshot> = { pending: null };
       const settingsOwner: TaskCommandOwner<TaskSettingsSnapshot> = {
         pending: null,
       };
@@ -346,11 +338,9 @@ export function createTaskEditSessions(
         kind,
         taskId,
         notify,
-        () =>
-          !!(editOwner.pending || graphOwner.pending || settingsOwner.pending),
+        () => !!(editOwner.pending || settingsOwner.pending),
         () => {
           editOwner.pending = null;
-          graphOwner.pending = null;
           settingsOwner.pending = null;
         },
       );
@@ -358,7 +348,6 @@ export function createTaskEditSessions(
         label: taskName.trim() || (taskId ? 'Saved workflow' : 'New workflow'),
         session,
         edits: taskEdits(controller, editOwner),
-        graph: taskGraphs(controller, graphOwner),
         settings: taskSettings(controller, settingsOwner),
       };
       entries.set(key, entry);

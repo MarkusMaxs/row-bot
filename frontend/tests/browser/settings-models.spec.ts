@@ -185,18 +185,22 @@ test('Vision, media, context, and delegation controls write local settings', asy
     .locator('summary')
     .filter({ hasText: 'Limits for long work' })
     .click();
-  const rounds = models.getByRole('spinbutton', { name: 'Steps per run' });
-  await rounds.fill('91');
-  await rounds.press('Enter');
+  // A run has no step limit to set: it goes on while it makes progress (F31).
+  await expect(
+    models.getByRole('spinbutton', { name: 'Steps per run' }),
+  ).toHaveCount(0);
+  const helpers = models.getByRole('spinbutton', {
+    name: 'Helpers at a time, in total',
+  });
+  await helpers.fill('9');
+  await helpers.press('Enter');
   await expect(
     notices.filter({ hasText: 'New runs use these limits' }),
   ).toBeVisible();
   await models
     .getByRole('button', { name: 'Restore recommended defaults' })
     .click();
-  await expect(
-    models.getByRole('spinbutton', { name: 'Steps per run' }),
-  ).toHaveValue('90');
+  await expect(helpers).toHaveValue('8');
   await assertNoOverflow(page);
 });
 
