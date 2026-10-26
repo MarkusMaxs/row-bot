@@ -2,7 +2,12 @@
  * Learning's words and numbers, one name per thing (designs/learning-ux.md, "Words").
  * Never shown: self-improvement, RSI, candidate, adapter, LoRA, eval, audit, cron.
  */
-import type { LearningCommand } from '../../api/types';
+import type {
+  LearningChangeView,
+  LearningCommand,
+  LearningKindState,
+  LearningOvernight,
+} from '../../api/types';
 
 export type TeachCategory = NonNullable<LearningCommand['category']>;
 
@@ -161,6 +166,7 @@ export function percentWords(done: number, total: number): string {
 
 /** Where a personal model runs ("Runs in", designs/learning-ux.md §5). */
 export const RUNTIME_NAMES: Record<string, string> = {
+  row_bot: 'Row-Bot',
   ollama: 'Ollama',
   lmstudio: 'LM Studio',
   llama_cpp: 'llama.cpp server',
@@ -198,6 +204,13 @@ export const VERSION_FAILURES: Record<string, string> = {
   probe_failed: 'It loaded, but didn’t pass Row-Bot’s check.',
   tool_turn_failed:
     'It started, but couldn’t finish a short task that uses a tool.',
+  server_missing:
+    'Row-Bot needs one more part of the training engine to run it.',
+  server_unavailable:
+    'Row-Bot can run it only on a computer with an NVIDIA graphics card.',
+  server_failed: 'Row-Bot’s runner stopped while starting it.',
+  load_failed:
+    'It didn’t load. The graphics card may not have enough free memory.',
 };
 
 /** "Needs more examples · 46 of 100 so far". */
@@ -267,4 +280,166 @@ export const DOWNLOAD_FAILURES: Record<string, string> = {
     'The training engine was installed but didn’t start. Try again; if it happens again, remove it in Learning settings and download it afresh.',
   no_cuda:
     'The training engine couldn’t use the graphics card. Update your NVIDIA driver, then try again.',
+};
+
+/** What a tier's training needs of the computer's memory, measured (O105). */
+export function memoryNeedWords(gb: number | null | undefined): string {
+  return gb
+    ? `Training needs about ${gb} GB of this computer’s memory free (RAM and virtual memory).`
+    : '';
+}
+
+/** How to give training more memory on this system (O105): never "close Row-Bot". */
+export function memoryAdvice(system: string | null | undefined): string {
+  if (system === 'windows')
+    return 'Raise Windows’ virtual memory (Advanced system settings › Performance › Virtual memory), then check again.';
+  if (system === 'linux') return 'Add swap space or RAM, then check again.';
+  return 'Add RAM, then check again.';
+}
+
+/** "once", "twice", "3 times". */
+export function timesWords(count: number): string {
+  if (count === 1) return 'once';
+  if (count === 2) return 'twice';
+  return `${count.toLocaleString()} times`;
+}
+
+/**
+ * "Next look tonight at 1:00 AM" within the next day, else "Next look Fri 1:00 AM"
+ * (designs/learning-ux.md §3). Never a time already past: then it looks once Row-Bot is free.
+ */
+export function nextLookWords(iso: string, now: Date = new Date()): string {
+  const when = new Date(iso);
+  if (Number.isNaN(when.getTime())) return '';
+  if (when.getTime() <= now.getTime() + 60_000)
+    return 'Looks for things to improve once Row-Bot is free';
+  const time = new Intl.DateTimeFormat(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(when);
+  if (when.getTime() - now.getTime() <= 24 * 3_600_000)
+    return `Next look tonight at ${time}`;
+  const day = new Intl.DateTimeFormat(undefined, { weekday: 'short' }).format(
+    when,
+  );
+  return `Next look ${day} ${time}`;
+}
+
+export type OvernightLine = { text: string; tone?: 'warning' };
+
+/** Last night's look for things to improve, as Overnight lines (designs §3, §9). */
+export function overnightLines(night: LearningOvernight): OvernightLine[] {
+  switch (night.state) {
+    case 'claude_plan':
+      return [
+        {
+          text: 'Learning’s improvement work needs a model other than your Claude plan. Choose another default model in Settings › Models.',
+          tone: 'warning',
+        },
+      ];
+    case 'no_model':
+      return [
+        {
+          text: 'Choose a default model in Settings › Models so Learning can look for things to improve.',
+          tone: 'warning',
+        },
+      ];
+    case 'limit':
+      return [
+        {
+          text: 'Didn’t look for things to improve: this month’s limit was reached.',
+        },
+      ];
+    case 'unavailable':
+      return [
+        {
+          text: 'Couldn’t look for things to improve: the model wasn’t available. Trying again tonight.',
+        },
+      ];
+    case 'failed':
+      return [
+        {
+          text: 'Couldn’t look for things to improve. Trying again tonight.',
+        },
+      ];
+    case 'nothing':
+      return [{ text: 'Looked for things to improve: nothing new.' }];
+    default:
+      break;
+  }
+  const lines: OvernightLine[] = [];
+  if (night.found === 0) {
+    lines.push({ text: 'Looked for things to improve: nothing new.' });
+  } else {
+    lines.push({
+      text: `Found ${plural(night.found, 'thing')} to improve · ${
+        night.drafted
+          ? `drafted ${night.drafted.toLocaleString()}`
+          : 'nothing drafted'
+      }`,
+    });
+  }
+  if (night.needs_examples)
+    lines.push({
+      text: `${plural(night.needs_examples, 'kind of work')} ${
+        night.needs_examples === 1 ? 'needs' : 'need'
+      } more examples`,
+    });
+  if (night.looks_like_bug)
+    lines.push({
+      text:
+        night.looks_like_bug === 1
+          ? '1 of them looks like a bug in Row-Bot itself'
+          : `${night.looks_like_bug} of them look like bugs in Row-Bot itself`,
+    });
+  if (night.left_out)
+    lines.push({
+      text: `Left out ${plural(night.left_out, 'idea')}: Learning needs your feedback first, and never adds addresses, links, passwords or permissions`,
+    });
+  if (night.state === 'stopped')
+    lines.push({
+      text: 'Stopped when you came back to Row-Bot; it carries on when you’re away.',
+    });
+  return lines;
+}
+
+export const CHANGE_NAMES: Record<LearningChangeView['change'], string> = {
+  lesson: 'Lesson',
+  way_of_working: 'Way of working',
+  skill: 'Skill',
+};
+
+/** The issue's "Why" in plain words, counts only (designs §4): never anyone's words. */
+export function whyWords(change: LearningChangeView): string {
+  const { why } = change;
+  const parts: string[] = [];
+  if (why.corrections)
+    parts.push(`you corrected Row-Bot ${timesWords(why.corrections)}`);
+  if (why.stops) parts.push(`you stopped it ${timesWords(why.stops)}`);
+  if (why.retries)
+    parts.push(`you asked it to try again ${timesWords(why.retries)}`);
+  if (why.denials)
+    parts.push(
+      `you turned down an action it asked to take ${timesWords(why.denials)}`,
+    );
+  if (why.failures) parts.push(`a step failed ${timesWords(why.failures)}`);
+  const what = parts.length
+    ? parts.length === 1
+      ? parts[0]
+      : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`
+    : 'something went wrong';
+  const where =
+    change.kind === 'other'
+      ? `In ${plural(why.chats, 'chat')}`
+      : `In ${plural(why.chats, 'chat')} about ${kindPhrase(change.kind)}`;
+  const past = why.imported
+    ? ` (${why.imported.toLocaleString()} from past chats Learning read)`
+    : '';
+  return `${where}, ${what}${past}.`;
+}
+
+/** "What Row-Bot is learning" beside the personal model's rows (designs §3). */
+export const KIND_STATE_WORDS: Record<LearningKindState['state'], string> = {
+  testing_change: 'A change waits to be tested',
+  needs_examples: 'Needs more examples',
 };

@@ -284,3 +284,165 @@ def test_the_check_turn_passes_only_with_a_tool_call_and_its_result_and_leaves_n
     script[:] = [("tool_call", {"name": "shell"}), ("interrupt", {}), ("done", "7006652")]
     asked = serving.agent_tool_turn("model:x")
     assert asked["ok"] is False and asked["errors"] == ["asked_for_approval"]
+
+
+# ── Row-Bot's own server (L2x, O75) ──────────────────────────────────────────
+
+
+class FakeServer:
+    """Row-Bot's own model server as ``serve`` uses it (the real one: ``test_learning_llama_server.py``)."""
+
+    def __init__(self, *, files: str = "installed", load_error: str | None = None) -> None:
+        self._files = files
+        self.load_error = load_error
+        self.registered: list[tuple[str, str, int]] = []
+        self.unregistered: list[str] = []
+        self.loaded: list[str] = []
+        self.unloaded: list[str] = []
+        self.held = 0
+        self.held_during_checks = False
+
+    def files(self):
+        return SimpleNamespace(installed=self._files == "installed", state=self._files)
+
+    def register(self, name, gguf, context):
+        self.registered.append((name, Path(gguf).name, int(context)))
+
+    def unregister(self, name):
+        self.unregistered.append(name)
+
+    def hold(self):
+        import contextlib
+
+        @contextlib.contextmanager
+        def held():
+            self.held += 1
+            try:
+                yield None
+            finally:
+                self.held -= 1
+
+        return held()
+
+    def load(self, name):
+        from row_bot.learning.training.llama_server import ServerError
+
+        if self.load_error:
+            raise ServerError(self.load_error)
+        self.loaded.append(name)
+
+    def unload(self, name):
+        self.unloaded.append(name)
+
+
+class HeldVerifier(FakeVerifier):
+    def __init__(self, server: FakeServer, **options) -> None:
+        super().__init__(**options)
+        self.server = server
+
+    def probe(self, model_ref, **options):
+        self.server.held_during_checks = self.server.held > 0
+        return super().probe(model_ref, **options)
+
+
+def test_row_bot_registers_the_gguf_loads_it_checks_it_and_gives_its_memory_back(version_files, data_dir):
+    folder, gguf = version_files
+    server = FakeServer()
+    verifier = HeldVerifier(server)
+
+    ready = serving.serve("row_bot", version=1, gguf=gguf, serve_context=32768, folder=folder, verifier=verifier,
+                          managed=server)
+
+    assert ready.state == "ready" and ready.runtime_version == "b11669"
+    assert ready.model_ref == "model:custom_openai_row-bot-personal-row-bot:row-bot-personal-v1"
+    assert server.registered == [("row-bot-personal-v1", gguf.name, 32768)]
+    assert server.loaded == ["row-bot-personal-v1"] and server.unloaded == ["row-bot-personal-v1"]
+    assert server.held_during_checks and server.held == 0  # running through the checks, released after
+    assert verifier.calls == [("probe", ready.model_ref, "row_bot", "custom_openai_row-bot-personal-row-bot",
+                               "row-bot-personal-v1"), ("tool_turn", ready.model_ref)]
+    assert not server.unregistered
+
+
+def test_a_version_that_fails_its_check_in_row_bot_is_taken_off_the_servers_list(version_files, data_dir):
+    folder, gguf = version_files
+    server = FakeServer()
+
+    failed = serving.serve("row_bot", version=1, gguf=gguf, serve_context=32768, folder=folder,
+                           verifier=FakeVerifier(turn_ok=False), managed=server)
+
+    assert failed.state == "failed" and failed.reason == "tool_turn_failed"
+    assert server.unregistered == ["row-bot-personal-v1"]
+
+
+@pytest.mark.parametrize(("files", "load_error", "reason"), [
+    ("not_installed", None, "server_missing"), ("unavailable", None, "server_unavailable"),
+    ("installed", "load_failed", "load_failed"), ("installed", "crashed", "server_failed"),
+    ("installed", "start_failed", "server_failed"),
+])
+def test_row_bots_server_problems_are_said(version_files, data_dir, files, load_error, reason):
+    folder, gguf = version_files
+    server = FakeServer(files=files, load_error=load_error)
+    verifier = FakeVerifier()
+
+    failed = serving.serve("row_bot", version=1, gguf=gguf, serve_context=32768, folder=folder, verifier=verifier,
+                           managed=server)
+
+    assert failed.state == "failed" and failed.reason == reason and not verifier.calls
+    if files != "installed":
+        assert not server.registered  # nothing is put on a list it can't serve
+
+
+def test_the_starting_model_runs_in_row_bot_under_its_own_name_with_the_probe_only(version_files, data_dir):
+    folder, gguf = version_files
+    server = FakeServer()
+    verifier = FakeVerifier()
+
+    ready = serving.serve("row_bot", version=1, gguf=gguf, serve_context=32768, folder=folder, verifier=verifier,
+                          managed=server, tag="row-bot-personal-base", tool_turn=False)
+
+    assert ready.state == "ready" and ready.model_ref.endswith(":row-bot-personal-base")
+    assert [call[0] for call in verifier.calls] == ["probe"]
+
+
+def test_new_versions_run_in_row_bot_where_it_can_and_in_ollama_where_it_cant(monkeypatch):
+    from row_bot.learning.training import hardware, lockfile
+
+    card = hardware.classify([hardware.Gpu("NVIDIA GeForce RTX 5090", 32_607, "610.60")])
+    monkeypatch.setattr(lockfile, "tools_platform", lambda platforms=None: "windows-x64")
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    assert serving.effective_runtime(None, card) == "row_bot"  # the default (O75)
+    assert serving.effective_runtime("row_bot", card) == "row_bot"
+    assert serving.effective_runtime("ollama", card) == "ollama"  # the person's choice stays
+    assert serving.effective_runtime("lmstudio", card) == "lmstudio"
+    assert serving.available_runtimes(card) == ("row_bot", "ollama", "lmstudio", "llama_cpp")
+    no_card = hardware.classify([])
+    assert serving.effective_runtime("row_bot", no_card) == "ollama"  # not on this computer: Ollama
+    assert "row_bot" not in serving.available_runtimes(no_card)
+    monkeypatch.setattr(lockfile, "tools_platform", lambda platforms=None: None)  # a Mac, an Arm laptop
+    assert serving.effective_runtime(None, card) == "ollama"
+
+
+def test_the_check_turns_time_limit_reaches_a_request_stuck_in_the_runtime(monkeypatch):
+    import threading
+
+    from row_bot import agent, thread_cleanup, threads
+    from row_bot.cancellation import current_cancellation_scope
+
+    monkeypatch.setattr(thread_cleanup, "delete_thread", lambda thread_id: None)
+    monkeypatch.setattr(threads, "_purge_thread_rows", lambda thread_id: None)
+    closed = threading.Event()
+
+    def stuck(prompt, tools, config, stop_event=None):
+        scope = current_cancellation_scope()
+        assert scope is not None  # the turn runs under a scope, as a chat does
+        scope.register(closed.set, "request")  # a transport registers its request when it starts (#509)
+        closed.wait(10)  # a request that streams nothing until it is closed
+        raise InterruptedError("execution_cancelled")
+        yield  # pragma: no cover - a generator, like the real one
+
+    monkeypatch.setattr(agent, "stream_agent", stuck)
+
+    result = serving.agent_tool_turn("model:x", timeout=0.1)
+
+    assert closed.is_set() and result["timed_out"] and result["ok"] is False

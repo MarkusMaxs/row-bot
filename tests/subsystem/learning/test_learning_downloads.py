@@ -217,3 +217,42 @@ def test_a_damaged_engine_is_built_again_by_the_next_download(world):
     repaired = task.view()
     assert repaired.engine_state == "damaged"
     assert task.start().engine_state == "installed"
+
+
+# ── Row-Bot's model server (L2x, O75) ─────────────────────────────────────────
+
+
+def test_the_model_server_downloads_with_the_engine_and_counts_in_its_size(world, monkeypatch):
+    from row_bot.learning.training import server_files
+    from tests.fixtures.learning_engine import fake_llama_server, server_version_runner
+
+    fake_llama_server(world.index, monkeypatch)
+    server_files.forget_status()
+    task = world.downloads(start_threads=False, server_options={"runner": server_version_runner()})
+    server_bytes = sum(item.known_size for item in server_files.plan("cu130"))
+
+    asked = task.view()
+    finished = task.start()
+
+    assert asked.engine_download_bytes == lockfile.engine_plan("cu130").download_bytes() + server_bytes
+    assert finished.state == "none" and finished.engine_state == "installed"
+    assert server_files.status(world.root, variant="cu130", refresh=True).installed
+    # The training engine, as the person sees it, includes the server (Settings' size, Remove).
+    assert finished.engine_bytes > engine.status(world.root, refresh=True).bytes
+
+
+def test_an_engine_from_before_the_model_server_offers_the_server_alone_with_one_tap(world, monkeypatch):
+    from row_bot.learning.training import server_files
+    from tests.fixtures.learning_engine import fake_llama_server, server_version_runner
+
+    world.downloads(start_threads=False).start()  # an engine and starting model from before L2x
+    fake_llama_server(world.index, monkeypatch)
+    server_files.forget_status()
+    task = world.downloads(start_threads=False, server_options={"runner": server_version_runner()})
+    server_bytes = sum(item.known_size for item in server_files.plan("cu130"))
+
+    ready = task.view()
+    assert ready.state == "ready" and ready.total_bytes - ready.done_bytes == server_bytes  # never by itself (O36)
+    finished = task.start()
+
+    assert finished.state == "none" and server_files.status(world.root, variant="cu130", refresh=True).installed

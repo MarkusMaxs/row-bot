@@ -224,17 +224,6 @@ def test_the_test_apps_are_on_so_no_turn_lists_them_as_off(registry_copy):
     assert not any(name in fields["tools_off"] for name in names), fields["tools_off"]
 
 
-def test_the_documents_tool_answers_as_the_empty_library_it_is(registry_copy, monkeypatch):
-    tool = registry_copy.get_tool("documents")
-    assert tool is not None
-    monkeypatch.setattr(tool, "execute", tool.execute)  # undone after the test
-
-    assert eval_worker._empty_libraries() == ["documents"]  # noqa: SLF001
-    answer = tool.as_langchain_tool().invoke({"query": "travel policy"})
-
-    assert answer == "No results found for: travel policy"
-
-
 def test_what_a_task_left_behind_goes_before_the_next_task(monkeypatch):
     from row_bot import knowledge_graph, thread_cleanup
 

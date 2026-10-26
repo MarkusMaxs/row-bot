@@ -1,5 +1,10 @@
 """The personal model's download: the training engine, then the starting model (L2b).
 
+The training engine, as the person sees it, includes the server Row-Bot runs personal models in
+(``server_files.py``, O75): its pinned files download right after the engine's, inside the same
+download and its size. An engine installed before the server existed reads as **Ready to download**
+for the server alone (one tap, O36), never downloading by itself.
+
 Nothing here starts by itself (O36). The person's **Download** (the ask, with the sizes, the free
 space and where it comes from), **Resume**, **Try again**, **Repair** or **Update** starts it;
 **Stop** (Monitor's row) pauses it, keeping what arrived; **Cancel** deletes what arrived. An old
@@ -38,13 +43,15 @@ from typing import Any, Literal
 
 from row_bot import learning as gate
 from row_bot.learning.training import engine as engine_module
-from row_bot.learning.training import fetch, hardware, lockfile, weights
+from row_bot.learning.training import fetch, hardware, lockfile, server_files, weights
 
 logger = logging.getLogger(__name__)
 
 STATE_FILE = "download.json"
 # Room left over after a download (logs, checkpoints, the system's own needs).
 MARGIN_BYTES = 1_000_000_000
+# Unpacked, the model server is larger than its download (its CUDA libraries are compressed).
+SERVER_INSTALLED_FACTOR = 1.4
 FAILURES = frozenset({"network", "mismatch", "install_failed", "check_failed", "no_cuda", "refused"})
 
 State = Literal["none", "ready", "downloading", "paused", "not_enough_disk", "failed"]
@@ -109,6 +116,7 @@ class Downloads:
         *,
         fetcher: Callable[[], fetch.Fetcher] = fetch.Fetcher,
         installer_options: dict[str, Any] | None = None,
+        server_options: dict[str, Any] | None = None,
         check_hardware: Callable[[], hardware.HardwareCheck] = hardware.check,
         peek_hardware: Callable[[], hardware.HardwareCheck | None] = hardware.peek,
         disk_free: Callable[[Path], int | None] = free_bytes,
@@ -117,6 +125,7 @@ class Downloads:
         self._root = root
         self._fetcher = fetcher
         self._installer_options = dict(installer_options or {})
+        self._server_options = dict(server_options or {})
         self._hardware = check_hardware
         self._peek = peek_hardware
         self._disk_free = disk_free
@@ -180,6 +189,14 @@ class Downloads:
 
     # ── The view ────────────────────────────────────────────────────────
 
+    def _server(self, variant: str | None) -> server_files.ServerInstaller | None:
+        """The model server's install for this computer's build (None where Row-Bot has none)."""
+
+        if variant is None or not server_files.plan(variant):
+            return None
+        return server_files.ServerInstaller(variant, root=self._root, fetcher=self._fetcher(),
+                                            **self._server_options)
+
     def _sizes(self, variant: str | None) -> dict[str, Any]:
         """What is installed, what is left to download, and how much room that needs."""
 
@@ -200,14 +217,25 @@ class Downloads:
                     installed = installer.installed_estimate()
             except Exception:
                 logger.debug("Learning could not read the engine's lock", exc_info=True)
+        server = self._server(variant)
+        server_found = server_files.status(self._root, variant=variant) if server is not None else None
+        server_needed = server is not None and server_found is not None and not server_found.installed
+        server_total = server.total() if server is not None and server_needed else 0
+        server_done = min(server_total, server.downloaded()) if server is not None and server_needed else 0
+        if server_needed:
+            installed += int(server_total * SERVER_INSTALLED_FACTOR)
+        engine_download += server.total() if server is not None else 0
         model_needed = model_found.state != "downloaded"
         model_total = model.download_bytes if model_needed else 0
         model_done = weights.downloaded_bytes(model, self._root) if model_needed else 0
-        remaining = (engine_total - engine_done) + (model_total - model_done)
+        remaining = (engine_total - engine_done) + (server_total - server_done) + (model_total - model_done)
+        needed = engine_needed or server_needed or model_needed
         return {
             "variant": variant, "engine": engine_found, "model": model_found, "engine_needed": engine_needed,
-            "model_needed": model_needed, "total": engine_total + model_total, "done": engine_done + model_done,
-            "needs": remaining + installed + MARGIN_BYTES if (engine_needed or model_needed) else 0,
+            "server": server_found, "server_needed": server_needed, "server_total": server_total,
+            "model_needed": model_needed, "total": engine_total + server_total + model_total,
+            "done": engine_done + server_done + model_done,
+            "needs": remaining + installed + MARGIN_BYTES if needed else 0,
             "engine_download": engine_download,
         }
 
@@ -217,8 +245,10 @@ class Downloads:
         sizes = self._sizes(self._variant_now())
         free = self._disk_free(engine_module.learning_runtimes(self._root))
         engine_found, model_found = sizes["engine"], sizes["model"]
+        server_found = sizes["server"]
+        server_bytes = server_found.bytes if server_found is not None and server_found.installed else 0
         common = {
-            "engine_state": engine_found.state, "engine_bytes": engine_found.bytes,
+            "engine_state": engine_found.state, "engine_bytes": engine_found.bytes + server_bytes,
             "engine_download_bytes": sizes["engine_download"],
             "model_state": model_found.state if model_found.state != "partial" else "not_downloaded",
             "model_bytes": model_found.bytes if model_found.state == "downloaded" else 0,
@@ -229,7 +259,7 @@ class Downloads:
             if live is not None:
                 return DownloadView("downloading", live.phase, live.done, live.total,
                                     needs_bytes=sizes["needs"], **common)
-        if not (sizes["engine_needed"] or sizes["model_needed"]):
+        if not (sizes["engine_needed"] or sizes["server_needed"] or sizes["model_needed"]):
             return DownloadView("none", **common)
         saved = self._saved()
         state = saved.get("state")
@@ -243,7 +273,9 @@ class Downloads:
             return DownloadView("failed", None, sizes["done"], sizes["total"], needs_bytes=sizes["needs"],
                                 failure=failure, **common)
         settings = gate.read_settings(self._root)
-        if settings.model_download == "waiting":
+        only_server = sizes["server_needed"] and not (sizes["engine_needed"] or sizes["model_needed"])
+        if settings.model_download == "waiting" or only_server:
+            # An engine from before the model server: the server alone is ready to download (O36).
             return DownloadView("ready", None, sizes["done"], sizes["total"], needs_bytes=sizes["needs"], **common)
         return DownloadView("none", None, sizes["done"], sizes["total"], needs_bytes=sizes["needs"], **common)
 
@@ -273,7 +305,7 @@ class Downloads:
                 return self.view()
             variant = self.variant()
             sizes = self._sizes(variant)
-            if not (sizes["engine_needed"] or sizes["model_needed"]):
+            if not (sizes["engine_needed"] or sizes["server_needed"] or sizes["model_needed"]):
                 self._save(None)
                 return self.view()
             if sizes["engine_needed"] and variant is None:
@@ -288,17 +320,18 @@ class Downloads:
             if free is not None and free < sizes["needs"]:
                 self._save("not_enough_disk", needs=sizes["needs"])
                 raise DownloadError("not_enough_disk")
-            live = _Live(phase="engine" if sizes["engine_needed"] else "model", done=sizes["done"],
-                         total=sizes["total"])
+            live = _Live(phase="engine" if sizes["engine_needed"] or sizes["server_needed"] else "model",
+                         done=sizes["done"], total=sizes["total"])
             self._live = live
             self._save("downloading")
             model = self._model() if sizes["model_needed"] else None
+            server = self._server(variant) if sizes["server_needed"] else None
             if self._start_threads:
-                live.thread = threading.Thread(target=self._run, args=(live, plan, model, sizes),
+                live.thread = threading.Thread(target=self._run, args=(live, plan, model, sizes, server),
                                                name="learning-download", daemon=True)
                 live.thread.start()
             else:
-                self._run(live, plan, model, sizes)
+                self._run(live, plan, model, sizes, server)
             return self.view()
 
     def stop(self, reason: str = "you") -> DownloadView:
@@ -357,7 +390,7 @@ class Downloads:
     # ── The thread ──────────────────────────────────────────────────────
 
     def _run(self, live: _Live, plan: lockfile.EnginePlan | None, model: weights.PinnedModel | None,
-             sizes: dict[str, Any]) -> None:
+             sizes: dict[str, Any], server: server_files.ServerInstaller | None = None) -> None:
         def check() -> None:
             if live.stop.is_set() or not gate.is_enabled(self._root) or not gate.preview_enabled():
                 if not live.stop.is_set():
@@ -367,10 +400,24 @@ class Downloads:
 
         outcome: tuple[str | None, dict[str, Any]] = (None, {})
         engine_total = sizes["total"] - (model.download_bytes if model is not None else 0)
+        before_server = engine_total - sizes["server_total"]
         try:
             if plan is not None:
                 installer = self._installer(plan, live)
                 installer.install(check)
+            if server is not None:
+                with self._lock:
+                    live.phase = "engine"
+                    self._changed.notify_all()
+
+                def server_moved(done: int, _total: int) -> None:
+                    with self._lock:
+                        live.phase = "engine"
+                        live.done = before_server + done
+                        self._changed.notify_all()
+
+                server.on_progress = server_moved
+                server.install(check)
             if model is not None:
                 with self._lock:
                     live.phase = "model"
@@ -418,6 +465,7 @@ def _remove_downloads(root: Path | None, model: weights.PinnedModel) -> None:
     _remove_tree(downloads_dir(root))
     for leftover in engine_dir(root).glob(".staging-*") if engine_dir(root).is_dir() else ():
         _remove_tree(leftover)
+    _remove_tree(server_files.downloads_dir(root))
     _remove_tree(weights.partial_dir(model, root))
 
 

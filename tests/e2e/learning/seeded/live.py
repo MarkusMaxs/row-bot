@@ -625,7 +625,8 @@ class PersonRun:
         saved = self.state.data["nights"].setdefault(str(day), {"steps": {}})
         if not saved["steps"]:
             self.clock.set(day + 1, clock_module.NIGHT_HOUR)
-        steps = {"dream": self._dream, "vault": self._vault, "learning": lambda: self._learning(day)}
+        steps = {"dream": self._dream, "vault": self._vault, "look": self._look,
+                 "learning": lambda: self._learning(day)}
         for name in clock_module.NIGHT_STEPS:
             if name in saved["steps"]:
                 if name == "dream":
@@ -665,6 +666,27 @@ class PersonRun:
         summary = evaluation.audit_summary(asked_by="the release check's night (counts)")
         return {"refresh": dict(added), "summary": dict(summary)}
 
+    def night_look(self) -> Any:
+        """The product's night's look (L3a), on the simulated clock: issues, a diagnosis each, drafts."""
+
+        from row_bot.learning.lease import ResourceLease
+        from row_bot.learning.runner import NightLook
+
+        return NightLook(lease=ResourceLease(since_activity=self.clock.idle_seconds), root=self.data,
+                         hours=clock_module.sim_quiet_hours(self.clock, self.data), clock=self.clock.time)
+
+    def _look(self) -> Any:
+        """Tonight's look for things to improve (L3a): counts only (drafts by kind of change, E9 refusals,
+        tokens); the drafts wait to be tested (L3b)."""
+
+        report = self.night_look().tick()
+        if report is None:
+            return {"ran": False}
+        found = report.to_dict()
+        return {key: found[key] for key in ("state", "found", "diagnosed", "drafted", "refused", "needs_examples",
+                                            "train", "waits", "bugs", "unreadable", "tokens", "drafts", "refusals",
+                                            "skipped")}
+
     # ── Learning's runner at night ──────────────────────────────────────
 
     def runner(self) -> Any:
@@ -693,7 +715,7 @@ class PersonRun:
                                    (maker, "start", "export and serve"), (comparisons, "start", "comparison")):
             setattr(owner, name, self._booked(getattr(owner, name), phase))
         self._runner = LearningRunner(supervisor, root=self.data, hours=clock_module.sim_quiet_hours(self.clock, self.data),
-                                      planner=planner, releases=maker, comparisons=comparisons)
+                                      planner=planner, releases=maker, comparisons=comparisons, look=self.night_look())
         return self._runner
 
     def _booked(self, original: Any, phase: str) -> Any:

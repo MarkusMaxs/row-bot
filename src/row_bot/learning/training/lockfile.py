@@ -113,6 +113,57 @@ LLAMA_CPP_SOURCE = LockedWheel(
     "bf22d4717daf6db1ecff37bbe702bb53fcca2b7ab63a103c6d679aa65d5d932e", 40_098_144)
 
 
+# The server Row-Bot runs personal models in (O75): the same release's CUDA build of ``llama-server``
+# and the CUDA runtime it needs, unpacked side by side. The driver picks the CUDA line as it picks the
+# engine's (O25): CUDA 13 with a driver of 580 or newer (the ``cu130`` engine), CUDA 12 with 570-579.
+# Sizes and SHA-256 as GitHub publishes them for the release's assets.
+LLAMA_CPP_SERVER: dict[tuple[str, str], tuple[LockedWheel, LockedWheel]] = {
+    ("windows-x64", "cu130"): (
+        LockedWheel("llama.cpp-server", LLAMA_CPP_RELEASE,
+                    f"{_LLAMA_DOWNLOAD}/llama-{LLAMA_CPP_RELEASE}-bin-win-cuda-13.4-x64.zip",
+                    f"llama-{LLAMA_CPP_RELEASE}-bin-win-cuda-13.4-x64.zip",
+                    "3b92d5c064f5032e603e531d3ec8961f3bd6613e5dfad047399a92dec8e95dbc", 154_582_227),
+        LockedWheel("llama.cpp-cuda-runtime", LLAMA_CPP_RELEASE,
+                    f"{_LLAMA_DOWNLOAD}/cudart-llama-bin-win-cuda-13.4-x64.zip",
+                    "cudart-llama-bin-win-cuda-13.4-x64.zip",
+                    "738f8c251ac22b70c3ae6f83a10cf222725df0395246a2cf58f32bdb85fbe668", 423_535_356)),
+    ("windows-x64", "cu128"): (
+        LockedWheel("llama.cpp-server", LLAMA_CPP_RELEASE,
+                    f"{_LLAMA_DOWNLOAD}/llama-{LLAMA_CPP_RELEASE}-bin-win-cuda-12.4-x64.zip",
+                    f"llama-{LLAMA_CPP_RELEASE}-bin-win-cuda-12.4-x64.zip",
+                    "c2da1f73ed176ae093ac5aceb978a7b167a16113f6d74c6789eeaee2135cb8dc", 266_582_698),
+        LockedWheel("llama.cpp-cuda-runtime", LLAMA_CPP_RELEASE,
+                    f"{_LLAMA_DOWNLOAD}/cudart-llama-bin-win-cuda-12.4-x64.zip",
+                    "cudart-llama-bin-win-cuda-12.4-x64.zip",
+                    "8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6", 391_443_627)),
+    ("linux-x64", "cu130"): (
+        LockedWheel("llama.cpp-server", LLAMA_CPP_RELEASE,
+                    f"{_LLAMA_DOWNLOAD}/llama-{LLAMA_CPP_RELEASE}-bin-ubuntu-cuda-13.4-x64.tar.gz",
+                    f"llama-{LLAMA_CPP_RELEASE}-bin-ubuntu-cuda-13.4-x64.tar.gz",
+                    "80878473d27278dbe9c38fb7e704f292a51e889d3c28a1e863137cdee1e2ba4e", 153_679_828),
+        LockedWheel("llama.cpp-cuda-runtime", LLAMA_CPP_RELEASE,
+                    f"{_LLAMA_DOWNLOAD}/cudart-llama-{LLAMA_CPP_RELEASE}-bin-ubuntu-cuda-13.4-x64.tar.gz",
+                    f"cudart-llama-{LLAMA_CPP_RELEASE}-bin-ubuntu-cuda-13.4-x64.tar.gz",
+                    "1108bd9300a281e8eabb18d3fa028d4240ecd983f9f90dbbbc3297671016d697", 440_236_547)),
+    ("linux-x64", "cu128"): (
+        LockedWheel("llama.cpp-server", LLAMA_CPP_RELEASE,
+                    f"{_LLAMA_DOWNLOAD}/llama-{LLAMA_CPP_RELEASE}-bin-ubuntu-cuda-12.8-x64.tar.gz",
+                    f"llama-{LLAMA_CPP_RELEASE}-bin-ubuntu-cuda-12.8-x64.tar.gz",
+                    "4703ed1a3cd6e8504affb6cb9866f501e96d634d68a002dc9a8251c9e2819b49", 172_525_113),
+        LockedWheel("llama.cpp-cuda-runtime", LLAMA_CPP_RELEASE,
+                    f"{_LLAMA_DOWNLOAD}/cudart-llama-{LLAMA_CPP_RELEASE}-bin-ubuntu-cuda-12.8-x64.tar.gz",
+                    f"cudart-llama-{LLAMA_CPP_RELEASE}-bin-ubuntu-cuda-12.8-x64.tar.gz",
+                    "ab3eda89a82096bcba00b6448218c3c11eec2016b0f38d64884dc29736549f26", 594_377_811)),
+}
+
+
+def server_files(variant: str, platforms: Iterable[str] | None = None) -> tuple[LockedWheel, ...]:
+    """The pinned server build and its CUDA runtime for ``variant`` on these platform tags (this
+    computer's by default); empty where Row-Bot has no build (macOS, Arm)."""
+
+    return LLAMA_CPP_SERVER.get((tools_platform(platforms) or "", variant), ())
+
+
 def tools_platform(platforms: Iterable[str] | None = None) -> str | None:
     """Which llama.cpp build fits these wheel platform tags (this computer's by default)."""
 
@@ -385,6 +436,7 @@ __all__ = [
     "EnginePlan",
     "FORBIDDEN",
     "LLAMA_CPP_RELEASE",
+    "LLAMA_CPP_SERVER",
     "LLAMA_CPP_SOURCE",
     "LLAMA_CPP_TOOLS",
     "llama_tools",
@@ -400,6 +452,7 @@ __all__ = [
     "every_package_name",
     "load",
     "lock_sha256",
+    "server_files",
     "target_environment",
     "target_tags",
     "uv_wheel",

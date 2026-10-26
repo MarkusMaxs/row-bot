@@ -160,6 +160,28 @@ def test_training_waits_while_another_app_holds_the_graphics_cards_memory(setup)
     assert setup.supervisor.wait_for(lambda job: job.state == "running").trigger == "train_now"
 
 
+def test_training_waits_while_other_apps_hold_the_computers_memory(setup):
+    # O105: Windows charges what a run holds on the card to RAM and virtual memory too; Row-Bot waits for
+    # that memory and never closes another app.
+    job = _plan(setup)
+    _journal(setup.root, datetime(2026, 10, 16, 1, 10))
+    setup.lease.set(since_activity=900.0)
+    memory = {"free": False}
+    setup.supervisor.gpu_free = lambda: True
+    setup.supervisor.memory_free = lambda: memory["free"]
+
+    assert (setup.runner.status().state, setup.runner.status().reason) == ("waiting", "memory_busy")
+    assert (setup.runner.check().state, setup.runner.check().reason) == ("waiting", "memory_busy")
+    assert setup.engine.commands == [] and setup.supervisor.jobs.get(job.id).state == "planned"
+    setup.when.now = DAY
+    waiting = setup.supervisor.train_now(job.id)  # Train now waits for the memory too
+    assert waiting.state == "waiting" and setup.engine.commands == []
+
+    memory["free"] = True
+    setup.supervisor.watch()
+    assert setup.supervisor.wait_for(lambda job: job.state == "running").trigger == "train_now"
+
+
 def test_train_now_waiting_for_a_chat_starts_once_it_ends_even_after_a_restart(setup):
     job = _plan(setup)
     setup.when.now = DAY
@@ -298,3 +320,98 @@ def test_a_version_that_couldnt_start_lets_the_runner_plan_the_next_one(setup):
     setup.lease.set(since_activity=900.0)
     assert runner.check().state == "training"
     assert [job.version for job in planned] == [2] and setup.supervisor.jobs.get(first.id).state == "evaluating"
+
+
+def test_after_two_quiet_hours_nights_without_room_on_the_card_the_runner_says_so(setup, monkeypatch):
+    # O112: no silent forever-wait. Each night training waited for room on the card is noted once (with
+    # what was free and what it needs); a run that starts forgets them.
+    from row_bot.learning import runner as runner_module
+    from row_bot.learning.training import hardware
+
+    monkeypatch.setattr(hardware, "gpu_memory", lambda **_: (25_000, 32_607))
+    monkeypatch.setattr(hardware, "training_need_mib", lambda found=None: 15_616)
+    job = _plan(setup)
+    _journal(setup.root, datetime(2026, 10, 16, 1, 10))
+    setup.lease.set(since_activity=900.0)
+    card = {"free": False}
+    setup.supervisor.gpu_free = lambda: card["free"]
+
+    assert setup.runner.check().reason == "gpu_busy"
+    assert setup.runner.check().reason == "gpu_busy"  # the same night counts once
+    assert runner_module.card_room(setup.root)["nights"] == ["2026-10-16"]
+    setup.when.now = datetime(2026, 10, 17, 2, 30)
+    _journal(setup.root, datetime(2026, 10, 17, 1, 10))
+    setup.runner.check()
+    room = runner_module.card_room(setup.root)
+    assert room["nights"] == ["2026-10-16", "2026-10-17"]
+    assert (room["free_mib"], room["need_mib"], room["model"]) == (7_607, 15_616, "qwen3.5-2b")
+
+    card["free"] = True
+    assert setup.runner.check().state == "training"
+    assert runner_module.card_room(setup.root) is None and setup.supervisor.jobs.get(job.id).state != "planned"
+
+
+# ── L3a: the night's look for things to improve, between Dream and training ──
+
+
+def _look(setup, monkeypatch, *, stop_after: int | None = None):
+    """The runner with a night's look whose diagnosis is recorded, not called."""
+
+    from row_bot.learning import diagnosis
+    from row_bot.learning.runner import NightLook
+
+    runs = []
+
+    def run(store, *, client, night, should_stop, check_model, **_kwargs):
+        runs.append({"night": night, "training": setup.supervisor.training(), "stopped": should_stop()})
+        report = diagnosis.NightReport(night, state="stopped" if stop_after is not None and len(runs) <= stop_after
+                                       else "done", diagnosed=1)
+        diagnosis._save(store, report)
+        return report
+
+    monkeypatch.setattr(diagnosis, "run", run)
+    setup.runner.look = NightLook(lease=setup.lease, root=setup.root, hours=setup.runner.hours, client=object())
+    return runs
+
+
+def test_the_nights_look_runs_after_dream_and_before_training(setup, monkeypatch):
+    runs = _look(setup, monkeypatch)
+    _plan(setup)
+    setup.when.now = datetime(2026, 10, 16, 1, 20)
+    setup.lease.set(since_activity=600.0)
+    setup.runner.check()
+    assert runs == [] and not setup.supervisor.training()  # Dream hasn't run tonight
+
+    _journal(setup.root, datetime(2026, 10, 16, 1, 10))
+    assert setup.runner.check().state == "training"
+
+    assert runs == [{"night": "2026-10-16", "training": False, "stopped": False}]
+    setup.supervisor.wait_for(lambda job: job.state == "running")
+    setup.runner.check()
+    assert len(runs) == 1  # once a night
+
+
+def test_the_look_waits_for_the_person_and_training_waits_for_the_look(setup, monkeypatch):
+    runs = _look(setup, monkeypatch, stop_after=1)
+    _plan(setup)
+    _journal(setup.root, datetime(2026, 10, 16, 1, 10))
+    setup.lease.set(since_activity=60.0)  # someone used Row-Bot a minute ago
+    assert setup.runner.check().state == "waiting" and runs == []
+
+    setup.lease.set(since_activity=600.0)
+    assert setup.runner.check().state == "waiting"  # the look stopped part-way: training waits for it
+    assert len(runs) == 1 and not setup.supervisor.training()
+
+    assert setup.runner.check().state == "training"  # the look finishes, then training starts
+    assert len(runs) == 2
+
+
+def test_a_paused_learning_runs_no_look(setup, monkeypatch):
+    runs = _look(setup, monkeypatch)
+    _journal(setup.root, datetime(2026, 10, 16, 1, 10))
+    setup.lease.set(since_activity=600.0)
+    save_learning_settings(setup.root, enabled=True, paused=True)
+
+    setup.runner.check()
+
+    assert runs == []

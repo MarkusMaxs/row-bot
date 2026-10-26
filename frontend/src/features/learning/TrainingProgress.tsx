@@ -43,6 +43,8 @@ const WAITING_FOR: Record<string, string> = {
   in_use: 'You’re using Row-Bot.',
   gpu_busy:
     'Another app is using the graphics card’s memory, such as a local model that’s still loaded.',
+  memory_busy:
+    'Other apps are using this computer’s memory (RAM and virtual memory). Closing some frees it.',
 };
 
 function name(training: LearningTraining) {
@@ -127,9 +129,12 @@ export function trainingView(
       };
     case 'waiting': {
       const card = training.runner.reason === 'gpu_busy';
+      const memory = training.runner.reason === 'memory_busy';
       const title = card
         ? `${Run} starts when the graphics card is free.`
-        : `${Run} starts when Row-Bot is free.`;
+        : memory
+          ? `${Run} starts when this computer has the memory free.`
+          : `${Run} starts when Row-Bot is free.`;
       return {
         title,
         detail:
@@ -222,12 +227,14 @@ export function trainingView(
               ? `${Run} starts in a moment${uses}.`
               : reason === 'gpu_busy'
                 ? `${Run} starts when the graphics card is free${uses}.`
-                : `${Run} runs tonight in quiet hours (${hours})${uses}.`;
+                : reason === 'memory_busy'
+                  ? `${Run} starts when this computer has the memory free${uses}.`
+                  : `${Run} runs tonight in quiet hours (${hours})${uses}.`;
       return {
         title,
         detail:
-          reason === 'gpu_busy'
-            ? `${WAITING_FOR.gpu_busy} It pauses when you use Row-Bot.`
+          reason === 'gpu_busy' || reason === 'memory_busy'
+            ? `${WAITING_FOR[reason]} It pauses when you use Row-Bot.`
             : 'It pauses when you use Row-Bot.',
         actions: trainNow,
         announce: `${Run} is planned.`,

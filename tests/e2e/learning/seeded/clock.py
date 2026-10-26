@@ -32,7 +32,9 @@ DAY_START = (8, 30)
 REQUEST_GAP_MINUTES = 95
 #: Nights start at Dream's default window (01:00).
 NIGHT_HOUR = 1
-NIGHT_STEPS = ("dream", "vault", "learning")
+# L3a: the night's look for things to improve (issues, a diagnosis each, drafts) comes after the vault's
+# refresh and before training, as in the product's runner.
+NIGHT_STEPS = ("dream", "vault", "look", "learning")
 
 
 class SimClock:

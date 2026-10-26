@@ -73,7 +73,7 @@ def test_quiet_hours_follow_the_persons_dream_window_on_the_simulated_clock(lear
     assert hours.inside()
 
 
-def test_a_night_runs_dream_then_the_vault_then_learning_and_goes_on_after_a_failure():
+def test_a_night_runs_dream_then_the_vault_then_the_look_then_learning_and_goes_on_after_a_failure():
     clock = SimClock(FIRST)
     order: list[str] = []
 
@@ -85,15 +85,19 @@ def test_a_night_runs_dream_then_the_vault_then_learning_and_goes_on_after_a_fai
         order.append("vault")
         raise RuntimeError("no store")
 
+    def look():
+        order.append("look")
+        return {"drafted": 0}
+
     def learning():
         order.append("learning")
         return {"trained": False}
 
-    night = Night(clock, {"learning": learning, "vault": vault, "dream": dream})
+    night = Night(clock, {"learning": learning, "look": look, "vault": vault, "dream": dream})
     done = night.run(1)
-    assert order == list(NIGHT_STEPS) == ["dream", "vault", "learning"]
+    assert order == list(NIGHT_STEPS) == ["dream", "vault", "look", "learning"]
     assert [step.name for step in done] == order
-    assert done[1].error == "RuntimeError: no store" and done[2].outcome == {"trained": False}
+    assert done[1].error == "RuntimeError: no store" and done[3].outcome == {"trained": False}
     assert done[0].at.startswith("2026-11-03T01:00") and clock.dreamed == date(2026, 11, 3)
     with pytest.raises(ValueError):
         Night(clock, {"cleanup": lambda: None}).run(2)

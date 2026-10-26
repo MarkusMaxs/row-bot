@@ -5083,6 +5083,7 @@ def l1a_learning(action: str, x_fixture_token: str = Header(default="")) -> dict
 
     if "check" not in _l1a_saved:
         _l1a_saved["check"] = hardware.check
+        _l1a_saved["peek"] = hardware.peek
         _l1a_saved["used"] = spending.used_this_month
     if action == "preview":
         learning._PREVIEW = True  # the start-up flag, as if launched with ROW_BOT_LEARNING_PREVIEW=1
@@ -5094,6 +5095,7 @@ def l1a_learning(action: str, x_fixture_token: str = Header(default="")) -> dict
         found = (hardware.classify([hardware.Gpu("NVIDIA GeForce RTX 5070 Laptop GPU", 8151, "596.08")])
                  if action == "gpu" else hardware.HardwareCheck("no_gpu"))
         hardware.check = lambda *, refresh=False, detector=None: found
+        hardware.peek = lambda: found  # what reads that mustn't wait see (Runs in, the recipe's need)
     elif action == "paused":
         from row_bot.application.settings_commands import write_learning_settings
         write_learning_settings({"paused": True})
@@ -5111,6 +5113,7 @@ def l1a_learning(action: str, x_fixture_token: str = Header(default="")) -> dict
     elif action == "restore":
         from row_bot.learning.store import LearningStore
         hardware.check = _l1a_saved["check"]
+        hardware.peek = _l1a_saved["peek"]
         spending.used_this_month = _l1a_saved["used"]
         past = sys.modules.get("row_bot.learning.past_chats")
         if past is not None:
@@ -5129,6 +5132,75 @@ def l1a_learning(action: str, x_fixture_token: str = Header(default="")) -> dict
         _downloads._downloads = None
         learning._PREVIEW = False
         learning.invalidate()
+    else:
+        raise HTTPException(404, "Unknown Learning fixture action")
+    return {"action": action}
+
+
+# ── Learning (preview), L3a: last night's look and the changes it drafted ──
+
+
+def _l3a_drafts() -> None:
+    """Two drafted changes (a lesson and a way of working) and a kind that needs more examples."""
+
+    import time as _time
+
+    from row_bot import evolution
+    from row_bot.learning.contracts import Attempt
+    from row_bot.learning.store import LearningStore
+
+    drafts = [
+        ("lesson", "Use the current policy", "document_lookups",
+         "When two versions of a policy exist, answer from the newest approved one and say which you used.",
+         {"chats": 3, "corrections": 2, "stops": 1, "retries": 0, "denials": 0, "failures": 0, "imported": 1},
+         False, {}),
+        ("behaviour", "Check the calendar before booking", "tool_workflows",
+         "Before adding an event, look at that day's calendar and say if it overlaps another event.",
+         {"chats": 2, "corrections": 0, "stops": 2, "retries": 1, "denials": 0, "failures": 0, "imported": 0},
+         True, {"slot": "tool_guidance"}),
+    ]
+    for number, (kind, title, work, text, why, never, extra) in enumerate(drafts):
+        evolution.create_proposal(
+            insight_ids=[], proposal_type=kind, title=title, rationale="Fixture draft.", status="draft",
+            payload={"text": text, "kind_of_work": work, **extra,
+                     "learning": {"issue": f"{work}:fixture{number}", "attempt_id": f"att_fixture{number}",
+                                  "kind_of_work": work, "state": "waiting_to_test", "never_automatic": never,
+                                  "why": why}})
+    LearningStore().put(Attempt(id="att_fixture_examples", change_kind="wait", hypothesis="Not enough yet.",
+                                created_at=_time.time(), kind_of_work="small_coding", reason="needs_examples",
+                                issue="small_coding:corrected"))
+
+
+def _l3a_forget_drafts() -> None:
+    from row_bot import evolution
+
+    store = evolution._load_store()
+    store["proposals"] = [item for item in store["proposals"]
+                          if not isinstance((item.get("payload") or {}).get("learning"), dict)]
+    evolution._save_store(store)
+
+
+@app.post("/__l3a_fixture/learning/{action}")
+def l3a_learning(action: str, x_fixture_token: str = Header(default="")) -> dict:
+    """Learning (preview) for the L3a spec: last night's look in each of its states, and the changes it
+    drafted. Nothing reaches a model, a GPU or a download: the reports and drafts are written directly."""
+    predecessor._authorize(x_fixture_token)
+    from datetime import date
+
+    from row_bot.learning import diagnosis
+    from row_bot.learning.store import LearningStore
+
+    night = date.today().isoformat()
+    if action == "night":
+        diagnosis._save(LearningStore(), diagnosis.NightReport(night, found=3, drafted=2, refused=1,
+                                                               needs_examples=1, bugs=1))
+        _l3a_drafts()
+    elif action in {"claude_plan", "stopped", "nothing", "unavailable"}:
+        diagnosis._save(LearningStore(), diagnosis.NightReport(
+            night, state=action, found=2 if action == "stopped" else 0, drafted=1 if action == "stopped" else 0,
+            diagnosed=1 if action == "stopped" else 0))
+    elif action == "restore":
+        _l3a_forget_drafts()
     else:
         raise HTTPException(404, "Unknown Learning fixture action")
     return {"action": action}
@@ -5172,6 +5244,10 @@ class _FixtureDownloads:
             self.total = 6_789_270_885
         elif name == "failed":
             self.state, self.failure, self.done, self.total = "failed", "network", 2_480_000_000, 6_789_270_885
+        elif name == "server":  # L2x: an engine from before Row-Bot's own model server, only that missing
+            self.engine_state, self.engine_bytes = "installed", 4_033_251_988
+            self.model_state, self.model_bytes = "downloaded", 4_571_279_000
+            self.state, self.total = "ready", 578_117_583
         elif name != "ready":
             raise HTTPException(404, "Unknown download state")
 
@@ -5242,6 +5318,96 @@ def l2b_learning(action: str, name: str = "", x_fixture_token: str = Header(defa
     elif action == "old-driver":
         found = hardware.classify([hardware.Gpu("NVIDIA GeForce RTX 3080 Laptop GPU", 8192, "560.94")])
         hardware.check = lambda *, refresh=False, detector=None: found
+    else:
+        raise HTTPException(404, "Unknown Learning fixture action")
+    return {"action": action}
+
+
+# ── Learning (preview), L2x: Row-Bot's own model server, "Runs in" and the larger tiers ──
+
+_l2x: dict[str, object] = {}
+
+
+@app.post("/__l2x_fixture/learning/{action}")
+def l2x_learning(action: str, name: str = "", x_fixture_token: str = Header(default="")) -> dict:
+    """Row-Bot's own model server for the L2x spec: an RTX 5090 (or no NVIDIA card), the server's
+    files installed or not, and a version at each of its states there. Nothing starts a server,
+    reaches the network or needs a GPU."""
+    predecessor._authorize(x_fixture_token)
+    from dataclasses import replace as _replace
+
+    from row_bot.learning.training import hardware, lockfile, releases, server_files
+
+    if action == "restore":
+        for module, attribute in (("hardware", "check"), ("hardware", "peek"), ("lockfile", "tools_platform"),
+                                  ("server_files", "status")):
+            original = _l2x.pop(f"{module}.{attribute}", None)
+            if original is not None:
+                setattr({"hardware": hardware, "lockfile": lockfile, "server_files": server_files}[module],
+                        attribute, original)
+        _l2x.clear()
+        from row_bot.learning import runner as runner_module
+
+        runner_module.forget_card_room()
+        return {"action": action}
+    for module, attribute, owner in (("hardware", "check", hardware), ("hardware", "peek", hardware),
+                                     ("lockfile", "tools_platform", lockfile),
+                                     ("server_files", "status", server_files)):
+        _l2x.setdefault(f"{module}.{attribute}", getattr(owner, attribute))
+    if action == "card":
+        # name: 5090 (the 32 GB tier, with 128 GB of RAM and virtual memory), 5090-short (memory that can't
+        # hold its largest certified tier, O105), 4060-low (an 8 GB card on a computer whose memory can't
+        # hold even the 8 GB tier), 4080-busy (a 16 GB card whose display and apps hold 6.5 GB: Row-Bot
+        # recommends the 2B, O112) or none (no NVIDIA card: not on this computer)
+        needs = sorted(tier.system_memory_mib for tier in hardware.TIERS if tier.certified and tier.system_memory_mib)
+        # 5090-short: room for the smallest tier only (the next one would offer a larger model).
+        limit = {"5090-short": needs[1] - 1024, "4060-low": needs[0] - 3072}.get(name, 131_072)
+        memory = hardware.SystemMemory(limit_mib=limit, free_mib=min(limit, 90_000) // 2)
+        gpus = ([] if name == "none" else [hardware.Gpu("NVIDIA GeForce RTX 4060", 8_188, "596.08", 300)]
+                if name == "4060-low" else [hardware.Gpu("NVIDIA GeForce RTX 4080", 16_376, "596.08", 6_600)]
+                if name == "4080-busy" else [hardware.Gpu("NVIDIA GeForce RTX 5090", 32_607, "610.60", 2_400)])
+        found = hardware.classify(gpus, memory)
+        hardware.check = lambda *, refresh=False, detector=None: found
+        hardware.peek = lambda: found
+        lockfile.tools_platform = lambda platforms=None: "windows-x64"  # a build for this computer
+    elif action == "room":  # O112: two quiet-hours nights without room on the card for the 9B
+        import json as _json
+
+        from row_bot.application.settings_commands import write_learning_settings
+        from row_bot.learning import runner as runner_module
+        from row_bot.learning.training import jobs as jobs_module
+        from row_bot.learning.training import recipes as recipe_files
+
+        write_learning_settings({"starting_model": "qwen3.5-9b"})
+        nine = recipe_files.for_model("qwen3.5-9b", hardware.peek())
+        path = jobs_module.models_dir() / runner_module.ROOM_FILE
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(_json.dumps({"nights": ["2026-10-21", "2026-10-22"], "free_mib": 9_830,
+                                     "need_mib": nine.memory_mib if nine else 15_616, "model": "qwen3.5-9b"}),
+                        encoding="utf-8")
+    elif action == "server":  # name: installed or missing
+        state = "installed" if name == "installed" else "not_installed"
+        found_files = server_files.ServerFiles(state, "cu130", bytes=747_386_477 if state == "installed" else 0)
+        server_files.status = lambda root=None, **kwargs: found_files
+    elif action == "version":  # name: starting, ready, missing, memory, unavailable (v1 in Row-Bot's server)
+        _l2c_version({"starting": "making-ready"}.get(name, "ready"))
+        folder = releases.version_dir(1)
+        state = releases.read_state(folder)
+        from row_bot.application.settings_commands import write_learning_settings
+
+        write_learning_settings({"serve_runtime": "row_bot"})
+        if name == "starting":
+            state = _replace(state, runtime="row_bot")
+        elif name == "ready":
+            state = _replace(state, runtime="row_bot",
+                             model_ref="model:custom_openai_row-bot-personal-row-bot:row-bot-personal-v1")
+        else:
+            failure = {"missing": "server_missing", "memory": "load_failed", "unavailable": "server_unavailable"}
+            if name not in failure:
+                raise HTTPException(404, "Unknown version state")
+            state = _replace(state, phase=releases.RUNTIME_FAILED, runtime="row_bot", failure=failure[name],
+                             model_ref=None)
+        releases.write_state(folder, state)
     else:
         raise HTTPException(404, "Unknown Learning fixture action")
     return {"action": action}
@@ -5508,8 +5674,13 @@ def l2c_learning(action: str, name: str = "", x_fixture_token: str = Header(defa
         planner.counts = (_L2C_EXAMPLES, 100, 0, 11)
     elif action == "version":
         _l2c_version(name)
-    elif action == "gpu-busy":  # a local model still loaded in Ollama holds the card: Train now waits
-        supervisor.gpu_free = lambda: False
+    elif action in ("gpu-busy", "memory-busy"):
+        # A local model still loaded in Ollama holds the card, or other apps hold the computer's memory
+        # (O105): Train now waits.
+        if action == "gpu-busy":
+            supervisor.gpu_free = lambda: False
+        else:
+            supervisor.memory_free = lambda: False
         planner.counts = (_L2C_EXAMPLES, 100, _L2C_EXAMPLES, 11)
         job = supervisor.jobs.plan(steps_total=_L2C_STEPS, checkpoint_every=10,
                                    dataset={"id": "ds_" + "e" * 32, "examples": _L2C_EXAMPLES})
