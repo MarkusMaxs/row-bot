@@ -636,7 +636,8 @@ class RemoteTrainer:
             submitted = hub.run_job(
                 image=self.recipe_for(record).remote["image"], command=bootstrap_command(),
                 env={"ROW_BOT_INPUT_REPO": record.dataset_repo, **hub_module.SWITCHES},
-                secrets={"HF_TOKEN": self.sign_in().token()}, flavor=record.flavor,
+                secrets={"HF_TOKEN": self.sign_in().token(valid_for=record.timeout_seconds + 1800)},
+                flavor=record.flavor,
                 timeout_seconds=record.timeout_seconds, labels=hub_module.labels_for(job.id))
         except HubError as error:
             if error.code == "network":

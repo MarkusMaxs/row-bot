@@ -158,3 +158,13 @@ def test_every_request_goes_to_hugging_face_only(hf):
 
     assert {request.url.host for request in fake.requests} == {"huggingface.co"}
     assert all(request.url.scheme == "https" for request in fake.requests)
+
+
+def test_a_jobs_token_is_refreshed_to_last_the_job(hf):
+    fake, sign_in, _now = hf
+    fake.pending = 0
+    sign_in.start()
+    sign_in.poll()
+
+    assert sign_in.token() == ACCESS  # an hour left: fine for a quick call
+    assert sign_in.token(valid_for=2 * 3600) == FRESH  # a two-hour job needs a fresh one

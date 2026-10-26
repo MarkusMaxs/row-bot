@@ -207,7 +207,7 @@ class FakeSignIn:
     def sign_out(self) -> None:
         self.signed_in = False
 
-    def token(self) -> str:
+    def token(self, *, valid_for: float = 0.0) -> str:
         from row_bot.learning.remote.auth import SignInError
 
         if not self.signed_in:

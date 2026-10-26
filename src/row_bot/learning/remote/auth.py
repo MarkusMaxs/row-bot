@@ -241,9 +241,10 @@ class HuggingFaceSignIn:
 
     # ── Using it ────────────────────────────────────────────────────────
 
-    def token(self) -> str:
-        """A current access token (refreshed when it is about to expire). ``SignInError("signed_out")`` when
-        there is no sign-in, ``("expired")`` when Hugging Face won't refresh it."""
+    def token(self, *, valid_for: float = REFRESH_MARGIN_SECONDS) -> str:
+        """A current access token, refreshed when it would expire within ``valid_for`` seconds (a job's token
+        must last the job). ``SignInError("signed_out")`` when there is no sign-in, ``("expired")`` when Hugging
+        Face won't refresh it."""
 
         import httpx
 
@@ -252,7 +253,7 @@ class HuggingFaceSignIn:
             access = str(saved.get("access_token") or "")
             if not access:
                 raise SignInError("signed_out")
-            if float(saved.get("expires_at") or 0) - self._clock() > REFRESH_MARGIN_SECONDS:
+            if float(saved.get("expires_at") or 0) - self._clock() > max(REFRESH_MARGIN_SECONDS, valid_for):
                 return access
             refresh = str(saved.get("refresh_token") or "")
             if not refresh:
