@@ -2789,10 +2789,12 @@ const CATALOG: Record<string, Entry> = {
   ],
   learning_hugging_face_unreachable: [
     'Row-Bot couldn’t reach Hugging Face. Check your connection, then try again.',
+    'retry',
     RETRY,
   ],
   learning_hugging_face_refused: [
     'Hugging Face didn’t accept the request. Try again, or sign in again if it keeps happening.',
+    'retry',
     RETRY,
   ],
   learning_hugging_face_signed_out: [
