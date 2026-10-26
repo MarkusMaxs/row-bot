@@ -24,7 +24,8 @@ from row_bot import stale_skills
 
 STORE = "skills.json"
 _MONEY = r"(?:gbp|£|€|eur|usd|\$)\s?\d[\d,]*(?:\.\d+)?"
-_TIME = r"(?<![\d:.])(?:[01]?\d|2[0-3]):[0-5]\d(?![\d])|(?<![\d.:])(?:1[0-2]|0?[1-9])\s?(?:am|pm)\b"
+_TIME = (r"(?<![\d:.])(?:[01]?\d|2[0-3]):[0-5]\d(?![\d])(?:\s?[ap]m\b)?"
+         r"|(?<![\d.:])(?:1[0-2]|0?[1-9])\s?(?:am|pm)\b")
 _UNIT = (r"(?<![\w.])\d+(?:\.\d+)?\s?(?:-|\s)?(?:hours?|hrs?|days?|weeks?|minutes?|mins?|shifts?|°\s?c|degrees|kg|"
          r"litres?|loaves|boxes|percent|%)(?![\w])")
 _EMAIL = r"\b[\w.+-]+@[\w-]+(?:\.[\w-]+)+\b"
@@ -42,7 +43,8 @@ _UNITS = {"hour": "hours", "hr": "hours", "day": "days", "week": "weeks", "minut
 
 
 def _normal(token: str, kind: str) -> str:
-    """One spelling per value: "£150" and "GBP 150" are "gbp 150"; "1pm" is "13:00"; "48-hour" is "48 hours"."""
+    """One spelling per value: "£150" and "GBP 150" are "gbp 150"; "1pm" and "1:00 PM" are "13:00"; "48-hour" is
+    "48 hours"."""
 
     text = " ".join(token.lower().split())
     if kind == "money":
@@ -53,7 +55,9 @@ def _normal(token: str, kind: str) -> str:
     if kind == "time":
         clock = re.match(r"(\d{1,2})[:.](\d{2})", text)
         if clock:
-            return f"{int(clock.group(1)):02d}:{clock.group(2)}"
+            hour = int(clock.group(1))
+            hour = hour % 12 + 12 if "pm" in text and hour <= 12 else hour % 12 if "am" in text else hour
+            return f"{hour:02d}:{clock.group(2)}"
         hour = int(re.match(r"\d+", text).group(0)) % 12 + (12 if "pm" in text else 0)
         return f"{hour:02d}:00"
     if kind == "measure":

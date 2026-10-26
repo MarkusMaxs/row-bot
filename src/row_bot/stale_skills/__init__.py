@@ -11,7 +11,9 @@ When on, every arm keeps the same records:
   ``valid_from``, ``valid_to`` and ``superseded_by``, written when a fact is updated, and an "as of" recall filter;
 - **skill–memory links** (:mod:`.links`): the memories a user skill mentions, kept with the skill's last revision;
 - **the operation log** (``stale_skills/operations.jsonl``): write, merge, supersede, delete, conflict, skill and patch
-  events with their ids.
+  events with their ids;
+- **where each write came from** (:func:`current_origin`): the conversation it was written in or read from, a
+  document, or neither (the person's own edit), so R and D count only changes from trusted sources (:mod:`.sources`).
 
 The arm (:mod:`.arms`) adds at most one intervention: **R** drafts a ``patch_skill`` proposal overnight for a skill whose
 linked memory changed (a Dream Cycle phase), **D** adds one dated line where such a skill is shown, **F** drafts a repair
@@ -23,6 +25,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 import threading
 import uuid
 from collections.abc import Callable, Iterator
@@ -54,6 +57,7 @@ OFF = Settings()
 _cache: tuple[tuple[str, int, int], Settings] | None = None
 _clock: Callable[[], datetime] = datetime.now
 _cause: ContextVar[str] = ContextVar("stale_skills_cause", default="")
+_origin: ContextVar[str] = ContextVar("stale_skills_origin", default="")
 _log_lock = threading.Lock()
 
 
@@ -135,6 +139,39 @@ def cause(name: str) -> Iterator[None]:
         yield
     finally:
         _cause.reset(token)
+
+
+def current_origin() -> str:
+    """Where a write now comes from: ``thread:<id>`` (the conversation memory extraction reads, or the agent's turn),
+    ``document:<id>`` (document knowledge), or "" (neither: the person's own edit, on the Memory page say)."""
+
+    found = _origin.get()
+    if found:
+        return found
+    agent = sys.modules.get("row_bot.agent")
+    thread_id = str(agent.get_current_thread_id() or "") if agent is not None else ""
+    return f"thread:{thread_id}" if thread_id else ""
+
+
+def origin_for(source: str, source_context: dict[str, Any] | None = None) -> str:
+    """The origin of memory extraction's writes: its document, or the conversation it read."""
+
+    if str(source or "").startswith("document:"):
+        return str(source)
+    thread_id = str((source_context or {}).get("thread_id") or "")
+    return f"thread:{thread_id}" if thread_id else ""
+
+
+@contextmanager
+def origin(name: str) -> Iterator[None]:
+    """Writes inside come from ``name`` (see :func:`current_origin`); "" leaves the current origin as it is."""
+
+    token = _origin.set(name) if name else None
+    try:
+        yield
+    finally:
+        if token is not None:
+            _origin.reset(token)
 
 
 # ── The operation log ────────────────────────────────────────────────────────
@@ -292,7 +329,8 @@ def date_note(skill_name: str) -> str:
     return _guarded("date note", lambda: arms.date_note(skill_name)) or ""
 
 
-__all__ = ["ARMS", "OFF", "Settings", "arm_on", "cause", "current_cause", "date_note", "enabled", "entity_deleted", "invalidate",
+__all__ = ["ARMS", "OFF", "Settings", "arm_on", "cause", "current_cause", "current_origin", "date_note", "enabled",
+           "entity_deleted", "invalidate", "origin", "origin_for",
            "entity_superseded", "entity_written", "folder", "log", "now", "operations", "parse_time", "read_json",
            "recall_as_of", "relation_added", "relation_deleted", "say_date", "set_clock", "settings",
            "settings_path", "skill_saved", "write_json"]

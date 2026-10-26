@@ -9,8 +9,9 @@ memory's as ``superseded_by``.
 
 The table is created, and the existing memories and relations get their rows (the additive migration:
 ``valid_from`` = the memory's last update, cause ``migrate``), the first time the setting is on in a process. Nothing
-here runs while it is off. Every row carries the write's cause; Dream's own merges, enrichment and inferences
-(:data:`HOUSEKEEPING`) are never treated as changes in the world.
+here runs while it is off. Every row carries the write's cause and its origin (where it came from:
+:func:`row_bot.stale_skills.current_origin`); Dream's own merges, enrichment and inferences (:data:`HOUSEKEEPING`)
+are never treated as changes in the world.
 """
 
 from __future__ import annotations
@@ -83,7 +84,10 @@ def migrate(conn: sqlite3.Connection, *, skip: str = "") -> int:
     conn.execute(f"""CREATE TABLE IF NOT EXISTS {TABLE} (
         id TEXT PRIMARY KEY, entity_id TEXT NOT NULL, fact TEXT NOT NULL, target_id TEXT NOT NULL DEFAULT '',
         value TEXT NOT NULL, valid_from TEXT NOT NULL, valid_to TEXT, superseded_by TEXT,
-        cause TEXT NOT NULL DEFAULT '', ended_cause TEXT NOT NULL DEFAULT '', recorded_at TEXT NOT NULL)""")
+        cause TEXT NOT NULL DEFAULT '', ended_cause TEXT NOT NULL DEFAULT '', recorded_at TEXT NOT NULL,
+        origin TEXT NOT NULL DEFAULT '')""")
+    if "origin" not in {row[1] for row in conn.execute(f"PRAGMA table_info({TABLE})")}:
+        conn.execute(f"ALTER TABLE {TABLE} ADD COLUMN origin TEXT NOT NULL DEFAULT ''")  # a table from before origins
     conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{TABLE}_entity ON {TABLE}(entity_id, fact)")
     conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{TABLE}_ended ON {TABLE}(valid_to)")
     added = 0
@@ -130,6 +134,7 @@ def entity_written(before: dict[str, Any] | None, after: dict[str, Any]) -> list
     """Record a memory saved or updated: new facts open, changed facts close and are replaced. Returns the changes."""
 
     cause = stale_skills.current_cause()
+    origin = stale_skills.current_origin()
     at = _iso()
     changes: list[dict[str, Any]] = []
     opened: list[str] = []
@@ -150,8 +155,8 @@ def entity_written(before: dict[str, Any] | None, after: dict[str, Any]) -> list
             if row is not None and row["value"] == value:
                 continue
             row_id = _new_id()
-            conn.execute(f"INSERT INTO {TABLE}(id,entity_id,fact,value,valid_from,cause,recorded_at) "
-                         "VALUES(?,?,?,?,?,?,?)", (row_id, after["id"], fact, value, at, cause, at))
+            conn.execute(f"INSERT INTO {TABLE}(id,entity_id,fact,value,valid_from,cause,recorded_at,origin) "
+                         "VALUES(?,?,?,?,?,?,?,?)", (row_id, after["id"], fact, value, at, cause, at, origin))
             opened.append(row_id)
             if row is not None:
                 conn.execute(f"UPDATE {TABLE} SET valid_to = ?, superseded_by = ?, ended_cause = ? WHERE id = ?",
@@ -167,9 +172,9 @@ def entity_written(before: dict[str, Any] | None, after: dict[str, Any]) -> list
     subject = str(after.get("subject") or "")
     if new:
         stale_skills.log("write", entity_id=after["id"], subject=subject, entity_type=after.get("entity_type"),
-                         validity=opened)
+                         text=str(after.get("description") or ""), origin=origin, validity=opened)
     for change in changes:
-        stale_skills.log("supersede", subject=subject, **change)
+        stale_skills.log("supersede", subject=subject, origin=origin, **change)
     candidate = _review_candidate(after)
     if candidate and candidate != _review_candidate(before or {}):
         stale_skills.log("conflict", entity_id=after["id"], subject=subject, incoming=candidate)
@@ -217,7 +222,7 @@ def entity_superseded(old: dict[str, Any], new: dict[str, Any]) -> None:
     finally:
         conn.close()
     stale_skills.log("supersede", entity_id=old["id"], subject=str(old.get("subject") or ""), fact=DESCRIPTION,
-                     old=current["value"], new=successor["value"], new_entity_id=new["id"],
+                     old=current["value"], new=successor["value"], new_entity_id=new["id"], origin=successor["origin"],
                      old_validity=current["id"], new_validity=successor["id"])
 
 
@@ -226,10 +231,11 @@ def relation_added(relation: dict[str, Any]) -> None:
     row_id = _new_id()
     conn = _connection()
     try:
-        conn.execute(f"INSERT INTO {TABLE}(id,entity_id,fact,target_id,value,valid_from,cause,recorded_at) "
-                     "VALUES(?,?,?,?,?,?,?,?)", (row_id, relation["source_id"], f"relation:{relation['relation_type']}",
-                                                 relation["target_id"], relation["target_id"], at,
-                                                 stale_skills.current_cause(), at))
+        conn.execute(f"INSERT INTO {TABLE}(id,entity_id,fact,target_id,value,valid_from,cause,recorded_at,origin) "
+                     "VALUES(?,?,?,?,?,?,?,?,?)", (row_id, relation["source_id"],
+                                                   f"relation:{relation['relation_type']}", relation["target_id"],
+                                                   relation["target_id"], at, stale_skills.current_cause(), at,
+                                                   stale_skills.current_origin()))
         conn.commit()
     finally:
         conn.close()
@@ -297,18 +303,21 @@ def history(entity_id: str) -> list[dict[str, Any]]:
 
 def changes(since: str = "", until: str = "") -> list[dict[str, Any]]:
     """Changes in the world after ``since`` (and up to ``until``): a memory's description replaced (``update``,
-    ``supersede``), and new memories (``write``). Dream's own tidying is left out. Oldest first."""
+    ``supersede``), and new memories (``write``), each with the ``origin`` of its new value. Dream's own tidying is
+    left out. Oldest first."""
 
     until = until or "9999"
     conn = _connection()
     try:
         replaced = conn.execute(
             f"SELECT old.entity_id, old.value AS old, new.value AS new, new.entity_id AS new_entity_id, "
-            f"old.valid_to AS at, old.ended_cause AS cause, old.id AS old_validity, new.id AS new_validity "
+            f"old.valid_to AS at, old.ended_cause AS cause, old.id AS old_validity, new.id AS new_validity, "
+            f"new.origin AS origin "
             f"FROM {TABLE} old JOIN {TABLE} new ON new.id = old.superseded_by WHERE old.fact = ? AND "
             "old.valid_to > ? AND old.valid_to <= ?", (DESCRIPTION, since, until)).fetchall()
         written = conn.execute(
-            f"SELECT v.entity_id, v.value AS new, v.valid_from AS at, v.cause, v.id AS new_validity FROM {TABLE} v "
+            f"SELECT v.entity_id, v.value AS new, v.valid_from AS at, v.cause, v.id AS new_validity, v.origin "
+            f"FROM {TABLE} v "
             f"WHERE v.fact = ? AND v.valid_from > ? AND v.valid_from <= ? AND NOT EXISTS (SELECT 1 FROM {TABLE} p "
             "WHERE p.superseded_by = v.id) AND NOT EXISTS (SELECT 1 FROM "
             f"{TABLE} e WHERE e.entity_id = v.entity_id AND e.fact = ? AND e.valid_from < v.valid_from)",

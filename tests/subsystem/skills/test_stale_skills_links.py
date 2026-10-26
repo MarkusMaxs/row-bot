@@ -73,4 +73,7 @@ def test_values_are_matched_however_they_are_written():
         "gbp 1200.5": "money", "gbp 150": "money", "13:00": "time", "16:00": "time", "48 hours": "measure",
         "5 °c": "measure", "3 shifts": "measure"}
     assert links.value_tokens("GBP 1.50 a loaf") == {"gbp 1.5": "money"}  # not a time of day
+    # A clock time with its am/pm (smoke R, 26 Oct: "from 6:00 PM to 8:00 PM" was read as 06:00 and 08:00).
+    assert links.value_tokens("from 6:00 PM to 8:00 pm, or 12:30am") == {"18:00": "time", "20:00": "time",
+                                                                          "00:30": "time"}
     assert links.as_written("gbp 150", "the float is £150 a week") == "£150"  # shown as the text writes it

@@ -4,7 +4,10 @@ All three start from the same question, :func:`conflicts`: which of a skill's li
 was last revised, in a way that touches a value the skill states? A change counts when the newer memory (an updated
 description, a memory superseding another, or a new memory linked to the skill) states a value of a kind the skill
 states (an email address, an amount, a time, a number with its unit) that the skill doesn't have, and the skill
-references that memory by name or names a value the old memory had. Dream's own merges and enrichment never count.
+references that memory by name or names a value the old memory had. Only values from a trusted source count (what the
+person said, or the world's own sources; never the agent's own actions or replies: :mod:`.sources`); a change whose
+new values come from nowhere trusted is logged (``untrusted_source``) and left alone. Dream's own merges and
+enrichment never count.
 
 - **R** (:func:`reconcile`, a Dream Cycle phase): for each change since the last night, the model drafts the skill
   with the current fact (or says it needs no change); a draft becomes a ``patch_skill`` proposal through
@@ -22,7 +25,7 @@ from collections.abc import Callable
 from typing import Any
 
 from row_bot import stale_skills
-from row_bot.stale_skills import facts, links
+from row_bot.stale_skills import facts, links, sources
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +34,7 @@ RECONCILE_STATE = "reconcile.json"
 MAX_RECONCILE_DRAFTS = 12
 _REPLY_TOKENS = 2048
 _TEXT_CHARS = 600
+_untrusted_logged: set[tuple[str, str]] = set()
 
 
 def _skill(name: str) -> Any:
@@ -104,8 +108,19 @@ def conflicts(name: str, *, since: str = "", until: str = "") -> list[dict[str, 
     found = []
     for change in facts.changes(max(since, revised), until):
         touched = conflict(text, change, linked)
-        if touched:
-            found.append({**change, **touched, "skill": name, "skill_revised_at": revised})
+        if not touched:
+            continue
+        fresh = sources.trusted(touched["fresh"], str(change.get("origin") or ""))
+        if not fresh:
+            key = (name, str(change.get("new_validity") or ""))
+            if key not in _untrusted_logged:
+                _untrusted_logged.add(key)
+                stale_skills.log("untrusted_source", skill=name, kind=change.get("kind"),
+                                 entity_id=change.get("new_entity_id") or change.get("entity_id"),
+                                 new_validity=change.get("new_validity"), changed_at=change.get("at"),
+                                 origin=change.get("origin"), fresh=touched["fresh"])
+            continue
+        found.append({**change, **touched, "fresh": fresh, "skill": name, "skill_revised_at": revised})
     return found
 
 
