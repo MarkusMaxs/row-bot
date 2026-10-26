@@ -1,6 +1,6 @@
 import { expect, it, vi } from 'vitest';
 import type { ClientController } from '../../api/controller';
-import type { TaskRunReview, TaskApprovalReview } from '../../api/types';
+import type { TaskRunReview } from '../../api/types';
 import { taskRuns } from './task-runs';
 
 const review: TaskRunReview = {
@@ -12,19 +12,6 @@ const review: TaskRunReview = {
   notify_only: false,
   steps_total: 2,
   conversation_id: null,
-};
-const approval: TaskApprovalReview = {
-  id: 'approval',
-  task_id: 'task',
-  run_id: 'run',
-  revision: '3'.repeat(64),
-  message: 'Review this action',
-  requested_at: '',
-  expires_at: null,
-  approval_mode: 'approve',
-  message_truncated: false,
-  response_available: true,
-  nonce: 'reviewed-nonce',
 };
 function fixture() {
   const saved = {
@@ -113,35 +100,4 @@ it('does not replace uncertain Run intent and keeps Stop available', async () =>
     quiesced: false,
   });
   expect(controller.command).toHaveBeenCalledTimes(2);
-});
-
-it('sends the reviewed approval nonce once and never changes an uncertain decision', async () => {
-  const { controller, actions } = fixture();
-  controller.command.mockRejectedValue(new TypeError('lost response'));
-  await expect(actions.respondApproval(approval, true)).rejects.toThrow();
-  await expect(actions.respondApproval(approval, false)).rejects.toMatchObject({
-    code: 'operation_uncertain',
-  });
-  controller.receipt.mockResolvedValue({
-    status: 'completed',
-    task_run_id: 'run',
-    task_approval_recorded: true,
-    task_approval_decision: 'approved',
-  });
-  expect(await actions.respondApproval(approval, true)).toMatchObject({
-    approval_id: 'approval',
-    decision: 'approved',
-  });
-  expect(controller.command).toHaveBeenCalledOnce();
-  expect(controller.command.mock.calls[0][1].payload.nonce).toBe(
-    'reviewed-nonce',
-  );
-});
-
-it('rejects unavailable approvals without commands', async () => {
-  const { controller, actions } = fixture();
-  await expect(
-    actions.respondApproval({ ...approval, response_available: false }, true),
-  ).rejects.toMatchObject({ code: 'approval_expired' });
-  expect(controller.command).not.toHaveBeenCalled();
 });

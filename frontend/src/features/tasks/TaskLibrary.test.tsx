@@ -253,7 +253,7 @@ it('shows one readable metadata line with steps and local schedule/run times', a
   const view = show(vi.fn(async () => pageOf([saved])));
   await screen.findByText('Saved task');
   const metadata = view.container.querySelector('.workflow-metadata');
-  expect(metadata).toHaveTextContent('3 steps');
+  expect(metadata).toHaveTextContent('3 messages');
   expect(metadata).toHaveTextContent(
     `Ran ${relativeTime('2026-09-25T12:40:00Z', now)}`,
   );
@@ -273,11 +273,11 @@ it('shows one readable metadata line with steps and local schedule/run times', a
   ).toBeChecked();
 });
 
-it('uses singular step wording and omits an empty description', async () => {
+it('uses singular message wording and omits an empty description', async () => {
   show(
     vi.fn(async () =>
       pageOf([
-        task('One step', {
+        task('One message', {
           notify_only: false,
           step_count: 1,
           description: '',
@@ -285,11 +285,13 @@ it('uses singular step wording and omits an empty description', async () => {
       ]),
     ),
   );
-  await screen.findByText('One step');
-  expect(row('One step').querySelector('.workflow-metadata')).toHaveTextContent(
-    /^1 step·/,
-  );
-  expect(row('One step').querySelector('.workflow-row-description')).toBeNull();
+  await screen.findByText('One message');
+  expect(
+    row('One message').querySelector('.workflow-metadata'),
+  ).toHaveTextContent(/^1 message·/);
+  expect(
+    row('One message').querySelector('.workflow-row-description'),
+  ).toBeNull();
 });
 
 it.each([
@@ -1002,16 +1004,14 @@ it('keeps the enable switch read-only without a toggle owner', async () => {
   ).toBeDisabled();
 });
 
-it('offers run history, step, settings and conversation actions in the row menu', async () => {
+it('offers run history, settings and conversation actions in the row menu', async () => {
   const user = userEvent.setup();
   const runs = vi.fn();
-  const graph = vi.fn();
   const settings = vi.fn();
   const conversation = vi.fn();
   const load = vi.fn(async () => pageOf([task('Digest', { enabled: true })]));
   show(load, {
     onRuns: runs,
-    onGraph: graph,
     onSettings: settings,
     onOpenConversation: conversation,
     onDuplicate: vi.fn(),
@@ -1027,7 +1027,6 @@ it('offers run history, step, settings and conversation actions in the row menu'
       .map((item) => item.textContent),
   ).toEqual([
     'Run history',
-    'Edit workflow steps',
     'Workflow settings',
     'Open conversation',
     'Duplicate workflow',
@@ -1035,7 +1034,6 @@ it('offers run history, step, settings and conversation actions in the row menu'
   ]);
   for (const [label, callback, args] of [
     ['Run history', runs, ['Digest', 'Digest']],
-    ['Edit workflow steps', graph, ['Digest', 'Digest']],
     ['Workflow settings', settings, ['Digest', 'Digest']],
     ['Open conversation', conversation, ['conversation-one']],
   ] as const) {
@@ -1136,12 +1134,14 @@ it('shows running progress that opens the run drawer', async () => {
   );
   show(load, { onRuns: runs });
   const stepping = await screen.findByRole('button', {
-    name: 'Open run of Stepping: Step 2/3',
+    name: 'Open run of Stepping: Message 2 of 3',
   });
-  expect(stepping).toHaveTextContent('Step 2/3');
+  expect(stepping).toHaveTextContent('Message 2 of 3');
   expect(
-    screen.getByRole('button', { name: 'Open run of Finishing: Step 3/3' }),
-  ).toHaveTextContent('Step 3/3');
+    screen.getByRole('button', {
+      name: 'Open run of Finishing: Message 3 of 3',
+    }),
+  ).toHaveTextContent('Message 3 of 3');
   expect(
     screen.getByRole('button', {
       name: 'Open run of Waiting: Waiting for approval',
@@ -1257,7 +1257,7 @@ it('starts a run in one click: it reviews, runs the reviewed request and shows S
     }),
   ).toBeVisible();
   expect(
-    within(row('Digest')).getByRole('button', { name: /Step 1\/3/ }),
+    within(row('Digest')).getByRole('button', { name: /Message 1 of 3/ }),
   ).toBeVisible();
   expect(runs).not.toHaveBeenCalled();
 });
@@ -1332,7 +1332,7 @@ it('follows a running row until its run ends, then reads the list again (B254)',
     });
   show(load, { loadRun });
   expect(
-    await screen.findByRole('button', { name: /Step 1\/3/ }),
+    await screen.findByRole('button', { name: /Message 1 of 3/ }),
   ).toBeVisible();
   await flush(2000);
   expect(loadRun).toHaveBeenCalledWith(
@@ -1341,7 +1341,7 @@ it('follows a running row until its run ends, then reads the list again (B254)',
     expect.any(AbortSignal),
   );
   expect(
-    within(row('Digest')).getByRole('button', { name: /Step 3\/3/ }),
+    within(row('Digest')).getByRole('button', { name: /Message 3 of 3/ }),
   ).toBeVisible();
   expect(load).toHaveBeenCalledTimes(1);
   await flush(2000);

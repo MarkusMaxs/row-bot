@@ -250,7 +250,6 @@ def _public_profile(profile: dict[str, Any]) -> dict[str, Any]:
         workspace_policy = {}
     if not isinstance(approval_policy, dict):
         approval_policy = {}
-    allow_tools = tool_policy.get("allow_tools") or []
     return {
         "id": profile.get("id", ""),
         "slug": profile.get("slug", ""),
@@ -261,8 +260,6 @@ def _public_profile(profile: dict[str, Any]) -> dict[str, Any]:
         "source": profile.get("source", ""),
         "enabled": bool(profile.get("enabled", True)),
         "capability": tool_policy.get("capability", "read_only"),
-        "tool_mode": "selected_tools" if allow_tools else "inherit_enabled_tools",
-        "allow_tools": allow_tools,
         "skills": skill_policy.get("skills_override") or [],
         "context_mode": context_policy.get("default_context_mode", "auto"),
         "workspace_mode": workspace_policy.get("workspace_mode_default", "auto"),
@@ -279,10 +276,9 @@ def _public_workflow(task: dict[str, Any] | None) -> dict[str, Any]:
         "name": task.get("name", ""),
         "description": task.get("description", ""),
         "enabled": bool(task.get("enabled", False)),
-        "advanced_mode": bool(task.get("advanced_mode", False)),
         "agent_profile_id": task.get("agent_profile_id", ""),
         "model_override": task.get("model_override", ""),
-        "steps": task.get("steps", []),
+        "messages": list(task.get("prompts") or []),
     }
 
 
@@ -432,7 +428,6 @@ class _AgentProfileSaveInput(BaseModel):
     when_to_use: str = Field(default="", description="When parent agents should choose this profile.")
     instructions: str = Field(description="Focused instructions for agents using this profile.")
     capability: Literal["read_only", "write_capable", "orchestrator"] = "read_only"
-    allow_tools: list[str] = Field(default=[], description="Optional exact tool names this profile may use.")
     skills: list[str] = Field(default=[], description="Manual skills pinned/injected when this profile is used.")
     context_mode: ContextMode = Field(default="focused", description="Default context mode.")
     workspace_mode: Literal["auto", "read_only", "single_writer", "worktree"] = "read_only"
@@ -852,7 +847,6 @@ def _agent_profile_save(
     description: str = "",
     when_to_use: str = "",
     capability: str = "read_only",
-    allow_tools: list[str] | None = None,
     skills: list[str] | None = None,
     context_mode: str = "focused",
     workspace_mode: str = "read_only",
@@ -864,10 +858,7 @@ def _agent_profile_save(
         description=description,
         when_to_use=when_to_use,
         instructions=instructions,
-        tool_policy_json={
-            "capability": capability,
-            "allow_tools": _as_list(allow_tools),
-        },
+        tool_policy_json={"capability": capability},
         skill_policy_json={
             "skills_override": _as_list(skills),
         },
@@ -972,13 +963,6 @@ def _agent_promote(run_id: str, target: str = "profile") -> str:
             "",
             "Produce a fresh result for the same kind of request. Preserve the source run's safety and profile constraints.",
         ])
-        steps = [
-            {
-                "type": "prompt",
-                "label": "Promoted Agent run",
-                "prompt": "\n".join(prompt_lines),
-            }
-        ]
         task_id = tasks_db.create_task(
             name=f"Promoted {run.get('display_name') or run_id}",
             description=(
@@ -986,7 +970,7 @@ def _agent_promote(run_id: str, target: str = "profile") -> str:
                 f"{run_id}. Review before enabling or scheduling."
             ),
             icon="hub",
-            steps=steps,
+            prompts=["\n".join(prompt_lines)],
             model_override=str(run.get("model_override") or "") or None,
             # A promoted workflow runs on Auto at most: Hands-off is the person's choice.
             safety_mode=stricter_approval_mode(run.get("approval_mode") or "block", "auto"),
@@ -996,12 +980,8 @@ def _agent_promote(run_id: str, target: str = "profile") -> str:
         )
         task = tasks_db.get_task(task_id)
         workflow = _public_workflow(task)
-        # The step's prompt quotes the child's summary: shown fenced, as data for review.
-        workflow["steps"] = [
-            {**step, "prompt": _fence_child_text(step["prompt"])}
-            if isinstance(step, dict) and step.get("prompt") else step
-            for step in workflow.get("steps") or []
-        ]
+        # The message quotes the child's summary: shown fenced, as data for review.
+        workflow["messages"] = [_fence_child_text(message) for message in workflow.get("messages") or []]
         return _json_response({
             "ok": True,
             "workflow": workflow,

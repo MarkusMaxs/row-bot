@@ -8,14 +8,19 @@ import {
 } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import type {
-  TaskApprovalPage,
-  TaskApprovalReview,
   TaskRunPage,
   TaskRunResult,
   TaskRunReview,
   TaskRunSummary,
 } from '../../api/types';
 import TaskRun, { type TaskRunProps } from './TaskRun';
+
+// The card a waiting run waits on is the chat's own approval card, tested with it.
+vi.mock('../shell/ApprovalCard', () => ({
+  default: ({ id }: { id: string }) => (
+    <aside aria-label={`Approval card ${id}`} />
+  ),
+}));
 
 afterEach(() => {
   cleanup();
@@ -55,31 +60,6 @@ function history(items: TaskRunSummary[] = []): TaskRunPage {
     total: items.length,
   };
 }
-function approval(
-  overrides: Partial<TaskApprovalReview> = {},
-): TaskApprovalReview {
-  return {
-    id: 'approval-a',
-    task_id: 'task-a',
-    run_id: 'run-a',
-    revision: 'c'.repeat(64),
-    message: 'Review the exact synthetic action',
-    requested_at: '2026-01-01T10:00:00',
-    expires_at: null,
-    approval_mode: 'block',
-    message_truncated: false,
-    response_available: true,
-    ...overrides,
-  };
-}
-function approvalPage(items: TaskApprovalReview[] = []): TaskApprovalPage {
-  return {
-    items,
-    revision: 'd'.repeat(64),
-    total: items.length,
-    next_cursor: null,
-  };
-}
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (cause: unknown) => void;
@@ -95,12 +75,6 @@ function props(overrides: Partial<TaskRunProps> = {}): TaskRunProps {
     loadReview: vi.fn().mockResolvedValue(review),
     run: vi.fn().mockResolvedValue({ run: runSummary(), replayed: false }),
     loadHistory: vi.fn().mockResolvedValue(history()),
-    loadApprovals: vi.fn().mockResolvedValue(approvalPage()),
-    respondApproval: vi.fn().mockResolvedValue({
-      approval_id: 'approval-a',
-      decision: 'approved',
-      run: runSummary(),
-    }),
     stop: vi.fn().mockResolvedValue({
       run: runSummary('run-a', 'stopping'),
       stop_requested: true,
@@ -121,10 +95,8 @@ it('loads a review and saved history without running or granting approval', asyn
   expect(screen.getByRole('button', { name: 'Run now' })).toBeEnabled();
   expect(screen.getByRole('button', { name: 'Refresh runs' })).toBeEnabled();
   expect(callbacks.run).not.toHaveBeenCalled();
-  expect(callbacks.respondApproval).not.toHaveBeenCalled();
-  expect(callbacks.loadApprovals).not.toHaveBeenCalled();
   // The reviewed facts are shown in words, not as raw policy tokens.
-  expect(screen.getByText('2 steps')).toBeInTheDocument();
+  expect(screen.getByText('2 messages')).toBeInTheDocument();
   expect(screen.getByText('Profile Workflow default')).toBeInTheDocument();
   expect(screen.getByText('Blocks actions')).toBeInTheDocument();
   expect(
@@ -162,12 +134,12 @@ it('starts only one explicit operation and follows the run until it ends (B121)'
   expect(screen.getByRole('status')).toHaveTextContent('Run started.');
   expect(screen.getByRole('status')).not.toHaveTextContent('Refresh');
   const selected = () => screen.getByRole('region', { name: 'Selected run' });
-  expect(within(selected()).getByText('0 of 2 steps')).toBeInTheDocument();
+  expect(within(selected()).getByText('Message 1 of 2')).toBeInTheDocument();
   await act(async () => {
     await vi.advanceTimersByTimeAsync(2000);
   });
   expect(loadRun).toHaveBeenCalledWith('task-a', 'run-a', expect.anything());
-  expect(within(selected()).getByText('1 of 2 steps')).toBeInTheDocument();
+  expect(within(selected()).getByText('Message 2 of 2')).toBeInTheDocument();
   await act(async () => {
     await vi.advanceTimersByTimeAsync(2000);
   });
@@ -208,92 +180,21 @@ it('preserves uncertainty and does not automatically retry the run', async () =>
   expect(screen.getByRole('button', { name: 'Run now' })).toBeEnabled();
 });
 
-it('binds approval to the exact reviewed card and keeps generated text inert', async () => {
-  const card = approval({ message: '<script>window.taskAttack=1</script>' });
-  const callbacks = props({
-    loadHistory: vi
-      .fn()
-      .mockResolvedValue(history([runSummary('run-a', 'paused')])),
-    loadApprovals: vi.fn().mockResolvedValue(approvalPage([card])),
-  });
-  const view = render(<TaskRun {...callbacks} />);
-  await screen.findByText(card.message);
-  expect(view.container.querySelector('script')).toBeNull();
-  expect(
-    within(
-      screen.getByRole('article', { name: 'Pending task approval' }),
-    ).getByRole('heading', { name: 'Approval needed' }),
-  ).toBeInTheDocument();
-  await act(async () =>
-    fireEvent.click(screen.getByRole('button', { name: 'Approve' })),
-  );
-  expect(callbacks.respondApproval).toHaveBeenCalledWith(card, true);
-  expect(callbacks.run).not.toHaveBeenCalled();
-});
-
-it('rejects through the same approval owner without turning it into a run', async () => {
-  const card = approval();
-  const callbacks = props({
-    loadHistory: vi
-      .fn()
-      .mockResolvedValue(history([runSummary('run-a', 'paused')])),
-    loadApprovals: vi.fn().mockResolvedValue(approvalPage([card])),
-  });
-  render(<TaskRun {...callbacks} />);
-  await screen.findByText(card.message);
-  await act(async () =>
-    fireEvent.click(screen.getByRole('button', { name: 'Reject' })),
-  );
-  expect(callbacks.respondApproval).toHaveBeenCalledWith(card, false);
-  expect(callbacks.run).not.toHaveBeenCalled();
-});
-
-it('does not offer actions for a truncated or other-owner approval and opens its actual conversation', async () => {
-  const card = approval({ response_available: false, message_truncated: true });
-  const callbacks = props({
-    loadHistory: vi
-      .fn()
-      .mockResolvedValue(history([runSummary('run-a', 'paused')])),
-    loadApprovals: vi.fn().mockResolvedValue(approvalPage([card])),
-  });
-  render(<TaskRun {...callbacks} />);
-  await screen.findByText(card.message);
-  expect(screen.getByRole('button', { name: 'Approve' })).toBeDisabled();
-  expect(screen.getByRole('button', { name: 'Reject' })).toBeDisabled();
-  fireEvent.click(screen.getByRole('button', { name: 'Open conversation' }));
-  expect(callbacks.openConversation).toHaveBeenCalledWith('conversation-a');
-});
-
-it('says since when a workflow approval waits (B255)', async () => {
-  const callbacks = props({
-    loadHistory: vi
-      .fn()
-      .mockResolvedValue(history([runSummary('run-a', 'paused')])),
-    loadApprovals: vi.fn().mockResolvedValue(approvalPage([approval()])),
-  });
-  render(<TaskRun {...callbacks} />);
-  const card = await screen.findByRole('article', {
-    name: 'Pending task approval',
-  });
-  expect(card).toHaveTextContent(/Waiting since .*10:00/);
-});
-
 it('explains a skipped scheduled run and offers no Stop (B255)', async () => {
+  const skipped = {
+    ...runSummary('run-b', 'skipped'),
+    notice: 'Skipped: the run before it was still going.',
+  };
   const callbacks = props({
     loadHistory: vi
       .fn()
-      .mockResolvedValue(
-        history([
-          runSummary('run-b', 'skipped'),
-          runSummary('run-a', 'paused'),
-        ]),
-      ),
+      .mockResolvedValue(history([skipped, runSummary('run-a', 'running')])),
   });
   render(<TaskRun {...callbacks} />);
   const selected = await screen.findByRole('region', { name: 'Selected run' });
   expect(selected).toHaveTextContent('Skipped');
   expect(selected).toHaveTextContent(
-    'This scheduled run was skipped: an earlier run still waited for your approval.',
+    'Skipped: the run before it was still going.',
   );
   expect(screen.queryByRole('button', { name: 'Stop run' })).toBeNull();
 });
@@ -318,10 +219,10 @@ it('shows a stop request without claiming cleanup completed', async () => {
   ).toBeInTheDocument();
 });
 
-it('shows the selected run status in words with its start time and step progress', async () => {
+it('shows the selected run status in words with its start time and message progress', async () => {
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(new Date(2026, 0, 1, 12));
-  const waiting = { ...runSummary('run-b', 'paused'), steps_done: 1 };
+  const waiting = { ...runSummary('run-b', 'running'), steps_done: 1 };
   const callbacks = props({
     loadHistory: vi
       .fn()
@@ -333,8 +234,7 @@ it('shows the selected run status in words with its start time and step progress
     numeric: 'auto',
     style: 'long',
   }).format(-2, 'hour');
-  expect(within(selected).getByText('Waiting for approval')).toBeVisible();
-  expect(within(selected).queryByText(/paused/)).not.toBeInTheDocument();
+  expect(within(selected).getByText('Running')).toBeVisible();
   expect(within(selected).queryByText(/Saved status/)).not.toBeInTheDocument();
   expect(within(selected).getByText(/^Started/)).toHaveTextContent(
     `Started ${twoHoursAgo}`,
@@ -346,7 +246,7 @@ it('shows the selected run status in words with its start time and step progress
   expect(
     within(selected).getByRole('progressbar', { name: 'Run progress' }),
   ).toHaveAttribute('value', '1');
-  expect(within(selected).getByText('1 of 2 steps')).toBeInTheDocument();
+  expect(within(selected).getByText('Message 2 of 2')).toBeInTheDocument();
   expect(
     within(selected).getByRole('button', { name: 'Stop run' }),
   ).toBeEnabled();
@@ -354,8 +254,7 @@ it('shows the selected run status in words with its start time and step progress
   const waitingRow = screen.getByRole('button', { name: 'Show run run-b' });
   const completedRow = screen.getByRole('button', { name: 'Show run run-a' });
   expect(waitingRow).toHaveAttribute('aria-current', 'true');
-  expect(waitingRow).toHaveTextContent('Waiting for approval');
-  expect(waitingRow).toHaveTextContent('1/2');
+  expect(waitingRow).toHaveTextContent('Running');
   expect(completedRow).not.toHaveAttribute('aria-current');
   expect(completedRow).toHaveTextContent('Completed');
 
@@ -363,18 +262,11 @@ it('shows the selected run status in words with its start time and step progress
   expect(completedRow).toHaveAttribute('aria-current', 'true');
   expect(waitingRow).not.toHaveAttribute('aria-current');
   expect(within(selected).getByText('Completed')).toBeVisible();
-  expect(within(selected).getByText('2 of 2 steps')).toBeInTheDocument();
+  // A finished run says how it ended, not how many messages it sent.
+  expect(within(selected).queryByRole('progressbar')).toBeNull();
   expect(
     within(selected).queryByRole('button', { name: 'Stop run' }),
   ).not.toBeInTheDocument();
-  // Only the non-terminal run asked for its pending approvals.
-  expect(callbacks.loadApprovals).toHaveBeenCalledOnce();
-  expect(callbacks.loadApprovals).toHaveBeenCalledWith(
-    'task-a',
-    'run-b',
-    undefined,
-    expect.any(AbortSignal),
-  );
   expect(callbacks.run).not.toHaveBeenCalled();
   expect(callbacks.stop).not.toHaveBeenCalled();
 });
@@ -449,39 +341,6 @@ it('keeps a bounded history window while every forward page remains reachable', 
   expect(screen.getByText(/100 earlier loaded runs/)).toBeInTheDocument();
 });
 
-it('replaces a bounded approval page using the exact continuation cursor', async () => {
-  const loadApprovals = vi
-    .fn()
-    .mockResolvedValueOnce({
-      ...approvalPage([approval()]),
-      total: 2,
-      next_cursor: 'next-approval',
-    })
-    .mockResolvedValueOnce(
-      approvalPage([approval({ id: 'approval-b', message: 'Second review' })]),
-    );
-  const callbacks = props({
-    loadApprovals,
-    loadHistory: vi
-      .fn()
-      .mockResolvedValue(history([runSummary('run-a', 'paused')])),
-  });
-  render(<TaskRun {...callbacks} />);
-  await screen.findByRole('button', { name: 'Next approvals' });
-  await act(async () =>
-    fireEvent.click(screen.getByRole('button', { name: 'Next approvals' })),
-  );
-  expect(loadApprovals.mock.calls[1].slice(0, 3)).toEqual([
-    'task-a',
-    'run-a',
-    'next-approval',
-  ]);
-  expect(screen.getByText('Second review')).toBeInTheDocument();
-  expect(
-    screen.queryByText('Review the exact synthetic action'),
-  ).not.toBeInTheDocument();
-});
-
 it('rejects changed history revisions instead of mixing stale pages', async () => {
   const loadHistory = vi
     .fn()
@@ -548,62 +407,6 @@ it.each([
   expect(within(run).getByText(notice)).toBeInTheDocument();
 });
 
-it('shows a person-only card with exactly what will happen (N9)', async () => {
-  render(
-    <TaskRun
-      {...props({
-        loadHistory: vi
-          .fn()
-          .mockResolvedValue(history([runSummary('run-a', 'paused')])),
-        loadApprovals: vi.fn().mockResolvedValue(
-          approvalPage([
-            approval({
-              approval_mode: 'auto',
-              person_only: true,
-              card: {
-                action: 'Post on X',
-                destination: '@rowbot',
-                account: 'X account',
-                text: 'Launch day!\nRow-Bot 5.3 is out.',
-                media: [
-                  {
-                    name: 'launch.png',
-                    size: 2048,
-                    fingerprint: '0a1b2c3d4e5f',
-                    kind: 'image',
-                  },
-                ],
-              },
-            }),
-          ]),
-        ),
-      })}
-    />,
-  );
-  const card = await screen.findByRole('article', {
-    name: 'Pending task approval',
-  });
-  expect(
-    within(card).getByRole('heading', { name: 'Only you can approve this' }),
-  ).toBeInTheDocument();
-  expect(
-    within(card).getByText(/Auto and Hands-off never answer it for you/),
-  ).toBeInTheDocument();
-  for (const [term, value] of [
-    ['Action', 'Post on X'],
-    ['To', '@rowbot'],
-    ['As', 'X account'],
-  ])
-    expect(within(card).getByText(term).nextElementSibling).toHaveTextContent(
-      value,
-    );
-  expect(within(card).getByText(/Row-Bot 5.3 is out./)).toBeInTheDocument();
-  expect(within(card).getByText('launch.png')).toBeInTheDocument();
-  expect(within(card).getByText('2 KB')).toBeInTheDocument();
-  expect(within(card).getByText('0a1b2c3d4e5f')).toBeInTheDocument();
-  expect(within(card).getByRole('button', { name: 'Approve' })).toBeEnabled();
-});
-
 it('a run its removed folder stopped needs you and offers choosing a folder (N9)', async () => {
   const onChooseFolder = vi.fn();
   render(
@@ -630,4 +433,93 @@ it('a run its removed folder stopped needs you and offers choosing a folder (N9)
   expect(choose).toHaveClass('primary');
   fireEvent.click(choose);
   expect(onChooseFolder).toHaveBeenCalledOnce();
+});
+
+it('shows how a run ended and what it did outside Row-Bot, with links (F31)', async () => {
+  const posted = {
+    ...runSummary('run-a', 'completed'),
+    notice:
+      'Posted on X as @row_bot_ai: https://x.com/row_bot_ai/status/2114329103603990962',
+    actions: [
+      {
+        title: 'Post to X',
+        result: 'Posted on X as @row_bot_ai',
+        link: 'https://x.com/row_bot_ai/status/2114329103603990962',
+      },
+    ],
+  };
+  render(
+    <TaskRun
+      {...props({ loadHistory: vi.fn().mockResolvedValue(history([posted])) })}
+    />,
+  );
+  const selected = await screen.findByRole('region', { name: 'Selected run' });
+  expect(within(selected).getByText('Completed')).toBeVisible();
+  const done = within(selected).getByRole('list', { name: 'What it did' });
+  expect(done).toHaveTextContent('Post to X');
+  expect(done).toHaveTextContent('Posted on X as @row_bot_ai');
+  expect(
+    within(done).getByRole('link', {
+      name: 'Open: Posted on X as @row_bot_ai',
+    }),
+  ).toHaveAttribute(
+    'href',
+    'https://x.com/row_bot_ai/status/2114329103603990962',
+  );
+});
+
+it('shows the card a waiting run waits on, never a summary to approve (F31)', async () => {
+  const waiting = {
+    ...runSummary('run-a', 'waiting'),
+    notice: 'Post to X as @row_bot_ai?',
+    approval_id: 'approval-a',
+  };
+  render(
+    <TaskRun
+      {...props({ loadHistory: vi.fn().mockResolvedValue(history([waiting])) })}
+    />,
+  );
+  const selected = await screen.findByRole('region', { name: 'Selected run' });
+  expect(within(selected).getByText('Waiting for you')).toBeVisible();
+  expect(
+    within(selected).getByRole('complementary', {
+      name: 'Approval card approval-a',
+    }),
+  ).toBeInTheDocument();
+  expect(
+    within(selected).queryByRole('button', { name: /^Approve/ }),
+  ).toBeNull();
+});
+
+it('says in words when a person said no, a run expired or its action was not confirmed', async () => {
+  const ended = [
+    {
+      ...runSummary('run-c', 'denied'),
+      notice: 'You said no, so it stopped there.',
+    },
+    {
+      ...runSummary('run-b', 'expired'),
+      notice: 'A newer run replaced it before it was approved.',
+    },
+    {
+      ...runSummary('run-a', 'unsure'),
+      notice: "Not sure it went through: X didn't confirm it.",
+    },
+  ];
+  render(
+    <TaskRun
+      {...props({ loadHistory: vi.fn().mockResolvedValue(history(ended)) })}
+    />,
+  );
+  await screen.findByRole('region', { name: 'Selected run' });
+  expect(
+    screen.getByRole('button', { name: 'Show run run-c' }),
+  ).toHaveTextContent('You said no');
+  expect(
+    screen.getByRole('button', { name: 'Show run run-b' }),
+  ).toHaveTextContent('Expired');
+  expect(
+    screen.getByRole('button', { name: 'Show run run-a' }),
+  ).toHaveTextContent('Not sure it went through');
+  expect(screen.queryByRole('button', { name: 'Stop run' })).toBeNull();
 });

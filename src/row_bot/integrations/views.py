@@ -260,15 +260,15 @@ def has_view(tool_name: str, item: dict | None = None) -> bool:
 
 def _in_chat(item: dict, conversation_id: str, info: Any = None, arguments: dict | None = None) -> bool:
     """Whether this chat may use the app (or, with ``info``, make this call to one of its tools) as a turn
-    of it could: not switched off here, its agent profile still there and on, the app within the profile's
-    tools, and the call not refused by the profile (denied, outside its tools, or a change while read-only)."""
+    of it could: not switched off here, its agent profile still there and on, and the call not refused by
+    the profile (a change while read-only)."""
     from row_bot.integrations import scope
     from row_bot.threads import get_thread_apps_off
     from row_bot.tools.profile_policy import dispatch_refusal
     if item["id"] in set(get_thread_apps_off(conversation_id)):
         return False
     profile = scope._profile(conversation_id)
-    if profile is None or not scope._allowed(item, scope._profile_allow(conversation_id, profile)):
+    if profile is None:
         return False
     if info is None:
         return True

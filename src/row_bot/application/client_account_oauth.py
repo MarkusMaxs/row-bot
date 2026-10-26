@@ -312,7 +312,7 @@ def _x_flow() -> bytes:
     from row_bot.api_keys import get_key
     from row_bot.tools.x_tool import _run_oauth_flow
 
-    token = _run_oauth_flow(get_key("X_CLIENT_ID"), get_key("X_CLIENT_SECRET"), persist=False)
+    token = _run_oauth_flow(get_key("X_CLIENT_ID"), get_key("X_CLIENT_SECRET"))
     return json.dumps(token, separators=(",", ":")).encode()
 
 

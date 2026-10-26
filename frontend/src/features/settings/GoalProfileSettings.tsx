@@ -136,7 +136,6 @@ export type ProfileSummary = {
   editable: boolean;
   revision: string;
   capability: 'read_only' | 'write_capable' | 'orchestrator';
-  allow_tools: string[];
   skills: string[];
   context_mode: 'auto' | 'focused' | 'recent' | 'full' | 'empty' | 'resume';
   workspace_mode: 'auto' | 'read_only' | 'single_writer' | 'worktree';
@@ -162,7 +161,6 @@ export type ProfileFields = {
   when_to_use: string;
   instructions: string | null;
   capability: ProfileSummary['capability'];
-  allow_tools: string[];
   skills: string[];
   context_mode: ProfileSummary['context_mode'];
   workspace_mode: ProfileSummary['workspace_mode'];
@@ -259,9 +257,6 @@ function profilePolicy(profile: ProfileSummary) {
   return [
     CAPABILITIES[profile.capability] ?? profile.capability.replaceAll('_', ' '),
     `${CONTEXT_MODES[profile.context_mode] ?? profile.context_mode} context`,
-    profile.allow_tools.length
-      ? `${profile.allow_tools.length} selected tool${profile.allow_tools.length === 1 ? '' : 's'}`
-      : 'Inherits enabled tools',
     ...(profile.skills.length
       ? [
           `${profile.skills.length} skill${profile.skills.length === 1 ? '' : 's'}`,
@@ -269,14 +264,14 @@ function profilePolicy(profile: ProfileSummary) {
       : []),
   ].join(' · ');
 }
-/** A draft's comma-joined tool or skill IDs as a list. */
+/** A draft's comma-joined skill IDs as a list. */
 function listedIds(value: string) {
   return value
     .split(',')
     .map((item) => item.trim())
     .filter(Boolean);
 }
-/** Names a profile's tools or skills: "Memory, Web search and 3 more". */
+/** Names a profile's skills: "Brain dump, Meeting notes and 3 more". */
 function namedList(ids: readonly string[], shown = 20) {
   const names = ids.map(humanizeToken);
   const rest = names.length - shown;
@@ -292,8 +287,7 @@ type ProfileAttempt = {
   review: ProfileReview;
 };
 type Attempt = GoalAttempt | ProfileAttempt;
-type ProfileDraft = Omit<ProfileFields, 'allow_tools' | 'skills'> & {
-  allow_tools: string;
+type ProfileDraft = Omit<ProfileFields, 'skills'> & {
   skills: string;
   replace_instructions: boolean;
   target_slug: string;
@@ -329,7 +323,6 @@ const emptyProfileDraft = (): ProfileDraft => ({
   when_to_use: '',
   instructions: '',
   capability: 'read_only',
-  allow_tools: '',
   skills: '',
   context_mode: 'auto',
   workspace_mode: 'auto',
@@ -485,11 +478,7 @@ export type GoalProfileSettingsProps = {
     profileId: string,
     signal: AbortSignal,
   ) => Promise<{ schema_version: 1; profile: ProfileSummary }>;
-  /** Lists tools and skills to pick for a profile, by search text (F14). */
-  searchTools?: (
-    query: string,
-    signal: AbortSignal,
-  ) => Promise<ChecklistOption[]>;
+  /** Lists skills to pick for a profile, by search text (F14). */
   searchSkills?: (
     query: string,
     signal: AbortSignal,
@@ -560,7 +549,6 @@ function fieldsFromDraft(draft: ProfileDraft, create: boolean): ProfileFields {
     instructions:
       create || draft.replace_instructions ? draft.instructions : null,
     capability: draft.capability,
-    allow_tools: split(draft.allow_tools),
     skills: split(draft.skills),
     context_mode: draft.context_mode,
     workspace_mode: draft.workspace_mode,
@@ -608,7 +596,6 @@ export default function GoalProfileSettings(props: GoalProfileSettingsProps) {
     loadProfiles,
     loadProfile,
     loadProfileInstructions,
-    searchTools,
     searchSkills,
     reviewGoal,
     executeGoal,
@@ -873,7 +860,6 @@ export default function GoalProfileSettings(props: GoalProfileSettingsProps) {
           when_to_use: detail.when_to_use,
           instructions: '',
           capability: detail.capability,
-          allow_tools: detail.allow_tools.join(', '),
           skills: detail.skills.join(', '),
           context_mode: detail.context_mode,
           workspace_mode: detail.workspace_mode,
@@ -1415,7 +1401,10 @@ export default function GoalProfileSettings(props: GoalProfileSettingsProps) {
               </Field>
             </>
           )}
-          <Field label="Capability">
+          <Field
+            label="Capability"
+            hint="Every agent has the tools a chat has. Read only lets it look, never change or send."
+          >
             <Select
               value={state.profileDraft.capability}
               onChange={(event) =>
@@ -1429,31 +1418,6 @@ export default function GoalProfileSettings(props: GoalProfileSettingsProps) {
               <option value="orchestrator">Orchestrator</option>
             </Select>
           </Field>
-          {searchTools ? (
-            <ProfileChecklist
-              label="Tools"
-              selected={listedIds(state.profileDraft.allow_tools)}
-              onChange={(next) =>
-                session.updateProfileDraft({ allow_tools: next.join(', ') })
-              }
-              search={searchTools}
-              empty="None chosen: it uses every tool turned on in Settings."
-            />
-          ) : (
-            <Field
-              label="Allowed tools"
-              hint="Comma-separated stable tool IDs."
-            >
-              <Input
-                value={state.profileDraft.allow_tools}
-                onChange={(event) =>
-                  session.updateProfileDraft({
-                    allow_tools: event.target.value,
-                  })
-                }
-              />
-            </Field>
-          )}
           {searchSkills ? (
             <ProfileChecklist
               label="Skills"
@@ -1577,20 +1541,12 @@ export default function GoalProfileSettings(props: GoalProfileSettingsProps) {
           profile.capability.replaceAll('_', ' ')}{' '}
         · {CONTEXT_MODES[profile.context_mode] ?? profile.context_mode} context
       </p>
-      <dl className="profile-library-uses">
-        <dt>Tools</dt>
-        <dd>
-          {profile.allow_tools.length
-            ? namedList(profile.allow_tools)
-            : 'Every enabled tool'}
-        </dd>
-        {profile.skills.length > 0 && (
-          <>
-            <dt>Skills</dt>
-            <dd>{namedList(profile.skills)}</dd>
-          </>
-        )}
-      </dl>
+      {profile.skills.length > 0 && (
+        <dl className="profile-library-uses">
+          <dt>Skills</dt>
+          <dd>{namedList(profile.skills)}</dd>
+        </dl>
+      )}
       <p>
         Workspace:{' '}
         {WORKSPACE_MODES[profile.workspace_mode] ?? profile.workspace_mode} ·

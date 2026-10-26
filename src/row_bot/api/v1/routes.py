@@ -524,13 +524,6 @@ _STATUS.update(
 )
 _STATUS.update(
     {
-        "invalid_task_graph": 422,
-        "task_graph_invalid_reference": 422,
-        "task_graph_cycle": 422,
-        "task_graph_missing_subtask": 422,
-        "task_graph_too_large": 413,
-        "task_graph_unavailable": 409,
-        "task_graph_read_unconfirmed": 503,
     }
 )
 _STATUS.update(
@@ -568,9 +561,7 @@ _STATUS.update(
         "task_run_metadata_unavailable": 503,
         "task_policy_unavailable": 409,
         "task_policy_revision_conflict": 409,
-        "task_approval_unconfirmed": 409,
         "task_run_unconfirmed": 409,
-        "invalid_task_approval": 422,
     }
 )
 _STATUS["invalid_catalog_query"] = 422
@@ -3202,7 +3193,6 @@ def create_router(
                 "conversation.stop",
                 "agent.stop",
                 "task.stop",
-                "task.approval",
                 "approval.resolve",
                 "workspace.process.stop",
                 "workspace.process.recover",
@@ -3226,12 +3216,10 @@ def create_router(
                 "task.delete",
                 "task.duplicate",
                 "task.delivery.update",
-                "task.graph.update",
                 "task.settings.update",
                 "task.webhook.rotate",
                 "task.run",
                 "task.stop",
-                "task.approval",
             }
         ):
             raise ProtocolError("invalid_command", 422)
@@ -3252,25 +3240,6 @@ def create_router(
         except ValueError:
             raise ProtocolError("invalid_command", 422) from None
         wire = body.model_dump(mode="json")
-        if body.type == "task.approval":
-            # The presentation nonce binds this session to the exact reviewed
-            # approval; command storage keeps only the semantic decision.
-            from row_bot.application.task_run_commands import approval_digest
-
-            security.consume_nonce(
-                current,
-                body.payload["approval_id"],
-                body.payload["approval_revision"],
-                approval_digest(
-                    body.payload["task_id"],
-                    body.payload["run_id"],
-                    body.payload["approval_id"],
-                    body.payload["approval_revision"],
-                ),
-                body.payload["nonce"],
-                str(body.command_id),
-            )
-            wire["payload"] = {k: v for k, v in wire["payload"].items() if k != "nonce"}
         if body.type == "artifact.share":
             security.consume_nonce(
                 current,
@@ -3413,22 +3382,6 @@ def create_router(
                     body.payload["nonce"],
                     str(body.command_id),
                 )
-
-        def validate_task_approval() -> None:
-            validate_access()
-            security.consume_nonce(
-                current,
-                body.payload["approval_id"],
-                body.payload["approval_revision"],
-                approval_digest(
-                    body.payload["task_id"],
-                    body.payload["run_id"],
-                    body.payload["approval_id"],
-                    body.payload["approval_revision"],
-                ),
-                body.payload["nonce"],
-                str(body.command_id),
-            )
 
         def validate_process_approval(review: dict) -> None:
             validate_access()
@@ -3929,11 +3882,6 @@ def create_router(
                 else "remote_client"
             ),
             **(
-                {"validate_approval": validate_task_approval}
-                if body.type == "task.approval"
-                else {}
-            ),
-            **(
                 {"validate_approval": validate_process_approval}
                 if body.type == "workspace.process.start"
                 else {}
@@ -3996,20 +3944,6 @@ def create_router(
         except TaskControlError as exc:
             raise ProtocolError(exc.code, _STATUS.get(exc.code, 422)) from exc
         return await respond(request, dto.TaskEditorSnapshot, asdict(result))
-
-    @router.get("/tasks/{task_id}/graph")
-    async def task_graph(task_id: str, request: Request) -> JSONResponse:
-        await session(request)
-        from row_bot.application.task_graph_controls import (
-            TaskGraphError,
-            get_task_graph,
-        )
-
-        try:
-            result = await call(get_task_graph, task_id)
-        except TaskGraphError as exc:
-            raise ProtocolError(exc.code, _STATUS.get(exc.code, 422)) from exc
-        return await respond(request, dto.TaskGraphSnapshot, asdict(result))
 
     async def settings_query(
         request: Request, task_id: str, *, review: bool = False
@@ -4125,39 +4059,6 @@ def create_router(
         return await task_query(
             request, dto.TaskRunSummary, get_task_run, task_id, run_id
         )
-
-    @router.get("/tasks/{task_id}/runs/{run_id}/approvals")
-    async def task_approvals(
-        task_id: str,
-        run_id: str,
-        request: Request,
-        cursor: str | None = None,
-        limit: int = 8,
-    ) -> JSONResponse:
-        current = await session(request)
-        from row_bot.application.task_execution import (
-            TaskExecutionError,
-            list_task_approvals,
-        )
-        from row_bot.application.task_run_commands import approval_digest
-
-        try:
-            result = asdict(
-                await call(
-                    list_task_approvals, task_id, run_id, cursor=cursor, limit=limit
-                )
-            )
-        except TaskExecutionError as exc:
-            raise ProtocolError(exc.code, _STATUS.get(exc.code, 409)) from exc
-        for item in result["items"]:
-            if item["response_available"]:
-                item["nonce"] = security.approval_nonce(
-                    current,
-                    item["id"],
-                    item["revision"],
-                    approval_digest(task_id, run_id, item["id"], item["revision"]),
-                )
-        return await respond(request, dto.TaskApprovalPage, result)
 
     @router.post("/resources/folder-selection")
     async def select_folder(request: Request) -> JSONResponse:

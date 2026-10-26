@@ -93,3 +93,20 @@ def test_a_delete_without_undo_removes_the_conversation_at_once(platform, timers
     assert receipt["status"] == "DeleteCompleted"
     assert not timers
     assert "conversation-a" not in _listed(platform)
+
+
+def test_a_conversation_removed_while_the_list_is_read_is_left_out_not_the_whole_list(platform, monkeypatch):
+    """A workflow's conversation goes with its workflow: one removed between the list's read of its rows and
+    of each conversation is left out, and the rest still list (the page never fails with not found)."""
+    from row_bot.application.client_platform import ClientPlatformError
+
+    read = platform.get_conversation
+
+    def gone_meanwhile(conversation_id, **kwargs):
+        if conversation_id == "conversation-a":
+            raise ClientPlatformError("not_found")
+        return read(conversation_id, **kwargs)
+
+    monkeypatch.setattr(platform, "get_conversation", gone_meanwhile)
+    listed = _listed(platform)
+    assert "conversation-a" not in listed and "conversation-b" in listed

@@ -81,7 +81,6 @@ def test_profile_route_keeps_private_instructions_out_of_reads(service):
             "when_to_use": "Use for local browser work.",
             "instructions": "Private profile instructions",
             "capability": "write_capable",
-            "allow_tools": ["read_file"],
             "skills": [],
             "context_mode": "focused",
             "workspace_mode": "single_writer",

@@ -76,6 +76,15 @@ def test_reading_mail_lists_and_reads_with_outlook_links_and_never_asks(outlook)
     assert outlook_tool.search_mail() == "No messages in Inbox."  # Said plainly, never left empty.
 
 
+def test_a_draft_is_listed_as_a_draft_from_this_mailbox_not_from_unknown(outlook):
+    """U22: Graph gives a draft no sender until it is sent."""
+    draft = {**MESSAGE, "id": "AAMkDraft", "subject": "Launch note", "from": None, "isDraft": True, "isRead": True,
+             "hasAttachments": False}
+    outlook.graph[("GET", "/me/mailFolders/drafts/messages")] = {"value": [draft]}
+    found = outlook_tool.search_mail(folder="drafts")
+    assert f"Launch note — Draft · from {ADDRESS}," in found and "unknown" not in found
+
+
 def test_sending_mail_sends_what_its_card_showed(outlook, tmp_path):
     from row_bot.tools import registry
 

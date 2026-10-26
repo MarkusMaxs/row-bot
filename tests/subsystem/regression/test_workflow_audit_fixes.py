@@ -25,17 +25,11 @@ def test_shell_command_classification_regressions() -> None:
     assert classify_command("ls -la") == "safe"
 
 
-def test_delete_task_and_finish_run_clean_up_pipeline_state(tmp_path, reload_for_data_dir) -> None:
+def test_deleting_a_workflow_cancels_its_waiting_approval(tmp_path, reload_for_data_dir) -> None:
     tasks = fresh_tasks_module(tmp_path, reload_for_data_dir)
 
     task_id = tasks.create_task(name="cleanup test", prompts=["test"], apply_default_skills=False)
     conn = tasks._get_conn()
-    conn.execute(
-        "INSERT OR REPLACE INTO pipeline_state "
-        "(run_id, task_id, thread_id, current_step_index, step_outputs, status, config, created_at, updated_at) "
-        "VALUES (?, ?, 'thread', 0, '{}', 'paused', '{}', datetime('now'), datetime('now'))",
-        ("run-cleanup", task_id),
-    )
     conn.execute(
         "INSERT OR REPLACE INTO approval_requests "
         "(id, run_id, task_id, step_id, resume_token, message, status, requested_at) "
@@ -48,36 +42,10 @@ def test_delete_task_and_finish_run_clean_up_pipeline_state(tmp_path, reload_for
     tasks.delete_task(task_id)
 
     conn = tasks._get_conn()
-    pipeline_state = conn.execute("SELECT * FROM pipeline_state WHERE task_id = ?", (task_id,)).fetchone()
     approval = conn.execute("SELECT * FROM approval_requests WHERE id = 'request-cleanup'").fetchone()
     conn.close()
-    assert pipeline_state is None
     assert approval is not None
     assert dict(approval)["status"] == "cancelled"
-
-    task_id_2 = tasks.create_task(name="finish cleanup test", prompts=["test"], apply_default_skills=False)
-    run_id = "run-finish-cleanup"
-    conn = tasks._get_conn()
-    conn.execute(
-        "INSERT OR REPLACE INTO task_runs (id, task_id, thread_id, started_at, status) "
-        "VALUES (?, ?, 'thread-2', datetime('now'), 'running')",
-        (run_id, task_id_2),
-    )
-    conn.execute(
-        "INSERT OR REPLACE INTO pipeline_state "
-        "(run_id, task_id, thread_id, current_step_index, step_outputs, status, config, created_at, updated_at) "
-        "VALUES (?, ?, 'thread-2', 0, '{}', 'running', '{}', datetime('now'), datetime('now'))",
-        (run_id, task_id_2),
-    )
-    conn.commit()
-    conn.close()
-
-    tasks._finish_run(run_id, "completed", "done")
-
-    conn = tasks._get_conn()
-    finished_state = conn.execute("SELECT * FROM pipeline_state WHERE run_id = ?", (run_id,)).fetchone()
-    conn.close()
-    assert finished_state is None
 
 
 def test_get_task_channels_distinguishes_none_from_empty_list(tmp_path, reload_for_data_dir) -> None:

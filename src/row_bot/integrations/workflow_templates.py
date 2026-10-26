@@ -1,11 +1,11 @@
 """Workflow templates: a starting point, created switched off.
 
-Each creates a scheduled workflow (it checks on its schedule; nothing outside can start it) under
-the workflow's profile and the Ask approval mode: reading runs, anything that changes asks, and
-approval-locked tools need approval under every level but Hands-off. A template that uses apps limits its step to them, as
-an @mention would; a template without apps uses Row-Bot's own tools (web search, your past chats), so
-it works with nothing connected. No template sets a webhook or changes how Row-Bot can be reached.
-A template whose app is not connected yet says so, and its page offers Connect.
+Each creates a scheduled workflow (it checks on its schedule; nothing outside can start it) at the Ask
+approval level: reading runs, anything that changes asks. Its one message runs as a chat turn in the
+workflow's own conversation, with every tool a chat has (F31). A template that uses an app needs that app
+connected first; one without apps uses Row-Bot's own tools (web search, your past chats), so it works
+with nothing connected. No template sets a webhook or changes how Row-Bot can be reached. A template
+whose app is not connected yet says so, and its page offers Connect.
 """
 from __future__ import annotations
 
@@ -80,13 +80,8 @@ def use(template_id: str) -> dict:
     taken = {str(task.get("name") or "") for task in tasks.list_tasks()}
     name = next(candidate for candidate in (template["name"], *(f"{template['name']} ({n})" for n in range(2, 100)))
                 if candidate not in taken)
-    read = {"id": "read", "type": "prompt", "prompt": template["prompt"], "on_error": "stop"}
-    if item_ids:  # Without apps the step uses Row-Bot's own tools, as any workflow step may.
-        read["apps"] = item_ids
-    steps = [read,
-             {"id": "tell", "type": "notify", "channel": "desktop",
-              "message": f"{name} is ready. Open the workflow's latest run to read it."}]
     task_id = tasks.create_task(name=name, description=template["description"], icon=template["icon"],
-                                schedule=template["schedule"], steps=steps, enabled=False, safety_mode="approve",
+                                schedule=template["schedule"], prompts=[template["prompt"]], enabled=False,
+                                safety_mode="approve",
                                 agent_profile_id=tasks.DEFAULT_WORKFLOW_AGENT_PROFILE_ID, apply_default_skills=False)
     return {"task_id": task_id, "name": name}

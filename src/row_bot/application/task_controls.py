@@ -44,7 +44,6 @@ class TaskEditorSnapshot:
     id: str
     revision: str
     fields: TaskEditableFields
-    advanced: bool
     agent_profile_id: str
     approval_mode: str
     conversation_id: str | None
@@ -151,7 +150,6 @@ def _snapshot(row: dict, revision: str) -> TaskEditorSnapshot:
     _validate_fields(fields, schedule=False)
     return TaskEditorSnapshot(
         id=row["id"], revision=revision, fields=fields,
-        advanced=bool(row.get("advanced_mode") or row.get("_stored_steps")),
         agent_profile_id=str(row.get("agent_profile_id") or ""),
         approval_mode=_approval_level(row.get("safety_mode")),
         conversation_id=row.get("persistent_thread_id"),
@@ -247,7 +245,7 @@ def create_saved_task(
     except sqlite3.IntegrityError:
         validate()
         saved = get_task_editor(stable_task_id)
-        if saved.fields != fields or saved.advanced or saved.legacy_delivery:
+        if saved.fields != fields or saved.legacy_delivery:
             raise TaskControlError("task_creation_conflict", task_id=stable_task_id) from None
         try:
             tasks.sync_task_schedule(stable_task_id, validate=validate)
@@ -272,13 +270,9 @@ def update_saved_task(
     current = get_task_editor(task_id)
     if current.revision != expected_revision:
         raise TaskControlError("task_revision_conflict", task_id=task_id)
-    if current.advanced and (
-        fields.prompts != current.fields.prompts or fields.notify_only != current.fields.notify_only
-    ):
-        raise TaskControlError("task_advanced_edit_required", task_id=task_id)
     if current.legacy_delivery and fields.channels != current.fields.channels:
         raise TaskControlError("task_delivery_review_required", task_id=task_id)
-    if not current.advanced and not fields.notify_only and not fields.prompts:
+    if not fields.notify_only and not fields.prompts:
         raise TaskControlError("invalid_task_fields")
     if _runs_now(fields, before=current.fields, last_run=(tasks.get_task(task_id) or {}).get("last_run")):
         raise TaskControlError("task_time_passed", task_id=task_id)

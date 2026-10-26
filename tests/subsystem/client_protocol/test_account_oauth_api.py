@@ -592,6 +592,57 @@ def test_x_oauth_uses_saved_credentials_and_writes_only_after_explicit_start(tmp
     assert "fixture-token" not in json.dumps(completed)
 
 
+def test_add_another_x_account_signs_in_through_this_computers_browser(tmp_path, monkeypatch, keychain):
+    """B424: with one X account connected, Add another account opens X's page in this computer's browser,
+    and the browser coming back to Row-Bot's loopback address adds the second account beside the first."""
+    import socket
+    import threading
+    import urllib.request
+    import webbrowser
+    from urllib.parse import parse_qs, urlencode, urlparse
+
+    from row_bot import x_accounts
+    from row_bot.tools import x_tool
+    from tests.helpers.fake_x_api import PERSONAL, ROWBOT, FakeXApi
+
+    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "profile"))
+    monkeypatch.setenv("X_CLIENT_ID", "fixture-id")
+    monkeypatch.setenv("X_CLIENT_SECRET", "fixture-secret")
+    fake = FakeXApi()
+    monkeypatch.setattr(x_accounts, "transport", fake.transport())
+    x_accounts.add(fake.sign_in(*ROWBOT))
+    fake.codes["fixture-code"] = fake.sign_in(*PERSONAL)  # The account signed in on x.com in the browser.
+    opened, answered = [], []
+
+    def browser(url):
+        """X's page: the person allows access, and X sends the browser back to the loopback address."""
+        opened.append(url)
+        query = {key: values[0] for key, values in parse_qs(urlparse(url).query).items()}
+        back = query["redirect_uri"] + "?" + urlencode({"code": "fixture-code", "state": query["state"]})
+        direct = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # Loopback, never a proxy.
+        thread = threading.Thread(target=lambda: answered.append(direct.open(back, timeout=10).status))
+        thread.start()
+        return True
+
+    # A free port, not X's registered 17638, which a running Row-Bot's own sign-in may be listening on.
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    monkeypatch.setattr(x_tool, "_OAUTH_CALLBACK_PORT", port)
+    monkeypatch.setattr(x_tool, "_OAUTH_REDIRECT_URI", f"http://127.0.0.1:{port}/callback")
+    monkeypatch.setattr(webbrowser, "open", browser)
+    monkeypatch.setattr(owner, "Thread", ImmediateThread)
+    before = owner.read_account_auth(account="x")
+    completed = owner.execute_account_auth(**_command(before, "start"))
+    assert completed["phase"] == "completed", completed["message"]
+    assert completed["message"] == "Connected @sidd on X."
+    assert len(opened) == 1 and opened[0].startswith("https://x.com/i/oauth2/authorize?")
+    assert parse_qs(urlparse(opened[0]).query)["client_id"] == ["fixture-id"] and answered == [200]
+    assert [row["username"] for row in x_accounts.summaries()] == ["rowbot_ai", "sidd"]
+    assert completed["snapshot"]["token_files"] == 2
+    assert "access-sidd" not in json.dumps(completed)
+
+
 def test_each_x_account_is_listed_and_removing_one_keeps_the_other(tmp_path, monkeypatch, keychain):
     """N7: Settings › Apps › X lists every connected account by handle, name and ID (never a token), and
     removes only the one asked."""

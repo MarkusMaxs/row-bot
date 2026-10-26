@@ -4336,8 +4336,6 @@ export class ClientController {
     this.query(() => this.transport.taskDeliveryDefaults?.(signal));
   taskEditor = (task: string, signal?: AbortSignal) =>
     this.query(() => this.transport.taskEditor?.(task, signal));
-  taskGraph = (task: string, signal?: AbortSignal) =>
-    this.query(() => this.transport.taskGraph?.(task, signal));
   taskSettings = (task: string, signal?: AbortSignal) =>
     this.query(() => this.transport.taskSettings?.(task, signal));
   workspaceProcesses = (
@@ -4874,13 +4872,6 @@ export class ClientController {
     this.query(() => this.transport.taskRuns?.(task, cursor, signal));
   taskRun = (task: string, run: string, signal?: AbortSignal) =>
     this.query(() => this.transport.taskRun?.(task, run, signal));
-  taskApprovals = (
-    task: string,
-    run: string,
-    cursor?: string,
-    signal?: AbortSignal,
-  ) =>
-    this.query(() => this.transport.taskApprovals?.(task, run, cursor, signal));
   artifactExport = (
     conversation: string,
     binding: string,

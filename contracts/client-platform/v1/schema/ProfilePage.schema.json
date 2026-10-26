@@ -23,14 +23,6 @@
     "ProfileSummary": {
       "additionalProperties": false,
       "properties": {
-        "allow_tools": {
-          "items": {
-            "type": "string"
-          },
-          "maxItems": 100,
-          "title": "Allow Tools",
-          "type": "array"
-        },
         "approval_mode": {
           "enum": [
             "inherit",
@@ -189,7 +181,6 @@
         "editable",
         "revision",
         "capability",
-        "allow_tools",
         "skills",
         "context_mode",
         "workspace_mode",

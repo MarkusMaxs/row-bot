@@ -1976,6 +1976,47 @@
   margin: 0;
   color: var(--text-primary);
   font-size: var(--text-13);
+  overflow-wrap: anywhere;
+}
+/* What a run did outside Row-Bot: each action, its result and a link to it (F31). */
+.task-run-actions-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.task-run-actions-list > li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 2px 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  font-size: var(--text-13);
+}
+.task-run-action-title {
+  grid-column: 1;
+  color: var(--text-muted);
+  font-size: var(--text-12);
+}
+.task-run-action-result {
+  grid-column: 1;
+  overflow-wrap: anywhere;
+}
+.task-run-actions-list > li > a {
+  display: inline-flex;
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  padding: 6px;
+  border-radius: 6px;
+  color: var(--text-muted);
+}
+.task-run-actions-list > li > a:hover,
+.task-run-actions-list > li > a:focus-visible {
+  background: var(--surface-hover);
+  color: var(--text-primary);
 }
 .task-action-card {
   display: grid;
@@ -2033,11 +2074,16 @@
   padding: 0;
   list-style: none;
 }
+/* A run: how it ended and when, then what it says, on a line of its own (F31). */
 .task-run-row {
   display: grid;
-  grid-template-columns: 8px minmax(0, 1fr) auto auto;
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+  grid-template-areas:
+    'dot status time'
+    '. notice notice';
   align-items: center;
-  gap: 10px;
+  column-gap: 10px;
+  row-gap: 2px;
   width: 100%;
   min-height: 36px;
   padding: 4px 8px;
@@ -2054,11 +2100,32 @@
 .task-run-row[aria-current='true'] {
   background: var(--surface-hover);
 }
+.task-run-row > .task-run-row-dot {
+  grid-area: dot;
+}
+.task-run-row-status {
+  grid-area: status;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .task-run-row-time,
 .task-run-row-steps {
   color: var(--text-muted);
   font-size: var(--text-12);
   font-variant-numeric: tabular-nums;
+}
+.task-run-row-time {
+  grid-area: time;
+  white-space: nowrap;
+}
+.task-run-row-steps {
+  display: -webkit-box;
+  grid-area: notice;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 /* Knowledge ------------------------------------------------------------- */
