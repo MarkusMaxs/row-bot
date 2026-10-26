@@ -74,6 +74,16 @@ def value_tokens(text: str) -> dict[str, str]:
     return found
 
 
+def as_written(token: str, text: str) -> str:
+    """A normalised value (:func:`value_tokens`) as ``text`` writes it ("gbp 150" -> "GBP 150"), else the token."""
+
+    for kind, pattern in TOKEN_KINDS.items():
+        for match in pattern.finditer(str(text or "")):
+            if _normal(match.group(0), kind) == token:
+                return match.group(0).strip()
+    return token
+
+
 def _words(text: str) -> list[str]:
     return _WORD.findall(str(text or "").lower())
 

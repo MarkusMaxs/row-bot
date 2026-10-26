@@ -127,8 +127,11 @@ def date_note(name: str) -> str:
     latest = found[-1]
     record = links.skill_record(name) or {}
     display = str(record.get("display_name") or name)
-    says = ", ".join(f'"{token}"' for token in latest["skill_says"]) or "an older value"
+    skill = _skill(name)
+    says = ", ".join(f'"{links.as_written(token, str(skill.instructions or ""))}"'
+                     for token in latest["skill_says"]) or "an older value"
     memory = _short(_added(latest.get("old"), latest["new"]), 260)
+    latest = {**latest, "fresh": [links.as_written(token, latest["new"]) for token in latest["fresh"]]}
     subject = latest.get("subject") or "a memory"
     line = (f"DATE CHECK for the skill \"{display}\": the skill was last revised on "
             f"{stale_skills.say_date(latest['skill_revised_at'])} and says {says}. The memory \"{subject}\" is "
