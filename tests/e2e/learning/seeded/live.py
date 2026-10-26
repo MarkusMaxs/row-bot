@@ -676,13 +676,15 @@ class PersonRun:
         return {"refresh": dict(added), "summary": dict(summary)}
 
     def night_look(self) -> Any:
-        """The product's night's look (L3a), on the simulated clock: issues, a diagnosis each, drafts."""
+        """The product's night's look (L3a), its tests (L3b) and its strategy trial (L4a): quiet hours and the
+        person's last message on the simulated clock; Learning's own records on the real one, like the work
+        capture stamps (the look's 30 days of evidence are then the person's real recent work)."""
 
         from row_bot.learning.lease import ResourceLease
         from row_bot.learning.runner import NightLook
 
         return NightLook(lease=ResourceLease(since_activity=self.clock.idle_seconds), root=self.data,
-                         hours=clock_module.sim_quiet_hours(self.clock, self.data), clock=self.clock.time)
+                         hours=clock_module.sim_quiet_hours(self.clock, self.data))
 
     def _look(self) -> Any:
         """Tonight's look for things to improve (L3a) and its tests (L3b): counts only (drafts by kind of
@@ -765,13 +767,13 @@ class PersonRun:
             if str(day) not in self.state.data["nights"] or not self.state.data["nights"][str(day)].get("done"):
                 self.night(day)
             found["nights"][str(day)] = self._trial_night()
-            if self._trials() >= int(self.args.generations) and "final" not in found:
+            if self._strategy_trials() >= int(self.args.generations) and "final" not in found:
                 final = self._final_set(day)
                 if final.get("state") in ("done", "failed"):
                     found["final"] = final
             self._record_generations(found)
             self.save()
-            self.note(f"generations: day {day}, {self._trials()} trials, method v{found.get('method_version')}"
+            self.note(f"generations: day {day}, {self._strategy_trials()} trials, method v{found.get('method_version')}"
                       + (", final set done" if found.get("final", {}).get("state") == "done" else ""))
         found["state"] = "done" if found.get("final", {}).get("state") == "done" else "incomplete"
         self._record_generations(found)
@@ -780,9 +782,9 @@ class PersonRun:
     def _store(self) -> Any:
         from row_bot.learning.store import LearningStore
 
-        return LearningStore(self.data, clock=self.clock.time)
+        return LearningStore(self.data)
 
-    def _trials(self) -> int:
+    def _strategy_trials(self) -> int:
         from row_bot.learning.improver import archive
 
         return sum(1 for item in archive.trials(self._store()) if not item.get("final"))
@@ -818,7 +820,7 @@ class PersonRun:
         self.check_cap()
         report = meta.run_final(store, label=f"release check, night {day}", client=LedgerModelClient(),
                                 tester_factory=lambda method: look._tester(method, meta.PURPOSE),  # noqa: SLF001
-                                arm_tokens=budget, meter=TokenMeter(10**12), now=self.clock.time())
+                                arm_tokens=budget, meter=TokenMeter(10**12))
         return {"state": "done" if report.state == "done" else "failed" if report.state == "stopped" else report.state,
                 "trial": report.trial, "problems": report.problems, "day": day, "tokens": report.tokens}
 

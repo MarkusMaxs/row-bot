@@ -159,10 +159,11 @@ class Plan:
     room: int = 0
 
 
-def plan(store: Any, *, local: bool = False, now: float | None = None) -> Plan:
+def plan(store: Any, *, local: bool = False, now: float | None = None, quick: bool = False) -> Plan:
     """A trial's plan: ``resume`` when one is half done; ``fewer_fresh`` below 30 fresh problems; ``limit`` when
     the trials' share can't give every arm at least :data:`ARM_TOKENS_MIN` after keeping enough for the judging.
-    ``local``: the main model runs on this computer (its tokens don't count toward the month)."""
+    ``local``: the main model runs on this computer (its tokens don't count toward the month). ``quick`` (the
+    screen): counts only, the judging's share estimated as no larger than the arms'."""
 
     from row_bot.learning import evaluation
 
@@ -170,7 +171,10 @@ def plan(store: Any, *, local: bool = False, now: float | None = None) -> Plan:
         return Plan("off")
     if _state(store):
         return Plan("resume")
-    found = evaluation.fresh_problems(asked_by=ASKED_BY, store=store)
+    if quick:
+        found = {"fresh": evaluation.fresh_count(store=store), "tokens_per_run": 0}
+    else:
+        found = evaluation.fresh_problems(asked_by=ASKED_BY, store=store)
     fresh = int(found["fresh"])
     incumbent = archive.current(store, create=False)
     control = archive.frozen_control(store, create=False)
@@ -391,7 +395,7 @@ def run_arm(store: Any, entry: archive.Entry, *, role: str, trial_id: str, budge
 
     report = diagnosis.run(store, client=_TimedClient(client, meter), night=f"trial:{trial_id}:{role}", now=now,
                            meter=meter, should_stop=should_stop, save=False, method=method, sink=sink,
-                           purpose=PURPOSE, check_model=check_model)
+                           purpose=PURPOSE, check_model=check_model, dedupe=False)
     run.diagnosed, run.drafted = report.diagnosed, len(drafts)
     run.stopped = report.state == "stopped"
     tester = tester_factory(method)

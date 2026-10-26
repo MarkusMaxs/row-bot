@@ -534,7 +534,9 @@ class Tester:
         visible = self._visible(kind, container)
         meter = meter if meter is not None else (self._meter or evaluation.TokenMeter.for_month)()
         budget = evaluation.Budget(task_tokens=self.plan.task_tokens)
-        cache = evaluation.ArmCache(self._root, clock=self.clock)
+        # A trial's arms each pay for their whole test: a result one arm kept would make the next arm's cheaper
+        # (equal budget, pre-registration §4).
+        cache = evaluation.ArmCache(self._root, clock=self.clock) if leave_out is None else None
         focus = evaluation.Focus(kind, own=self.plan.own, other=self.plan.other)
         packs = [kind] if kind in kinds.FAMILIES and (container or kind != "small_coding") else []
         verifiers = None if container else ["answer", "json_answer", "file", "app_state"]

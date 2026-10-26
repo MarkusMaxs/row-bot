@@ -2188,6 +2188,15 @@ def fresh_problems(*, asked_by: str, store: Any | None = None) -> dict[str, int]
     return {"fresh": len(cases), "tokens_per_run": sum(_replay_tokens(case) for case in drawn)}
 
 
+def fresh_count(*, store: Any | None = None) -> int:
+    """How many fresh hidden problems wait for a strategy trial: a count only (How Row-Bot learns shows it)."""
+
+    from row_bot.learning.store import LearningStore
+
+    saved = store if store is not None else LearningStore()
+    return int(_vault(saved).fresh_count()) if audit.vault_exists(saved.root) else 0
+
+
 def draw_trial(trial_id: str, *, asked_by: str, store: Any | None = None, minimum: int = MIN_FRESH,
                take: int = MIN_FRESH) -> int:
     """Give a strategy trial the newest ``take`` fresh hidden problems (when at least ``minimum`` are fresh, else
@@ -2445,6 +2454,7 @@ __all__ = [
     "audit_size",
     "MIN_FRESH",
     "draw_trial",
+    "fresh_count",
     "fresh_problems",
     "h3_estimate",
     "judge_trial",

@@ -493,8 +493,8 @@ def _method_view(store: Any, now: float | None = None) -> dict[str, Any]:
                                 "against": parent.version if parent else None, "can_undo": False})
     # Newest first; the first method is always the oldest line.
     history.sort(key=lambda row: (row["event"] != "first", row["at"], row["version"]), reverse=True)
-    plan = meta.plan(store)
-    fresh = evaluation.fresh_problems(asked_by="the How Row-Bot learns view", store=store)["fresh"]
+    plan = meta.plan(store, quick=True)
+    fresh = evaluation.fresh_count(store=store)
     state = {"resume": "running", "ready": "ready", "limit": "limit"}.get(plan.state, "waiting")
     return {"version": current.version if current is not None else 1, "since": _iso(since.get("at")) if since else None,
             "description": _text(method.describe(), 600), "tried": tried, "kept": kept,

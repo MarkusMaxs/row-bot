@@ -563,6 +563,20 @@ class AuditVault:
             _log(connection, self._clock(), asked_by, caller, "run", "fresh tasks", len(rows))
         return self._rows(rows)
 
+    def fresh_count(self) -> int:
+        """How many fresh tasks there are (a count only, for the screen: not a look at any task)."""
+
+        require_reader(_SEAL, "fresh_count")
+        if not vault_exists(self._root):
+            return 0
+        with _connect(self._root, create=False) as connection:
+            if connection is None:
+                return 0
+            since = float(self._meta(connection, "last_draw_at", "0") or 0)
+            query = self._FRESH.replace("SELECT id, kind_of_work, thread_id, conversation_id, source_at, content",
+                                        "SELECT COUNT(*)")
+            return int(connection.execute(query, (since,)).fetchone()[0])
+
     def draw(self, trial: str, *, asked_by: str, take: int, minimum: int) -> int:
         """Give ``trial`` the newest ``take`` fresh tasks (at least ``minimum`` must be fresh, else none). From now
         on only tasks that arrive later are fresh. Returns how many it drew."""

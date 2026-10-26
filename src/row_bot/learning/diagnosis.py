@@ -711,7 +711,7 @@ def run(store: LearningStore, *, client: ModelClient, night: str, now: float | N
         limit: int | None = None, single: bool = False, save: bool = True,
         context: str | None = None, check_model: Callable[[], None] | None = None,
         strategy_release_id: str | None = None, method: Strategy | None = None,
-        sink: Sink | None = None, purpose: str = PURPOSE) -> NightReport:
+        sink: Sink | None = None, purpose: str = PURPOSE, dedupe: bool = True) -> NightReport:
     """One night's look: issues → (dedup) → one diagnosis call each → a drafted change or a note.
 
     ``should_stop`` is asked before every call (the person came back, Learning was paused): the night
@@ -719,7 +719,9 @@ def run(store: LearningStore, *, client: ModelClient, night: str, now: float | N
     before any call when the default model can't be used. ``single`` drafts from single signals (the
     paper's ablation arm, never the product's). ``method`` is the learning method in use (its issue
     priority, method choice, examples and how many issues a night); ``sink`` takes each diagnosis instead
-    of the archive and the drafts (a trial's arm), its calls tagged ``purpose``."""
+    of the archive and the drafts (a trial's arm), its calls tagged ``purpose``. ``dedupe=False`` (a trial's arm)
+    looks at every issue with enough evidence, whatever the night's own drafts did with it: each arm starts from
+    the same assistant and the same evidence."""
 
     method = method or strategy_module.FIRST
     limit = method.budget.issues if limit is None else limit
@@ -743,7 +745,7 @@ def run(store: LearningStore, *, client: ModelClient, night: str, now: float | N
         if not issue.enough(method):
             skipped["needs_more"] += 1
             continue
-        why = standing(issue, proposals.get(issue.key, ()), attempts.get(issue.key, ()))
+        why = standing(issue, proposals.get(issue.key, ()), attempts.get(issue.key, ())) if dedupe else None
         if why is not None:
             skipped[why] += 1
             continue
