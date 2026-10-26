@@ -4601,7 +4601,7 @@ class LearningSetupChoices(WireModel):
     monthly_token_limit: int = Field(ge=0, le=1_000_000_000)
     train_in_quiet_hours: bool
     train_where: Literal["this_computer", "hugging_face"]
-    starting_model: Literal["qwen3.5-2b", "qwen3.5-9b"] = "qwen3.5-2b"
+    starting_model: Literal["qwen3.5-9b"] = "qwen3.5-9b"
 
 
 class LearningCommand(WireModel):
@@ -4621,8 +4621,9 @@ class LearningCommand(WireModel):
     ]
     setup: LearningSetupChoices | None = None
     # use_smaller_model (O112): the smaller starting model the Personal model view offered;
-    # change_starting_model (O124): the certified starting model the person chose in Settings.
-    model: Literal["", "qwen3.5-2b", "qwen3.5-9b"] = ""
+    # change_starting_model (O124): the certified starting model the person chose in Settings. Its id is
+    # checked against what this computer is offered (C1: models are descriptors, not a fixed list).
+    model: str = Field(default="", max_length=128, pattern=r"^$|^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
     # L2c2: the version an action is for, the kind of work, Export…'s folder, Advanced's values and a
     # Needs you line to dismiss.
     version: int | None = Field(default=None, ge=1, le=100_000)

@@ -70,7 +70,8 @@ class PinnedModel:
         return [fetch.Pinned(self.url(item), item.name, item.sha256, item.size) for item in self.files]
 
 
-# Qwen/Qwen3.5-2B at the revision L0d measured (O23: the certified 8 GB tier's starting model).
+# Qwen/Qwen3.5-2B at the revision L0d measured (O23). Retired in T1 (O124): no tier trains it, but versions
+# trained from it keep their identity and comparisons, and its files on disk can still be deleted.
 QWEN35_2B = PinnedModel(
     id="qwen3.5-2b",
     name="Qwen3.5 2B",

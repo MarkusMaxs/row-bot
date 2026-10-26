@@ -552,10 +552,11 @@ function PersonalModel({
     state = (
       <EmptyState title="This computer can’t train a model" action={settings}>
         {hardware.gpu
-          ? `${hardware.gpu.label} is too small: training needs about 8 GB. `
-          : ''}
-        You can train on Hugging Face instead (your account, priced before each
-        run).
+          ? `${hardware.gpu.label} is too small: a personal model needs a graphics card with 16 GB. `
+          : 'A personal model needs an NVIDIA graphics card with 16 GB. '}
+        You can train one on Hugging Face instead (your own account, priced
+        before each run). Learning still improves Row-Bot with lessons and ways
+        of working.
       </EmptyState>
     );
   else if (!download && !downloaded)

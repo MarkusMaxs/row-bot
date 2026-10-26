@@ -22,7 +22,7 @@ from tests.fixtures.learning import FakeClock
 pytestmark = [pytest.mark.subsystem]
 
 DATASET = {
-    "format": "row-bot-dataset", "version": 1, "id": "ds_" + "1" * 32, "sha256": "2" * 64, "recipe": "8gb-v1",
+    "format": "row-bot-dataset", "version": 1, "id": "ds_" + "1" * 32, "sha256": "2" * 64, "recipe": "16gb-v1",
     "examples": 120, "validation": 12, "historical": 0, "left_out": {"held_out": 3, "tool_failed": 2},
     "providers": ["ollama", "openai"], "terms_note": True, "conversations": ["chat-1", "chat-2"],
     "example_ids": ["ep_1", "ep_2"], "first_at": 1_800_000_000.0, "last_at": 1_800_086_400.0,
@@ -108,7 +108,7 @@ def maker_for(learning_on, tmp_path, starting_model):
             learning_on, jobs=jobs, clock=clock, exporter=exporter or Exporter(), server=server or Server(_ready()),
             engine_status=lambda: SimpleNamespace(folder=engine_folder, python=None, site=None, llama=None),
             weights_folder=lambda: (starting_model[0], starting_model[1], 4_550_000_000),
-            recipe_for=lambda: recipes.load("8gb"), runtime=lambda: runtime, start_threads=False,
+            recipe_for=lambda: recipes.load("16gb"), runtime=lambda: runtime, start_threads=False,
             withdraw=lambda runtime, version, **_: withdrawn.append((runtime, version)))
 
     make.jobs, make.clock, make.root, make.withdrawn = jobs, clock, learning_on, withdrawn
@@ -138,8 +138,8 @@ def test_a_finished_run_becomes_a_ready_version_with_its_identity_beside_its_fil
     assert (identity.base.name, identity.base.version) == (model.repo, model.revision) and identity.base.sha256
     assert identity.tokenizer.sha256 and identity.template.sha256
     assert identity.adapter.sha256 == hashlib.sha256(b"lora-1").hexdigest()
-    assert identity.quantization == "Q8_0" and identity.recipe.name == "8gb-v1"
-    assert identity.recipe.sha256 == recipes.load("8gb").sha256
+    assert identity.quantization == "Q8_0" and identity.recipe.name == "16gb-v1"
+    assert identity.recipe.sha256 == recipes.load("16gb").sha256
     assert identity.runtime == contracts.Pin("ollama", "0.40.4")
     assert identity.data.dataset_id == DATASET["id"] and identity.data.providers == ("ollama", "openai")  # D7
     assert release.source_thread_ids == ("chat-1", "chat-2") and release.parent_ids == ()

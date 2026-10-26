@@ -473,7 +473,7 @@ def _downloads_view() -> Any:
 def _personal_model(settings: learning.LearningSettings) -> dict[str, Any]:
     from row_bot.learning.training import hardware
 
-    model = hardware.STARTING_MODELS.get(settings.starting_model, hardware.QWEN35_2B)
+    model = hardware.STARTING_MODELS.get(settings.starting_model, hardware.QWEN35_9B)
     view = _downloads_view()
     engine = _ENGINE_STATES.get(view.engine_state, "not_downloaded") if view is not None else "not_downloaded"
     starting = view.model_state if view is not None else "not_downloaded"
@@ -1305,7 +1305,7 @@ def read_learning_version(version: int, *, validate: Callable[[], None]) -> dict
     from row_bot.learning.training import recipes
 
     try:
-        recipe_now = recipes.load(str(recipe.get("name") or "8gb-v1").split("-v")[0])
+        recipe_now = recipes.load(str(recipe.get("name") or "16gb-v1").split("-v")[0])
     except Exception:
         recipe_now = recipes.default()
     settings = dict(recipe_now.settings)
@@ -1385,7 +1385,7 @@ def found_job_id(found: Any) -> str:
 
 
 def _trainable_models() -> set[str]:
-    """The starting models setup may choose: the certified ones this computer's card trains (the 8 GB
+    """The starting models setup may choose: the certified ones this computer's card trains (the smallest
     tier's alone before the card was read, or on a computer that can't train)."""
 
     from row_bot.learning.training import hardware
@@ -1696,7 +1696,7 @@ def _move_version(version: int, to: str) -> None:
 
 
 def _download_words(view: Any, model_name: str) -> str:
-    """"Downloading the training engine and Qwen3.5 2B." (what is still missing)."""
+    """"Downloading the training engine and Qwen3.5 9B." (what is still missing)."""
 
     engine = view.engine_state != "installed"
     model = view.model_state != "downloaded"
@@ -1724,8 +1724,8 @@ def _download(action: str) -> str:
 
     task = downloads.get()
     settings = learning.read_settings()
-    model = weights.MODELS.get(settings.starting_model, weights.QWEN35_2B)
-    name = hardware.STARTING_MODELS.get(settings.starting_model, hardware.QWEN35_2B).name
+    model = weights.MODELS.get(settings.starting_model, weights.QWEN35_9B)
+    name = hardware.STARTING_MODELS.get(settings.starting_model, hardware.QWEN35_9B).name
     try:
         if action == "start_download":
             if _training_runs():
@@ -1770,7 +1770,7 @@ def _answer_download(answer: str) -> str:
     from row_bot.learning.training import downloads, hardware
 
     settings = learning.read_settings()
-    name = hardware.STARTING_MODELS.get(settings.starting_model, hardware.QWEN35_2B).name
+    name = hardware.STARTING_MODELS.get(settings.starting_model, hardware.QWEN35_9B).name
     try:
         if _training_runs():
             raise downloads.DownloadError("busy")
@@ -1823,7 +1823,7 @@ def execute_learning(command: dict, *, owner_id: str, validate: Callable[[], Non
     item_id = _text(command.get("item_id"), 128)
     if action == "dismiss" and not item_id:
         raise ClientPlatformError("invalid_learning_command")
-    model_id = _text(command.get("model"), 32)
+    model_id = _text(command.get("model"), 128)
     if action in ("use_smaller_model", "change_starting_model") and model_id not in learning.STARTING_MODELS:
         raise ClientPlatformError("invalid_learning_command")
     change_id = _text(command.get("change_id"), 128)

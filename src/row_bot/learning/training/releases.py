@@ -413,7 +413,7 @@ class ReleaseMaker:
             return self._weights()
         from row_bot.learning.training import weights
 
-        model = weights.MODELS.get(gate.read_settings(self._root).starting_model, weights.QWEN35_2B)
+        model = weights.MODELS.get(gate.read_settings(self._root).starting_model, weights.QWEN35_9B)
         found = weights.status(model, self._root)
         return (model, found.folder if found.state == "downloaded" else None,
                 model.weights_bytes or model.download_bytes)

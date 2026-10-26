@@ -23,7 +23,7 @@ Settings live in ``learning_config.json`` in the data folder::
      "sources": {"my_chats": true, "workflows_and_goals": true, "past_chats": true},
      "apply_mode": "ask_first", "monthly_token_limit": 2000000,
      "train_in_quiet_hours": true, "train_where": "this_computer",
-     "starting_model": "qwen3.5-2b", "model_download": "not_asked"}
+     "starting_model": "qwen3.5-9b", "model_download": "not_asked"}
 
 **The preview flag (O34).** Until the 5.4 cut, Learning exists only in a build
 started with ``ROW_BOT_LEARNING_PREVIEW=1``. The flag is read once, when this
@@ -58,10 +58,10 @@ FOLDER = "learning"
 
 APPLY_MODES = ("ask_first", "automatic")
 TRAIN_PLACES = ("this_computer", "hugging_face")
-# Starting models a personal model can be trained from (``training/hardware.py`` describes them,
-# ``training/weights.py`` pins them): the 8 GB tier's first (the default, O23), then the larger tiers'
-# (L2x, O90). A card trains only the certified ones it fits (``HardwareCheck.starting_models``).
-STARTING_MODELS = ("qwen3.5-2b", "qwen3.5-9b")
+# Starting models a personal model can be trained from on this computer (``training/hardware.py``
+# describes them, ``training/weights.py`` pins them). O124: Qwen3.5 9B is the smallest personal model
+# (the 2B tier went in T1); a card trains only the certified ones it fits (``HardwareCheck.starting_models``).
+STARTING_MODELS = ("qwen3.5-9b",)  # a saved model no build trains any more (the 2B) reads as the 9B
 # The answer to the download ask after turning Learning on: not asked yet, Download
 # ("waiting": the person agreed; L2b downloads when they tap it, and an old answer reads
 # as "Ready to download", O36) or Not now.

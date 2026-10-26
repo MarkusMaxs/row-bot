@@ -64,11 +64,8 @@
           "$ref": "#/$defs/LearningSourcesSnapshot"
         },
         "starting_model": {
-          "default": "qwen3.5-2b",
-          "enum": [
-            "qwen3.5-2b",
-            "qwen3.5-9b"
-          ],
+          "const": "qwen3.5-9b",
+          "default": "qwen3.5-9b",
           "title": "Starting Model",
           "type": "string"
         },
@@ -290,11 +287,8 @@
     },
     "model": {
       "default": "",
-      "enum": [
-        "",
-        "qwen3.5-2b",
-        "qwen3.5-9b"
-      ],
+      "maxLength": 128,
+      "pattern": "^$|^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$",
       "title": "Model",
       "type": "string"
     },

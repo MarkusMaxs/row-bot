@@ -5,9 +5,9 @@ the trainer's settings (``learning_engine/trainer.py`` clamps each to its limits
 passes over the examples (each pass's adapter is kept, so a version that can't finish a short task
 falls back to the pass before, O119), how often a checkpoint is saved, the fewest examples worth training
 on, the context it is served at (O30), its quantization (O26) and that it is non-thinking
-(O24). Only **certified** recipes are ever chosen: today the 8 GB tier (Qwen3.5 2B, bf16 LoRA
-at 16K, measured in L0d and L2b). The larger tiers are listed, uncertified, until the RTX 5090
-results certify them (L2c2); a larger card trains with the best certified recipe that fits it.
+(O24). Only **certified** recipes are ever chosen: the 16, 24 and 32 GB tiers (Qwen3.5 9B QLoRA at
+16K, measured on the RTX 5090 in L2x); a larger card trains with the best certified recipe that fits it.
+O124: the 8 GB tier (Qwen3.5 2B) went in T1, so the 16 GB recipe is the default.
 
 The files are package data (``pyproject.toml``), so every install carries them.
 """
@@ -27,7 +27,7 @@ from typing import Any
 
 FORMAT = "row-bot-recipe"
 FOLDER = Path(__file__).resolve().parent
-ORDER = ("8gb", "16gb", "24gb", "32gb")
+ORDER = ("16gb", "24gb", "32gb")
 METHODS = frozenset({"lora_sft"})
 QUANTIZATIONS = frozenset({"Q8_0", "Q4_K_M"})
 # The trainer's own settings (``trainer.DEFAULTS``); anything else in a file is refused.
@@ -102,7 +102,7 @@ class Recipe:
 
     @property
     def name(self) -> str:
-        """The recipe as the training protocol names it ("8gb-v1")."""
+        """The recipe as the training protocol names it ("16gb-v1")."""
 
         return f"{self.id}-v{self.version}"
 
@@ -231,7 +231,7 @@ def all_recipes() -> tuple[Recipe, ...]:
 
 def for_hardware(check: Any) -> Recipe | None:
     """The recipe this computer trains with: its tier's when certified, else the best certified
-    one its card fits (a 24 GB card trains the 8 GB recipe until 24 GB is certified). None when
+    one its card fits (a 32 GB card trains the 24 GB recipe if 32 GB weren't certified). None when
     the computer can't train."""
 
     if check is None or not getattr(check, "can_train", False):
@@ -276,7 +276,7 @@ def for_model(model_id: str, check: Any) -> Recipe | None:
 
 def current(root: Any = None, check: Any = None) -> Recipe:
     """The recipe the person's choices train with: the one for their starting model when this card
-    trains it, else the card's own (``for_hardware``), else the 8 GB recipe."""
+    trains it, else the card's own (``for_hardware``), else the 16 GB recipe."""
 
     from row_bot import learning
     from row_bot.learning.training import hardware
@@ -287,9 +287,9 @@ def current(root: Any = None, check: Any = None) -> Recipe:
 
 
 def default() -> Recipe:
-    """The certified 8 GB recipe (used before the hardware check has run)."""
+    """The certified 16 GB recipe, the smallest (used before the hardware check has run, O124)."""
 
-    return load("8gb")
+    return load("16gb")
 
 
 __all__ = [

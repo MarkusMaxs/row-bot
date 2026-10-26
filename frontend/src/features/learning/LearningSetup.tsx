@@ -38,13 +38,13 @@ export function defaultChoices(
     monthly_token_limit: snapshot.spending.limit_tokens,
     train_in_quiet_hours: snapshot.personal_model.train_in_quiet_hours,
     train_where: snapshot.personal_model.train_where,
-    starting_model: 'qwen3.5-2b',
+    starting_model: 'qwen3.5-9b',
   };
 }
 
 /**
  * O112: when the card's free memory can't hold its own tier's model, say why Row-Bot recommends a
- * smaller one ("Your graphics card has about 6 GB free now…, so Row-Bot recommends Qwen3.5 2B").
+ * smaller one ("Your graphics card has about 12 GB free now…, so Row-Bot recommends Qwen3.5 9B").
  */
 function roomNote(hardware: LearningHardware): string {
   const recommended = hardware.recommended;
@@ -220,7 +220,8 @@ function HardwareRows({
       {hardware.gpu && (
         <p>
           <span className="learning-label">This computer: </span>
-          {hardware.gpu.label}. Training needs a graphics card with about 8 GB.
+          {hardware.gpu.label}. A personal model needs a graphics card with
+          16 GB to train here.
         </p>
       )}
       {hugging ? (
@@ -243,8 +244,9 @@ function HardwareRows({
       ) : (
         <>
           <p>
-            This computer can’t train a model. You can train on Hugging Face
-            (your account, priced before each run) or skip this for now.
+            You can train one on Hugging Face instead (your own account, priced
+            before each run), or skip it: Learning still improves Row-Bot with
+            lessons and ways of working.
           </p>
           <div className="learning-actions-inline">
             <Button

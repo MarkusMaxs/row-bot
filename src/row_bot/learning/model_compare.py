@@ -316,7 +316,7 @@ class Comparer:
         from row_bot.learning.training import base_model, engine, hardware, recipes, weights
 
         model = _trained_from(version, self._root) or weights.MODELS.get(
-            gate.read_settings(self._root).starting_model, weights.QWEN35_2B)
+            gate.read_settings(self._root).starting_model, weights.QWEN35_9B)
         found = weights.status(model, self._root)
         if found.state != "downloaded":
             return None, "engine_missing"
