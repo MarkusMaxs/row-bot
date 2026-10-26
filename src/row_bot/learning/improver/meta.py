@@ -601,7 +601,6 @@ def _finish(store: Any, state: Mapping[str, Any], runs: Sequence[ArmRun], judged
 
     verdicts = judged.get("verdicts") or {}
     arms = []
-    by_role = {run.role: run for run in runs}
     for run in runs:
         better = sum(1 for item in run.accepted if verdicts.get(item["key"]) == "better")
         arms.append({"role": run.role, "release": run.release, "version": run.version, "diagnosed": run.diagnosed,

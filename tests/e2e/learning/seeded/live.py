@@ -803,7 +803,7 @@ class PersonRun:
         """The final set once 30 fresh problems have built up after the last trial: every generation and the
         frozen control at the trials' budget, judged on them (no switch)."""
 
-        from row_bot.learning import changes, evaluation
+        from row_bot.learning import evaluation
         from row_bot.learning.calls import LedgerModelClient
         from row_bot.learning.improver import archive, meta
         from row_bot.learning.spending import TokenMeter
