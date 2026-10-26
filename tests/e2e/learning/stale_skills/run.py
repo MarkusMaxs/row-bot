@@ -49,7 +49,7 @@ import sys
 import time
 import uuid
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -471,9 +471,19 @@ class StaleRun(PersonRun):
             target = self.workspace / path
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(text, encoding="utf-8", newline="\n")
-        if day == 1:
-            for procedure_id in self.timeline.seeded_skills:
-                self._seed_skill(self.timeline.procedure(procedure_id), day, why="the smoke world's skill")
+        if day == 1 and self.timeline.seeded_skills:
+            # The smoke world's skills were saved before its first day (the product's records say the evening
+            # before), so they are older than that morning's change, as a skill made weeks earlier would be.
+            from row_bot import stale_skills
+
+            evening = datetime.combine(self.clock.now().date() - timedelta(days=1), datetime.min.time()).replace(
+                hour=18)
+            stale_skills.set_clock(lambda: evening)
+            try:
+                for procedure_id in self.timeline.seeded_skills:
+                    self._seed_skill(self.timeline.procedure(procedure_id), day, why="the smoke world's skill")
+            finally:
+                stale_skills.set_clock(lambda: self.clock.now().replace(tzinfo=None))
         if self.study_arm in ("R", "A"):
             self._approve_reconciliations(day)
         self.state.data["mornings"].append(day)

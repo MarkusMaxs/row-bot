@@ -12,6 +12,9 @@ Two phrasing models are supported:
 - ``--model main``: the main model on the ChatGPT lane (the eval profile's sign-in, read only; no refresh);
 - ``--model qwen3.8:27b``: a local model through Ollama (books the card).
 
+``--past`` writes the three new people's 30-day past replies instead, as S1 wrote its three people's
+(``tests/e2e/learning/seeded/phrasing.py``, the main model only), into their folders here.
+
     ROW_BOT_DATA_DIR=<scratch> uv run python -m tests.e2e.learning.stale_skills.phrasing --model main
         --eval-profile <folder> --scratch <scratch>
 """
@@ -23,6 +26,8 @@ import json
 import os
 import re
 import sys
+import threading
+import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
@@ -132,6 +137,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--scratch", required=True)
     parser.add_argument("--gpu-booking", default="")
     parser.add_argument("--people", default=",".join(world.PEOPLE), help="comma-separated people (default: all six)")
+    parser.add_argument("--past", action="store_true", help="the new people's past replies (S1's phrasing)")
     args = parser.parse_args(argv)
     from tests.e2e.learning.seeded import generator
     from tests.e2e.learning.seeded.scratch import GpuGate, check_scratch
@@ -141,6 +147,7 @@ def main(argv: list[str] | None = None) -> int:
     os.environ["ROW_BOT_DATA_DIR"] = str(scratch)
     people = [item.strip() for item in args.people.split(",") if item.strip()]
     tokens: dict[str, int] = {"input": 0, "output": 0, "calls": 0}
+    limits: list[str] = []
     gate = None
     if args.model == "main":
         from langchain_core.messages import HumanMessage
@@ -156,20 +163,60 @@ def main(argv: list[str] | None = None) -> int:
         model = eval_profile.choose_model([item.model_id for item in codex.fetch_codex_model_infos()])
         writer = SimulatedPerson({"id": "phrasing", "name": "phrasing"}, 0, model_ref=f"model:codex:{model}")
 
+        lock = threading.Lock()
+
+        def invoke(prompt: str) -> Any:
+            for attempt in range(4):
+                try:
+                    return writer._model().invoke([HumanMessage(content=prompt)])  # noqa: SLF001 - the person's model
+                except Exception as error:  # noqa: BLE001 - a busy server is asked again, anything else isn't
+                    if "overloaded" not in str(error).lower() or attempt == 3:
+                        raise
+                    time.sleep(20 * (attempt + 1))
+            raise AssertionError("unreachable")
+
         def ask(prompt: str) -> str:
-            message = writer._model().invoke([HumanMessage(content=prompt)])  # noqa: SLF001 - the person's model
+            try:
+                message = invoke(prompt)
+            except Exception as error:  # noqa: BLE001 - the template stands; a limit stops the run
+                from tests.e2e.learning.stale_skills.run import limit_error
+
+                with lock:
+                    tokens["failures"] = tokens.get("failures", 0) + 1
+                    if limit_error(str(error)):
+                        limits.append(str(error)[:300])
+                if limits or not args.past:
+                    raise
+                return ""
             usage = getattr(message, "usage_metadata", None) or {}
-            tokens["input"] += int(usage.get("input_tokens") or 0)
-            tokens["output"] += int(usage.get("output_tokens") or 0)
-            tokens["calls"] += 1
+            with lock:
+                tokens["input"] += int(usage.get("input_tokens") or 0)
+                tokens["output"] += int(usage.get("output_tokens") or 0)
+                tokens["calls"] += 1
             content = message.content
             return content if isinstance(content, str) else " ".join(
                 str(block.get("text", "")) for block in content if isinstance(block, dict))
+
+        writer._model()  # noqa: SLF001 - made once, before any threads
+    elif args.past:
+        raise SystemExit("--past uses the main model only (as S1's past did)")
     else:
         gate = GpuGate(Path(args.gpu_booking) if args.gpu_booking else None, "lane-B",
                        label=f"SA1 phrasing ({args.model})")
         gate.acquire("phrasing the stale-skills world's messages", expect="10 min, 20 GB")
         ask = _ollama_ask(args.model)
+    if args.past:
+        from tests.e2e.learning.seeded import phrasing as s1_phrasing
+
+        for person_id in [item for item in people if item not in world.S1_PEOPLE]:
+            with world.people_dir(person_id):
+                found = s1_phrasing.phrase([person_id], seed=world.catalogue(person_id).seed, ask=ask)
+                if limits:
+                    raise SystemExit(f"usage or rate-limit error: {limits[0]}")
+                print(s1_phrasing.write(person_id, world.catalogue(person_id).seed, "main",
+                                        found[person_id]["replies"]))
+            print(json.dumps({"person": person_id, "tokens": tokens}))
+        return 0
     try:
         for person_id in people:
             with world.people_dir(person_id):

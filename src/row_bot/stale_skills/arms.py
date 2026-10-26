@@ -68,8 +68,9 @@ def _entity(entity_id: str) -> dict[str, Any] | None:
     return kg.get_entity(entity_id)
 
 
-def conflict(skill_text: str, change: dict[str, Any]) -> dict[str, Any] | None:
-    """How ``change`` touches what a skill says: ``{"fresh": [...], "skill_says": [...]}``, or None."""
+def conflict(skill_text: str, change: dict[str, Any], linked: frozenset[str] = frozenset()) -> dict[str, Any] | None:
+    """How ``change`` touches what a skill says (``linked``: the memories the skill is linked to):
+    ``{"fresh": [...], "skill_says": [...]}``, or None."""
 
     skill_values = links.value_tokens(skill_text)
     new_values = links.value_tokens(change.get("new") or "")
@@ -81,7 +82,8 @@ def conflict(skill_text: str, change: dict[str, Any]) -> dict[str, Any] | None:
     named_old = [token for token in skill_values if token in old_values and token not in new_values]
     fresh_kinds = {new_values[token] for token in fresh}
     entity = _entity(str(change.get("new_entity_id") or change.get("entity_id") or ""))
-    named = bool(entity and links.references(entity, skill_text))
+    named = bool(entity and (str(entity["id"]) in linked or str(change.get("entity_id")) in linked
+                              or links.references(entity, skill_text)))
     shared = [token for token in skill_values if token in new_values or token in old_values]
     if not (named or named_old or shared):
         return None
@@ -98,9 +100,10 @@ def conflicts(name: str, *, since: str = "", until: str = "") -> list[dict[str, 
         return []
     revised = str(record.get("revised_at") or "")
     text = str(skill.instructions or "")
+    linked = frozenset(str(item.get("entity_id")) for item in record.get("references") or ())
     found = []
     for change in facts.changes(max(since, revised), until):
-        touched = conflict(text, change)
+        touched = conflict(text, change, linked)
         if touched:
             found.append({**change, **touched, "skill": name, "skill_revised_at": revised})
     return found
@@ -216,18 +219,21 @@ def reconcile(llm: Callable[..., str]) -> dict[str, Any]:
     state = stale_skills.read_json(RECONCILE_STATE)
     since = str(state.get("last") or "")
     until = stale_skills.now().isoformat(timespec="seconds")
-    candidates = [item for name in _user_skill_names() for item in conflicts(name, since=since, until=until)]
+    found = [item for name in _user_skill_names() for item in conflicts(name, since=since, until=until)]
+    # One draft a skill a night, from its latest change (the memory as it stands now); the earlier ones are logged.
+    latest: dict[str, dict[str, Any]] = {}
+    for item in sorted(found, key=lambda item: str(item["at"])):
+        if item["skill"] in latest:
+            earlier = latest[item["skill"]]
+            stale_skills.log("patch_candidate", arm="R", skill=earlier["skill"], outcome="later_change_drafted",
+                             entity_id=earlier.get("new_entity_id"), new_validity=earlier.get("new_validity"))
+        latest[item["skill"]] = item
     # Changed descriptions first, then memories superseded, then new memories; oldest first within each.
     order = {"update": 0, "supersede": 1, "write": 2}
-    candidates.sort(key=lambda item: (order.get(item["kind"], 3), str(item["at"])))
-    result: dict[str, Any] = {"since": since, "until": until, "candidates": len(candidates), "drafted": 0,
+    candidates = sorted(latest.values(), key=lambda item: (order.get(item["kind"], 3), str(item["at"])))
+    result: dict[str, Any] = {"since": since, "until": until, "candidates": len(found), "drafted": 0,
                               "proposed": 0, "skipped": 0}
-    seen: set[tuple[str, str]] = set()
     for index, candidate in enumerate(candidates):
-        key = (candidate["skill"], str(candidate.get("new_validity")))
-        if key in seen:
-            continue
-        seen.add(key)
         if result["drafted"] >= MAX_RECONCILE_DRAFTS:
             result["skipped"] += 1
             stale_skills.log("patch_candidate", arm="R", skill=candidate["skill"], outcome="over_cap",

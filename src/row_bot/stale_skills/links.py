@@ -9,6 +9,7 @@ The links are the skill's metadata, kept in ``stale_skills/skills.json`` with th
 SKILL.md front matter is rebuilt from its known keys on every update, so it can't hold them): a skill is linked when it
 is created or patched (re-linked on every patch), a memory written later is linked to the skills that mention it, and
 a skill saved before the setting was on is linked the first time it is asked about (its revision: the file's time).
+A link stays when its memory changes (the skill was made from what the memory said); only a patch re-links.
 The person's own memory (``User``) is never linked: it collects everything.
 """
 
@@ -180,9 +181,11 @@ def entity_changed(entity: dict[str, Any]) -> None:
         skill = skills.get_skill(name)
         if skill is None:
             continue
-        kept = [item for item in record.get("references") or () if item.get("entity_id") != entity.get("id")]
-        updated = kept + references(entity, _instructions(skill))
-        if updated != record.get("references"):
+        # Links are added here, never dropped: a skill made from a memory stays linked to it when the memory
+        # changes (only a patch of the skill re-links it from scratch, and a deleted memory is unlinked).
+        kept = list(record.get("references") or ())
+        updated = kept + [item for item in references(entity, _instructions(skill)) if item not in kept]
+        if updated != kept:
             record["references"] = updated
             changed = True
     if changed:

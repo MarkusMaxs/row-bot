@@ -170,3 +170,17 @@ def test_f_drafts_a_repair_from_the_failed_run_only_under_f(world):
     proposal = evolution.get_proposal(outcome["proposal_id"])
     assert proposal["proposal_type"] == "patch_skill" and proposal["title"].startswith("Repair skill: Bread order")
     assert [(item["arm"], item["skill"]) for item in _candidates()] == [("F", "bread_order_procedure")]
+
+
+def test_r_drafts_once_a_night_per_skill_from_its_latest_change(world):
+    from row_bot.stale_skills import arms
+
+    bakery = _scene(world)
+    world.later(hours=2)
+    world.kg.update_entity(bakery["id"], "Orders go to bread@sandgate-bakery.example now; hello@ isn't read.")
+    model = Model()
+    result = arms.reconcile(model)
+
+    assert (result["candidates"], result["drafted"], result["proposed"]) == (2, 1, 1)
+    assert "bread@sandgate-bakery.example" in model.prompts[0]
+    assert sorted(item["outcome"] for item in _candidates()) == ["later_change_drafted", "proposed"]
