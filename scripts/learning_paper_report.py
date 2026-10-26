@@ -59,6 +59,8 @@ SCHEMA_VERSION = 1
 COPY_PREFIX = "row-bot-paper-copy-"
 #: The pre-registered confirmatory family of paper v1 (§7) and the decision rules.
 FAMILY = ("H1", "H2")
+# The confirmatory family of each paper version (§7): {H1, H2} in v1, {H1, H2, H3} in v2.
+FAMILIES = {"v1": FAMILY, "v2": ("H1", "H2", "H3")}
 ALPHA = 0.05
 MARGIN = 0.10
 #: What the freeze may spend on cloud models (the main model's reference, H2's arms), at most.
@@ -439,8 +441,8 @@ CAUSES = enum("provider_error", "malformed_call", "harness", "budget", "no_tool"
               "file_write", "no_answer", "wrong_answer", "other")
 VERSION_STATES = enum("ready", "couldnt_start", "not_ready")
 SPLITS = enum("real_uncorrected", "real_corrected", "packs")
-ARMS = enum("start", "personal", "main")
-CONTRASTS = enum("personal vs start", "main vs start")
+ARMS = enum("start", "personal", "main", "learning")
+CONTRASTS = enum("personal vs start", "main vs start", "learning vs main")
 RUNTIMES = enum("row_bot", "ollama", "lmstudio", "llama_cpp", "vllm")
 
 RUN = Obj({
@@ -502,20 +504,41 @@ TEST_PART = Obj({"split": SPLITS, "problems": COUNT, "clusters": COUNT, "differe
 HYPOTHESIS = Obj({
     "state": enum("tested", "not_tested", "not_testable"),
     "reason": Maybe(enum("too_few_problems", "no_version", "no_starting_model", "runtime_unavailable", "stopped",
-                         "no_lessons_or_ways_of_working", "arms_not_built_yet")),
+                         "no_lessons_or_ways_of_working", "arms_not_built_yet", "not_run")),
     "superiority": Maybe(TEST_PART), "non_inferiority": Maybe(TEST_PART), "supported": Maybe(BOOL),
+    # H2's second non-inferiority part: the packs (its first is the hidden uncorrected work).
+    "non_inferiority_packs": Maybe(TEST_PART),
     "sensitivity": Maybe(Obj({"exact_only": ANALYSIS, "majority_vote": ANALYSIS, "unclustered": ANALYSIS,
                               "per_main_model": Map(Text(pattern=MODEL_ORDINAL), ANALYSIS),
                               "corrected_problems": ANALYSIS, "checker_versions": COUNT, "metric_v2": ANALYSIS,
                               "trusted_only": ANALYSIS, "without_pictures": ANALYSIS})),
     "by_kind": Maybe(Map(KINDS, ANALYSIS)),
     "counts": Maybe(Obj({"lessons_in_use": COUNT, "ways_of_working_in_use": COUNT, "corrected_problems": COUNT})),
+}, optional=frozenset({"non_inferiority_packs"}))
+# H3 (§5, §7): improvement yield per 1M tokens, the inherited method minus the frozen control, per generation.
+YIELD = Num(low=0)
+YIELD_DIFFERENCE = Num()
+H3_SIDE = Obj({"accepted": COUNT, "better": COUNT, "tokens": COUNT, "yield": YIELD})
+H3_GENERATION = Obj({"problems": COUNT, "clusters": COUNT, "inherited": H3_SIDE, "control": H3_SIDE,
+                     "difference": YIELD_DIFFERENCE})
+H3 = Obj({
+    "state": enum("tested", "not_tested", "not_testable"),
+    "reason": Maybe(enum("no_trials", "too_few_generations", "too_few_problems", "final_set_not_run",
+                         "final_set_too_small", "stopped")),
+    "trials": COUNT, "generations": Seq(H3_GENERATION, 50), "estimate": Maybe(YIELD_DIFFERENCE),
+    "low": Maybe(YIELD_DIFFERENCE), "high": Maybe(YIELD_DIFFERENCE), "p_value": Maybe(SHARE), "p_holm": Maybe(SHARE),
+    "met": Maybe(BOOL), "resamples": COUNT, "seed": COUNT, "minimum": COUNT,
+    # The final set (§7): every generation and the frozen control at equal budget, reported descriptively.
+    "final_set": Maybe(Obj({"problems": COUNT, "arm_tokens": COUNT,
+                            "arms": Seq(Obj({"role": enum("incumbent", "generation", "control"), "version": COUNT,
+                                             "accepted": COUNT, "better": COUNT, "tokens": COUNT,
+                                             "yield": YIELD}), 20)})),
 })
 FREEZE = Obj({
     "format": enum(FORMAT), "schema_version": Num(integer=True, low=SCHEMA_VERSION, high=SCHEMA_VERSION),
     "mode": enum("freeze"), "run": RUN,
-    "design": Obj({"as_of": Text(pattern=DAY), "metric_version": COUNT, "previous_metric_version": COUNT,
-                   "repeats": COUNT, "seed": COUNT,
+    "design": Obj({"as_of": Text(pattern=DAY), "paper": enum("v1", "v2"), "metric_version": COUNT,
+                   "previous_metric_version": COUNT, "repeats": COUNT, "seed": COUNT,
                    "resamples": COUNT, "permutations": COUNT, "task_tokens": COUNT, "runtime": RUNTIMES,
                    "serve_context": Maybe(COUNT), "container": BOOL, "main_reference": BOOL, "stopped": BOOL,
                    "hours": HOURS, "cloud_tokens": COUNT, "local_tokens": COUNT,
@@ -528,9 +551,9 @@ FREEZE = Obj({
                            "identical": Obj({"problems": COUNT, "identical": COUNT}),
                            "splits": Map(SPLITS, ARM_SPLIT)})),
     "contrasts": Map(CONTRASTS, Map(SPLITS, SPLIT_ANALYSIS)),
-    "hypotheses": Obj({"H1": HYPOTHESIS, "H2": HYPOTHESIS}),
-    "holm": Obj({"family": Seq(enum(*FAMILY), 2), "alpha": SHARE, "untested_enter_as": SHARE,
-                 "adjusted": Map(enum(*FAMILY), Maybe(SHARE))}),
+    "hypotheses": Obj({"H1": HYPOTHESIS, "H2": HYPOTHESIS, "H3": H3}),
+    "holm": Obj({"family": Seq(enum(*FAMILIES["v2"]), 3), "alpha": SHARE, "untested_enter_as": SHARE,
+                 "adjusted": Map(enum(*FAMILIES["v2"]), Maybe(SHARE))}),
 })
 
 THINKING_MODELS = enum("start", "B", "A", "A32")
@@ -804,6 +827,8 @@ class Hooks:
     installed: Callable[[], bool] = installed_app_running
     # The eval profile's sign-in bridge (``tests.e2e.live_eval.eval_profile.run_bridge``); a test passes a fake.
     bridge: Callable[..., dict[str, Any]] | None = None
+    # H3's final set: a trial arm's tester for a learning method (``changes.Tester``); a test passes a fake.
+    tester: Callable[[Any], Any] | None = None
 
 
 class EvalSignIn:
@@ -868,7 +893,8 @@ def _worker_runner(arms: Sequence[Any], copy: Path) -> Iterator[Any]:
     worker_arms = {arm.name: eval_worker.WorkerArm(arm.name, str(arm.model_ref), arm.serve_context is not None)
                    for arm in arms}
     credentials, providers, unsupported = eval_worker.gather(list(worker_arms.values()))
-    spec = {"arms": [{"name": arm.name, "model_ref": arm.model_ref} for arm in arms],
+    spec = {"arms": [{"name": arm.name, "model_ref": arm.model_ref, "lessons": [list(item) for item in arm.lessons],
+                      "ways": [list(item) for item in arm.ways]} for arm in arms],
             "tools": eval_worker.safe_tools(eval_worker.person_tools()), "providers": providers,
             "code_backend": "container"}
     worker = eval_worker.EvalWorker(spec, credentials=credentials, person_data=copy)
@@ -880,7 +906,8 @@ def _worker_runner(arms: Sequence[Any], copy: Path) -> Iterator[Any]:
 
 
 def freeze_report(copy: Path, as_of: date, *, hooks: Hooks, main_reference: bool = False,
-                  eval_profile: Path | None = None, cap_tokens: int = CLOUD_CAP, repeats: int = 3) -> dict[str, Any]:
+                  eval_profile: Path | None = None, cap_tokens: int = CLOUD_CAP, repeats: int = 3,
+                  paper: str = "v1", h2: bool = False, h3_final: bool = False) -> dict[str, Any]:
     from row_bot.learning import evaluation
     from row_bot.learning.contracts import LessonRecord, Release
     from row_bot.learning.packs import PACKS
@@ -913,17 +940,21 @@ def freeze_report(copy: Path, as_of: date, *, hooks: Hooks, main_reference: bool
                     evaluation.Arm("personal", model_ref=prepared.refs["personal"], subject_kind="release",
                                    serve_context=prepared.serve_context)]
             contrasts = [("start", "personal")]
-            if main_reference:
+            if main_reference or h2:
                 from row_bot.learning import routing
 
                 main = (hooks.main_ref or routing.main_model_ref)()
                 if main:
                     if eval_profile is None:
-                        raise _ModeFailed("--main-reference needs --eval-profile")
-                    EvalSignIn(eval_profile, bridge=hooks.bridge).install()
+                        raise _ModeFailed("--main-reference and --h2 need --eval-profile")
+                    _sign_in(eval_profile, hooks)
                     # Asked as it was served: with the page's picture when it was sent one (A8).
                     arms.append(evaluation.Arm("main", model_ref=main, cache=True, sees_images=True))
-                    contrasts.append(("start", "main"))
+                    if main_reference:
+                        contrasts.append(("start", "main"))
+                    if h2 and (lessons or behaviours):
+                        arms.append(_learning_arm(main))
+                        contrasts.append(("main", "learning"))
             progress = _Progress(started)
             with (contextlib.nullcontext(hooks.runner(arms)) if hooks.runner is not None
                   else _worker_runner(arms, copy)) as runner:
@@ -934,9 +965,110 @@ def freeze_report(copy: Path, as_of: date, *, hooks: Hooks, main_reference: bool
                     repeats=repeats, on_progress=progress)
     finally:
         prepared.cleanup()
+    final = None
+    if h3_final:
+        if eval_profile is None:
+            raise _ModeFailed("--h3-final needs --eval-profile")
+        _sign_in(eval_profile, hooks)
+        say("Running H3's final set: every generation and the frozen control at the same budget ...")
+        final = _final_set(copy, store, hooks=hooks, cap_tokens=cap_tokens)
     return assemble_freeze(result, as_of=as_of, versions=versions, newest=newest, prepared=prepared,
                            refreshed=refreshed, container=container, main_reference=main_reference,
-                           lessons=lessons, behaviours=behaviours, hours=(time.monotonic() - started) / 3600)
+                           lessons=lessons, behaviours=behaviours, hours=(time.monotonic() - started) / 3600,
+                           paper=paper, h3=h3_report(store, final_state=final, ran_final=h3_final))
+
+
+_SIGNED_IN: list[Path] = []
+
+
+def _sign_in(eval_profile: Path, hooks: Hooks) -> None:
+    """The eval profile's ChatGPT sign-in, once a run (the main model's arms and H3's final set share it)."""
+
+    if eval_profile not in _SIGNED_IN:
+        EvalSignIn(eval_profile, bridge=hooks.bridge).install()
+        _SIGNED_IN.append(eval_profile)
+
+
+def _learning_arm(main: str) -> Any:
+    """H2's arm (§5): the main model with the lessons and ways of working in use on the copy (in the real runtime
+    as recall and the turn's overlay; replayed problems get them as the guidance a test gives)."""
+
+    from row_bot.learning import changes, evaluation
+
+    lessons, ways = changes.context_in_use()
+    guidance = tuple(text for _title, text in lessons) + tuple(text for _slot, text in ways)
+    return evaluation.Arm("learning", model_ref=main, guidance=guidance, lessons=lessons, ways=ways, sees_images=True)
+
+
+def _final_set(copy: Path, store: Any, *, hooks: Hooks, cap_tokens: int) -> str:
+    """H3's final set (§7) on the copy: every generation and the frozen control at the same budget on the fresh
+    problems no trial used. Returns how it ended (``done``, ``fewer_fresh``, ``stopped``)."""
+
+    from row_bot.learning import changes
+    from row_bot.learning.calls import LedgerModelClient
+    from row_bot.learning.improver import archive, meta
+    from row_bot.learning.spending import TokenMeter
+
+    def tester(method: Any) -> Any:
+        if hooks.tester is not None:
+            return hooks.tester(method)
+        return changes.Tester(copy, store=store, client=hooks.client, plan=changes.TestPlan.of(method),
+                              purpose=meta.PURPOSE)
+
+    from row_bot.learning import evaluation
+
+    done = [item for item in archive.trials(store) if not item.get("final")]
+    # The same budget per method as the trials gave (the last one's), and every method gets all of it.
+    budget = int(done[-1].get("arm_tokens") or meta.ARM_TOKENS_MAX) if done else meta.ARM_TOKENS_MAX
+    arms = len({str(item.get("winner")) for item in done} | {archive.frozen_control(store).id})
+    per_run = int(evaluation.fresh_problems(asked_by="the paper's freeze evaluation", store=store)["tokens_per_run"])
+    needed = arms * budget + (1 + arms * meta.MAX_ACCEPTED) * per_run * meta.REPEATS
+    if needed > int(cap_tokens):
+        raise _ModeFailed(f"--cloud-cap is too small for H3's final set: it needs about {needed:,} tokens")
+    found = meta.run_final(store, label="freeze", client=hooks.client or LedgerModelClient(), tester_factory=tester,
+                           arm_tokens=budget, meter=TokenMeter(int(cap_tokens)))
+    return found.state
+
+
+def h3_report(store: Any, *, final_state: str | None, ran_final: bool) -> dict[str, Any]:
+    """H3 (§5, §7) from the trials the product ran (kept in the copy) and the final set: the per-generation yield
+    differences, the estimate with its bootstrap stratified by trial, and "not tested" below the minimum (three
+    inherited generations, each judged on at least 30 fresh problems)."""
+
+    from row_bot.learning import evaluation
+    from row_bot.learning.improver import archive
+
+    trials = archive.trials(store)
+    generations = archive.generations(store)
+    found = evaluation.h3_estimate(generations, store=store)
+    rows = [{"problems": int(row["problems"]), "clusters": int(row["clusters"]),
+             "inherited": {key: row["inherited"][key] for key in ("accepted", "better", "tokens", "yield")},
+             "control": {key: row["control"][key] for key in ("accepted", "better", "tokens", "yield")},
+             "difference": row["difference"]} for row in found["generations"]]
+    final_trial = next((item for item in reversed(trials) if item.get("final")), None)
+    final_set = None
+    if final_trial is not None:
+        final_set = {"problems": int(final_trial.get("problems") or 0), "arm_tokens": int(final_trial.get("arm_tokens") or 0),
+                     "arms": [{"role": "generation" if str(arm["role"]).startswith("generation") else str(arm["role"]),
+                               "version": int(arm["version"]), "accepted": int(arm["accepted"]),
+                               "better": int(arm["better"]), "tokens": int(arm["tokens"]), "yield": float(arm["yield"])}
+                              for arm in final_trial.get("arms") or ()]}
+    if not trials:
+        state, reason = "not_testable", "no_trials"
+    elif final_trial is None:
+        state, reason = "not_tested", "stopped" if ran_final and final_state == "stopped" else (
+            "final_set_too_small" if ran_final and final_state == "fewer_fresh" else "final_set_not_run")
+    elif len(rows) < 3:
+        state, reason = "not_tested", "too_few_generations"
+    elif not found["enough"]:
+        state, reason = "not_tested", "too_few_problems"
+    else:
+        state, reason = "tested", None
+    return {"state": state, "reason": reason, "trials": sum(1 for item in trials if not item.get("final")),
+            "generations": rows, "estimate": found["estimate"], "low": found["low"], "high": found["high"],
+            "p_value": found["p_value"] if state == "tested" else None, "p_holm": None, "met": None,
+            "resamples": int(found["resamples"]), "seed": int(found["seed"]), "minimum": int(found["minimum"]),
+            "final_set": final_set}
 
 
 def _container() -> bool:
@@ -966,9 +1098,10 @@ def _summary(found: Mapping[str, Any] | None) -> dict[str, Any] | None:
 def assemble_freeze(result: Mapping[str, Any] | None, *, as_of: date, versions: Sequence[Mapping[str, Any]],
                     newest: Mapping[str, Any] | None, prepared: Prepared, refreshed: Mapping[str, int],
                     container: bool, main_reference: bool, lessons: int, behaviours: int,
-                    hours: float) -> dict[str, Any]:
+                    hours: float, paper: str = "v1", h3: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """The freeze's JSON from ``evaluation.freeze_check``'s aggregates: the design, the arms, every contrast,
-    H1 and H2 with the pre-registered rules (§5, §7), and Holm across {H1, H2}."""
+    H1, H2 and H3 with the pre-registered rules (§5, §7), and Holm across the paper version's family ({H1, H2} in
+    v1, {H1, H2, H3} in v2; an untested member enters as 1, A6)."""
 
     from row_bot.learning import evaluation
 
@@ -1007,19 +1140,25 @@ def assemble_freeze(result: Mapping[str, Any] | None, *, as_of: date, versions: 
             },
             "by_kind": {key: _summary(value) for key, value in contrast["real_uncorrected"]["by_kind"].items()},
         })
-    if lessons or behaviours:
-        h2_reason = "arms_not_built_yet"  # the arms with lessons on and off come with L3b's application of them
-    else:
-        h2_reason = "no_lessons_or_ways_of_working"
-    h2 = {"state": "not_testable", "reason": h2_reason, "superiority": None, "non_inferiority": None,
-          "supported": None, "sensitivity": None, "by_kind": None,
-          "counts": {"lessons_in_use": lessons, "ways_of_working_in_use": behaviours, "corrected_problems": corrected}}
-    adjusted = evaluation.holm({"H1": p_h1, "H2": None}, family=FAMILY)
+    h2, p_h2 = _h2(result, lessons=lessons, behaviours=behaviours, corrected=corrected)
+    h3 = dict(h3 or h3_report_empty())
+    p_h3 = h3.get("p_value") if h3.get("state") == "tested" else None
+    family = FAMILIES[paper]
+    adjusted = evaluation.holm({"H1": p_h1, "H2": p_h2, "H3": p_h3}, family=family)
     if h1["superiority"] is not None:
         h1["superiority"]["p_holm"] = adjusted["H1"] if p_h1 is not None else None
         met = p_h1 is not None and adjusted["H1"] < ALPHA and (h1["superiority"]["low"] or 0) > 0
         h1["superiority"]["met"] = met if p_h1 is not None else None
         h1["supported"] = (met and bool(h1["non_inferiority"]["met"])) if p_h1 is not None else None
+    if h2["superiority"] is not None:
+        h2["superiority"]["p_holm"] = adjusted["H2"] if p_h2 is not None else None
+        met = p_h2 is not None and adjusted["H2"] < ALPHA and (h2["superiority"]["low"] or 0) > 0
+        h2["superiority"]["met"] = met if p_h2 is not None else None
+        h2["supported"] = (met and bool(h2["non_inferiority"]["met"]) and bool(h2["non_inferiority_packs"]["met"])
+                           if p_h2 is not None else None)
+    if "H3" in family and p_h3 is not None:
+        h3["p_holm"] = adjusted["H3"]
+        h3["met"] = adjusted["H3"] < ALPHA and (h3.get("low") or 0) > 0
     arms = {}
     for name, row in (result.get("arms") or {}).items():
         arms[name] = {key: row[key] for key in ("tokens", "cloud_tokens", "seconds", "ran", "cached", "identical")}
@@ -1033,7 +1172,7 @@ def assemble_freeze(result: Mapping[str, Any] | None, *, as_of: date, versions: 
     return {
         "format": FORMAT, "schema_version": SCHEMA_VERSION, "mode": "freeze",
         "design": {
-            "as_of": as_of.isoformat(), "metric_version": evaluation.METRIC_VERSION,
+            "as_of": as_of.isoformat(), "paper": paper, "metric_version": evaluation.METRIC_VERSION,
             "previous_metric_version": evaluation.PREVIOUS_METRIC_VERSION,
             "repeats": int(result.get("repeats") or 0), "seed": evaluation.ANALYSIS_SEED,
             "resamples": evaluation.RESAMPLES, "permutations": evaluation.PERMUTATIONS,
@@ -1054,10 +1193,64 @@ def assemble_freeze(result: Mapping[str, Any] | None, *, as_of: date, versions: 
                      "main_models": int(result.get("main_models") or 0),
                      "untrusted": int(problems.get("untrusted") or 0),
                      "with_picture": int(problems.get("with_picture") or 0)},
-        "arms": arms, "contrasts": contrasts, "hypotheses": {"H1": h1, "H2": h2},
-        "holm": {"family": list(FAMILY), "alpha": ALPHA, "untested_enter_as": 1.0,
-                 "adjusted": {"H1": adjusted["H1"] if p_h1 is not None else None, "H2": None}},
+        "arms": arms, "contrasts": contrasts, "hypotheses": {"H1": h1, "H2": h2, "H3": h3},
+        "holm": {"family": list(family), "alpha": ALPHA, "untested_enter_as": 1.0,
+                 "adjusted": {name: (adjusted[name] if {"H1": p_h1, "H2": p_h2, "H3": p_h3}[name] is not None
+                                     else None) for name in family}},
     }
+
+
+def h3_report_empty() -> dict[str, Any]:
+    from row_bot.learning import evaluation
+
+    return {"state": "not_testable", "reason": "no_trials", "trials": 0, "generations": [], "estimate": None,
+            "low": None, "high": None, "p_value": None, "p_holm": None, "met": None,
+            "resamples": evaluation.RESAMPLES, "seed": evaluation.ANALYSIS_SEED, "minimum": evaluation.MIN_FRESH,
+            "final_set": None}
+
+
+def _h2(result: Mapping[str, Any], *, lessons: int, behaviours: int, corrected: int) -> tuple[dict[str, Any], Any]:
+    """H2 (§5): the main model with the lessons and ways of working in use against the same model with none, on the
+    hidden corrected problems (superiority) and not worse on the uncorrected ones and the packs (non-inferiority);
+    its sensitivity analyses include version 2 of the checker (§7). Returns it and its p-value (None: untested)."""
+
+    from row_bot.learning import evaluation
+
+    counts = {"lessons_in_use": lessons, "ways_of_working_in_use": behaviours, "corrected_problems": corrected}
+    contrast = (result.get("contrasts") or {}).get("learning vs main") or {}
+    h2: dict[str, Any] = {"state": "not_testable", "superiority": None, "non_inferiority": None, "supported": None,
+                          "sensitivity": None, "by_kind": None, "counts": counts}
+    if not (lessons or behaviours):
+        return {**h2, "reason": "no_lessons_or_ways_of_working"}, None
+    if not contrast:
+        return {**h2, "reason": "not_run"}, None
+    primary = contrast["real_corrected"]["primary"]
+    stopped = bool(result.get("stopped"))
+    enough = primary["problems"] >= evaluation.MIN_PROBLEMS
+    p_h2 = primary["p_value"] if enough and not stopped else None
+
+    def ni(split: str) -> dict[str, Any]:
+        found = contrast[split]["primary"]
+        return {**_part(split, found), "margin": -MARGIN, "met": found["low"] is not None and found["low"] > -MARGIN}
+
+    h2.update({
+        "state": "tested" if p_h2 is not None else "not_tested",
+        "reason": None if p_h2 is not None else ("stopped" if stopped else "too_few_problems"),
+        "superiority": _part("real_corrected", primary), "non_inferiority": ni("real_uncorrected"),
+        "non_inferiority_packs": ni("packs"),
+        "sensitivity": {
+            "exact_only": _summary(contrast["real_corrected"]["exact_only"]),
+            "majority_vote": _summary(contrast["real_corrected"]["majority_vote"]),
+            "unclustered": _summary(contrast["real_corrected"]["unclustered"]),
+            "per_main_model": {key: _summary(value) for key, value in contrast["real_corrected"]["per_main_model"].items()},
+            "corrected_problems": _summary(primary), "checker_versions": 2,
+            "metric_v2": _summary(contrast["real_corrected"]["metric_v2"]),
+            "trusted_only": _summary(contrast["real_corrected"]["trusted_only"]),
+            "without_pictures": _summary(contrast["real_corrected"]["without_pictures"]),
+        },
+        "by_kind": {key: _summary(value) for key, value in contrast["real_corrected"]["by_kind"].items()},
+    })
+    return h2, p_h2
 
 
 def _part(split: str, found: Mapping[str, Any]) -> dict[str, Any]:
@@ -1206,13 +1399,26 @@ def parse(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument("--main-reference", action="store_true",
                         help="--freeze: also score the main model (a reference, not a hypothesis arm; cloud tokens)")
     parser.add_argument("--eval-profile",
-                        help="--main-reference: the eval profile whose ChatGPT sign-in the main model uses "
-                             "(never the profile's own)")
+                        help="--main-reference, --h2, --h3-final: the eval profile whose ChatGPT sign-in the main "
+                             "model uses (never the profile's own)")
+    parser.add_argument("--paper", choices=("v1", "v2"), default="v1",
+                        help="--freeze: the paper version (its confirmatory family: v1 H1 and H2, v2 adds H3)")
+    parser.add_argument("--h2", action="store_true",
+                        help="--freeze: run H2's arms (the main model with and without the lessons and ways of "
+                             "working in use; cloud tokens)")
+    parser.add_argument("--h3-final", action="store_true",
+                        help="--freeze: run H3's final set (every learning method generation and the frozen control "
+                             "at the same budget on the problems no trial used; cloud tokens)")
+    parser.add_argument("--cloud-cap", type=int, default=CLOUD_CAP,
+                        help="--freeze: most cloud tokens each cloud part may use (the main model's arms, H3's final "
+                             "set)")
     args = parser.parse_args(argv)
-    if args.main_reference and not args.eval_profile:
-        parser.error("--main-reference needs --eval-profile (the eval profile's ChatGPT sign-in, never yours)")
-    if args.eval_profile and not args.main_reference:
-        parser.error("--eval-profile goes with --main-reference")
+    cloud = args.main_reference or args.h2 or args.h3_final
+    if cloud and not args.eval_profile:
+        parser.error("--main-reference, --h2 and --h3-final need --eval-profile (the eval profile's ChatGPT sign-in, "
+                     "never yours)")
+    if args.eval_profile and not cloud:
+        parser.error("--eval-profile goes with --main-reference, --h2 or --h3-final")
     if args.freeze:
         try:
             args.as_of_date = date.fromisoformat(str(args.as_of or ""))
@@ -1347,7 +1553,9 @@ def _run_mode(mode: str, copy: Path, target: Path, args: argparse.Namespace, hoo
         raise _ModeFailed("Learning is off in this profile")
     say(f"Running the freeze evaluation on every hidden problem up to {args.as_of_date.isoformat()} ...")
     return freeze_report(copy, args.as_of_date, hooks=hooks, main_reference=bool(args.main_reference),
-                         eval_profile=Path(args.eval_profile).resolve() if args.eval_profile else None)
+                         eval_profile=Path(args.eval_profile).resolve() if args.eval_profile else None,
+                         cap_tokens=int(args.cloud_cap), paper=str(args.paper), h2=bool(args.h2),
+                         h3_final=bool(args.h3_final))
 
 
 if __name__ == "__main__":
