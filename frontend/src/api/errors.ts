@@ -2783,6 +2783,34 @@ const CATALOG: Record<string, Entry> = {
     'Something is downloading or training right now. Stop it first, then try again.',
     'review',
   ],
+  learning_hugging_face_unavailable: [
+    'Training on Hugging Face isn’t available in this Row-Bot.',
+    'none',
+  ],
+  learning_hugging_face_unreachable: [
+    'Row-Bot couldn’t reach Hugging Face. Check your connection, then try again.',
+    RETRY,
+  ],
+  learning_hugging_face_refused: [
+    'Hugging Face didn’t accept the request. Try again, or sign in again if it keeps happening.',
+    RETRY,
+  ],
+  learning_hugging_face_signed_out: [
+    'Sign in to Hugging Face again to continue.',
+    'review',
+  ],
+  learning_hugging_face_over_cap: [
+    'This run doesn’t fit this month’s Hugging Face spending cap. Raise the cap or wait for next month.',
+    'review',
+  ],
+  learning_hugging_face_busy: [
+    'A run on Hugging Face is in progress. Cancel it or let it finish first.',
+    'review',
+  ],
+  learning_quote_changed: [
+    'The price changed since you looked. Check the new quote, then start again.',
+    'review',
+  ],
   learning_download_changed: [
     'The download changed meanwhile. Check it and try again.',
     'review',
