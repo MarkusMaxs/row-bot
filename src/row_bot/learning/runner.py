@@ -54,8 +54,8 @@ DREAM_GRACE_SECONDS = 45 * 60.0
 class RunnerStatus:
     """What the runner would do now, and why not (a reason code the client words)."""
 
-    # off Â· paused Â· training Â· waiting (for the computer) Â· scheduled (quiet hours)
-    # Â· held (Continue or Discard) Â· failed Â· trained Â· nothing_to_do
+    # off · paused · training · waiting (for the computer) · scheduled (quiet hours)
+    # · held (Continue or Discard) · failed · trained · nothing_to_do
     state: str
     reason: str | None = None
 
@@ -271,7 +271,7 @@ class NightLook:
         store.set_meta_values({MORNING_KEY: night})
         if not parts:
             return None
-        text = "Overnight: " + " Â· ".join(parts)
+        text = "Overnight: " + " · ".join(parts)
         if notify is not None:
             notify(text)
         else:
@@ -582,7 +582,7 @@ class LearningRunner:
         with self._lock:
             if self.look is not None:
                 try:
-                    self.look.tick()  # Dream â†’ the night's look and its tests â†’ training
+                    self.look.tick()  # Dream → the night's look and its tests → training
                     self.look.morning()
                 except Exception:
                     logger.exception("Learning's look for things to improve failed")

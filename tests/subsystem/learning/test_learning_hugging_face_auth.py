@@ -12,7 +12,7 @@ import pytest
 from row_bot import secret_store
 from row_bot.learning.remote import auth
 
-pytestmark = [pytest.mark.subsystem]
+pytestmark = [pytest.mark.subsystem, pytest.mark.platform]
 
 ACCESS = "hf_oauth_ACCESS_marker_1234"
 FRESH = "hf_oauth_FRESH_marker_5678"
