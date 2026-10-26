@@ -760,6 +760,10 @@
           "title": "Monthly Token Limit",
           "type": "integer"
         },
+        "paused": {
+          "title": "Paused",
+          "type": "boolean"
+        },
         "sources": {
           "$ref": "#/$defs/LearningSourcesSnapshot"
         },
@@ -779,6 +783,7 @@
       "required": [
         "availability",
         "enabled",
+        "paused",
         "sources",
         "apply_mode",
         "monthly_token_limit",

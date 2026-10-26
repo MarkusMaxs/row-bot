@@ -15,6 +15,7 @@ from row_bot.learning.contracts import (
     Decision,
     Episode,
     Job,
+    JobTransition,
     LessonRecord,
     Pin,
     Ref,
@@ -45,6 +46,19 @@ class FakeClock:
         self.now += float(seconds)
 
 
+def set_learning_preview(monkeypatch: Any, on: bool = True) -> None:
+    """Start-up's preview flag (O34), as if the app had been started with or without it."""
+
+    from row_bot import learning
+
+    if on:
+        monkeypatch.setenv(learning.PREVIEW_ENV, "1")
+    else:
+        monkeypatch.delenv(learning.PREVIEW_ENV, raising=False)
+    monkeypatch.setattr(learning, "_PREVIEW", on)
+    learning.invalidate()
+
+
 def save_learning_settings(root: Path, **values: Any) -> None:
     """Write ``learning_config.json`` the way Settings saves it (merged)."""
 
@@ -70,8 +84,8 @@ def learning_files(*roots: Path) -> list[str]:
             continue
         for path in root.rglob("*"):
             relative = path.relative_to(root)
-            if any(part == "learning" or part.startswith("learning.db") or part == "learning_config.json"
-                   for part in relative.parts):
+            if any(part in ("learning", "learning_models") or part.startswith("learning.db")
+                   or part == "learning_config.json" for part in relative.parts):
                 found.append(relative.as_posix())
     return sorted(found)
 
@@ -261,6 +275,11 @@ def full_records() -> list[contracts.Record]:
             backend="hugging_face", release_id="rel_2", attempt_id="att_3", spec_blob=SHA_D,
             steps_done=340, steps_total=1000, checkpoint_step=300, remote_request_id="hf-job-123",
             error_code="contact_lost", cost=Cost(tokens=0, gpu_seconds=3000.0),
+            version=3, trigger="train_now", started_at=81.0, finished_at=None, progress_at=89.5,
+            seconds_per_step=3.6, loss=0.42, recovered="previous_checkpoint",
+            transitions=(JobTransition(state="planned", at=80.0),
+                         JobTransition(state="running", at=81.0, reason="train_now"),
+                         JobTransition(state="unknown_remote", at=90.0, reason="contact_lost")),
         ),
     ]
 
@@ -279,3 +298,188 @@ def minimal_records() -> list[contracts.Record]:
         Release(id="rel_m", kind="strategy", version=1, created_at=1),
         Job(id="job_m", kind="test", created_at=1, updated_at=1),
     ]
+
+
+# ── Captured work (L2c): real turns through Capture's seams ────────────────
+
+
+class CapturedWork:
+    """Real captured turns (``Capture``'s seams, as the agent calls them): each asks a question,
+    calls the calculator, reads its result and answers. Conversations keep their history."""
+
+    SYSTEM = "You are Row-Bot. Use tools when they help."
+    TOOLS = [{"type": "function", "function": {
+        "name": "calculate", "description": "Evaluate a math expression.",
+        "parameters": {"type": "object", "properties": {"expression": {"type": "string"}},
+                       "required": ["expression"]}}}]
+
+    def __init__(self, writer, chats, clock) -> None:
+        self.writer, self.chats, self.clock = writer, chats, clock
+        from collections import defaultdict
+
+        self.history: dict[str, list] = defaultdict(list)
+        self.count = 0
+
+    def turn(self, thread_id: str, question: str, answer: str, *, model_ref: str = "gpt-5.6-sol",
+             provider_id: str = "openai", end: str = "completed", tool_status: str = "ok",
+             args: dict | None = None, tool: bool = True, raw_answer: str | None = None,
+             person_message: bool = False) -> list[str]:
+        """One turn; returns its model calls' decision ids (the tool step's, then the answer's).
+        ``person_message``: the person sent it (capture marks the reply it followed)."""
+
+        from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+
+        if thread_id not in self.chats.threads:
+            self.chats.chat(thread_id)
+        self.count += 1
+        number = self.count
+        turn = self.writer.begin_turn(thread_id=thread_id, surface="normal_chat", person_message=person_message)
+        asked = HumanMessage(content=question, id=f"h{number}")
+        sent = [SystemMessage(content=self.SYSTEM, id="sys"), *self.history[thread_id], asked]
+        ids: list[str] = []
+        added: list = [asked]
+        if tool:
+            call = {"id": f"call_{number}", "name": "calculate", "args": args or {"expression": "6 * 7"}}
+            step = AIMessage(content="", id=f"a{number}", tool_calls=[call])
+            ids.append(self.writer.model_call(turn, messages=sent, response=step, tools=self.TOOLS, model_ref=model_ref,
+                                              provider_id=provider_id))
+            result = ToolMessage(content="6 * 7 = 42", tool_call_id=call["id"], id=f"t{number}",
+                                 status="error" if tool_status != "ok" else "success")
+            self.writer.tool_call(turn, call=call, result=result, status=tool_status)
+            sent = [*sent, step, result]
+            added += [step, result]
+        reply = AIMessage(content=raw_answer if raw_answer is not None else answer, id=f"r{number}")
+        ids.append(self.writer.model_call(turn, messages=sent, response=reply, tools=self.TOOLS, model_ref=model_ref,
+                                          provider_id=provider_id))
+        added.append(AIMessage(content=answer, id=f"r{number}-kept"))
+        self.writer.end_turn(turn, end)
+        self.writer.drain()
+        self.history[thread_id] += added
+        self.clock.advance(60)
+        return ids
+
+
+# ── Training (L2a): the fake trainer, its engine, a dataset and a lease ────────
+
+FAKE_TRAINER = Path(__file__).with_name("learning_trainer.py").resolve()
+
+
+class FakeEngine:
+    """The training engine for tests and the browser fixture: the fake trainer, run by the app's
+    Python (``options`` are the fake trainer's, see ``learning_trainer.py``)."""
+
+    def __init__(self, ready: bool = True, **options: Any) -> None:
+        self.is_ready = ready
+        self.options: dict[str, Any] = dict(options)
+        self.commands: list[Any] = []
+
+    def ready(self) -> bool:
+        return self.is_ready
+
+    def command(self, job: Any) -> Any:
+        import sys
+
+        from row_bot.learning.training.worker import PROTOCOL_PATH, EngineCommand
+
+        # The base interpreter, never a virtual environment's python.exe launcher: on Windows that
+        # launcher starts the real interpreter before the worker's job object can own it.
+        interpreter = getattr(sys, "_base_executable", "") or sys.executable
+        command = EngineCommand(
+            argv=(interpreter, "-I", "-B", str(FAKE_TRAINER), str(PROTOCOL_PATH), json.dumps(self.options)),
+            env={"FAKE_ENGINE": "1"}, name="fake",
+        )
+        self.commands.append(command)
+        return command
+
+
+class FakeDataset:
+    """Prepares a job's lease: a few synthetic examples (never chat data)."""
+
+    def __init__(self, examples: int = 12, validation: int = 0) -> None:
+        self.examples = examples
+        self.validation = validation
+        self.prepared: list[str] = []
+        self.started: list[str] = []  # the jobs that started without a step trained
+
+    def starting(self, job: Any) -> Any:
+        self.started.append(job.id)
+        return job
+
+    def prepare(self, job: Any, folder: Path) -> int:
+        lines = [json.dumps({"messages": [{"role": "user", "content": f"Synthetic task {index}"},
+                                          {"role": "assistant", "content": "Done."}]})
+                 for index in range(self.examples)]
+        (Path(folder) / "examples.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+        if self.validation:
+            (Path(folder) / "validation.jsonl").write_text("\n".join(lines[:self.validation]) + "\n",
+                                                           encoding="utf-8", newline="\n")
+        self.prepared.append(job.id)
+        return self.examples
+
+
+class FakeLease:
+    """A resource lease whose holders the test sets (``ResourceLease``'s ``read``)."""
+
+    def __init__(self, **state: Any) -> None:
+        from row_bot.learning.lease import LeaseState
+
+        self._state_type = LeaseState
+        self.state = LeaseState(**state)
+        self.reads = 0
+
+    def set(self, **state: Any) -> None:
+        self.state = self._state_type(**state)
+
+    def read(self) -> Any:
+        self.reads += 1
+        return self.state
+
+
+def wait_for_file(path: Path, timeout: float = 10.0) -> str:
+    """A file another process writes, once it has content (no sleeping: polled on an event)."""
+
+    import threading
+    import time
+
+    deadline = time.monotonic() + timeout
+    tick = threading.Event()
+    while time.monotonic() < deadline:
+        try:
+            text = Path(path).read_text(encoding="utf-8").strip()
+            if text:
+                return text
+        except OSError:
+            pass
+        tick.wait(0.02)
+    raise TimeoutError(f"{path} was not written")
+
+
+def process_alive(pid: int) -> bool:
+    """Whether a process id still names a running process (any OS)."""
+
+    import os
+    import subprocess
+
+    if os.name == "nt":
+        import ctypes
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        handle = kernel.OpenProcess(0x1000 | 0x00100000, False, int(pid))  # QUERY_LIMITED_INFORMATION | SYNCHRONIZE
+        if not handle:
+            return False
+        try:
+            return kernel.WaitForSingleObject(handle, 0) == 0x102  # WAIT_TIMEOUT: still running
+        finally:
+            kernel.CloseHandle(handle)
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    try:  # a zombie (exited, not yet reaped) is not alive
+        state = subprocess.run(["ps", "-o", "stat=", "-p", str(int(pid))], capture_output=True, text=True,
+                               timeout=5).stdout.strip()
+        return bool(state) and not state.startswith("Z")
+    except (OSError, subprocess.SubprocessError):
+        return True

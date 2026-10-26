@@ -1628,15 +1628,17 @@ def _preferences(root: Path) -> dict[str, Any]:
 def _learning(root: Path) -> dict[str, Any]:
     """Learning's saved settings, read by its switch alone (no store, no other import).
 
-    ``has_data`` is a path check: Learning data kept after turning it off.
+    ``has_data`` is a path check: Learning data kept after turning it off. Without the
+    preview flag (O34) the page is unavailable.
     """
 
     from row_bot import learning
 
     settings = learning.read_settings(root)
     return {
-        "availability": "available" if settings.readable else "unavailable",
+        "availability": "available" if settings.readable and learning.preview_enabled() else "unavailable",
         "enabled": settings.enabled,
+        "paused": settings.paused,
         "sources": {
             "my_chats": settings.my_chats,
             "workflows_and_goals": settings.workflows_and_goals,
@@ -1736,6 +1738,7 @@ SETTING_DEFAULTS: dict[str, dict[str, Any]] = {
     # The Learning setup sheet's defaults, with Learning itself off.
     "learning": {
         "enabled": False,
+        "paused": False,
         "sources.my_chats": True,
         "sources.workflows_and_goals": True,
         "sources.past_chats": True,

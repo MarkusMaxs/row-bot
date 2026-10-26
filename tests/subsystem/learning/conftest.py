@@ -4,7 +4,14 @@ import sys
 
 import pytest
 
-from tests.fixtures.learning import FakeClock, FakeThreads, save_learning_settings
+from tests.fixtures.learning import FakeClock, FakeThreads, save_learning_settings, set_learning_preview
+
+
+@pytest.fixture(autouse=True)
+def _learning_preview(monkeypatch):
+    """These tests run a build started with the preview flag (O34) unless one says otherwise."""
+
+    set_learning_preview(monkeypatch, True)
 
 
 @pytest.fixture
@@ -60,3 +67,39 @@ def _process_capture_stopped():
     capture = sys.modules.get("row_bot.learning.capture")
     if capture is not None:
         capture.shutdown(10.0)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_graphics_card_or_download():
+    """Never ask the real ``nvidia-smi`` or start a real download: the hardware check reads as
+    "no NVIDIA card" unless a test sets its own, and the app's download is forgotten after each
+    test (a test that downloads plugs in fakes on loopback)."""
+
+    from row_bot.learning.training import hardware
+
+    hardware.check(refresh=True, detector=lambda: hardware.HardwareCheck("no_gpu"))
+    yield
+    downloads = sys.modules.get("row_bot.learning.training.downloads")
+    if downloads is not None and downloads.loaded() is not None:
+        downloads.loaded().stop_quietly("app_closed")
+        downloads._downloads = None  # noqa: SLF001 - a fresh app download for the next test
+    engine = sys.modules.get("row_bot.learning.training.engine")
+    if engine is not None:
+        engine.forget_status()
+    hardware.forget()
+
+
+@pytest.fixture(autouse=True)
+def _training_stopped():
+    """The app's training runner (if a test started it) ends with its worker, and the next test
+    gets a fresh one."""
+
+    yield
+    runner = sys.modules.get("row_bot.learning.runner")
+    if runner is not None:
+        runner.shutdown(10.0)
+        runner._runner = None  # noqa: SLF001 - a fresh app runner for the next test
+        runner._thread = None  # noqa: SLF001
+    lease = sys.modules.get("row_bot.learning.lease")
+    if lease is not None:
+        lease.release_training()

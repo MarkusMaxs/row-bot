@@ -19,6 +19,7 @@ pytestmark = pytest.mark.subsystem
 DEFAULTS = {
     "availability": "available",
     "enabled": False,
+    "paused": False,
     "sources": {"my_chats": True, "workflows_and_goals": True, "past_chats": True},
     "apply_mode": "ask_first",
     "monthly_token_limit": 2_000_000,
@@ -46,6 +47,7 @@ def test_learning_is_off_by_default_with_the_setup_sheets_defaults(api):
     assert snapshot["learning"] == DEFAULTS
     assert snapshot["defaults"]["learning"] == {
         "enabled": False,
+        "paused": False,
         "sources.my_chats": True,
         "sources.workflows_and_goals": True,
         "sources.past_chats": True,

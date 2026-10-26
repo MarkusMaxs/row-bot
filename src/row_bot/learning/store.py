@@ -18,7 +18,11 @@
 - **Deleting or excluding a conversation** purges what it owns (episodes, decisions,
   signals, replay fixtures and their unreferenced blobs) and *marks* the lessons, releases,
   attempts and test runs derived from it (``source_chat_deleted`` / ``source_chat_excluded``)
-  instead of deleting them, so a later version can offer "Retrain without it".
+  instead of deleting them, so a later version can offer "Retrain without it". It also
+  reaches the audit vault (``learning/audit.db``, E10): the conversation's hidden tasks
+  leave it, and "Delete learning data" removes the vault.
+- **Held-out decisions**: the audit vault marks the decisions it holds (``held_out``);
+  training data and drafting leave them out (:meth:`LearningStore.held_out_ids`).
 - **Schema migrations** are versioned with ``PRAGMA user_version``; a store from a newer app
   is refused rather than changed.
 """
@@ -65,6 +69,12 @@ RECORDING_KINDS = frozenset({"episode", "decision", "signal", "blob"})
 MARK_CHAT_DELETED = "source_chat_deleted"
 MARK_CHAT_EXCLUDED = "source_chat_excluded"
 MARK_MEMORY_DELETED = "memory_deleted"
+# A decision the audit vault holds as a hidden test: never training data, never drafting evidence.
+MARK_HELD_OUT = "held_out"
+# A corrected decision held out as a hidden problem (O87; L3a puts it in the vault). It is also
+# ``held_out``, so everything that leaves held-out decisions out leaves it out.
+MARK_HELD_OUT_CORRECTION = "held_out_correction"
+VAULT_FILE = "audit.db"
 
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _LINEAGE_KINDS = ("attempt", "release")
@@ -227,6 +237,11 @@ class LearningStore:
         self._data_dir = Path(data_dir) if data_dir is not None else None
         self._clock = clock
         self._migrations = tuple(migrations) if migrations is not None else MIGRATIONS
+
+    def now(self) -> float:
+        """The store's clock (epoch seconds): what Learning's passes over it call now."""
+
+        return float(self._clock())
 
     # ── Paths ────────────────────────────────────────────────────────────
 
@@ -462,6 +477,34 @@ class LearningStore:
             ).fetchall()
         found = self._parse(rows)
         return found[0] if found else None
+
+    def remove(self, kind: str, record_id: str) -> bool:
+        """Delete one record, its links and the blobs only it named (Undo on a Teach).
+
+        Never creates a store; False when there was nothing to remove.
+        """
+
+        if not self.exists():
+            return False
+        with _LOCK:
+            with self._transaction() as connection:
+                shas = {
+                    str(row[0])
+                    for row in connection.execute(
+                        "SELECT sha256 FROM blob_refs WHERE kind = ? AND id = ?", (kind, record_id)
+                    )
+                }
+                removed = connection.execute(
+                    "DELETE FROM records WHERE kind = ? AND id = ?", (kind, record_id)
+                ).rowcount
+                for table in ("owners", "derivations", "blob_refs", "marks"):
+                    connection.execute(f"DELETE FROM {table} WHERE kind = ? AND id = ?", (kind, record_id))
+                connection.execute("DELETE FROM lineage WHERE kind = ? AND child_id = ?", (kind, record_id))
+            if removed:
+                self._checkpoint()
+            if shas:
+                self.gc_blobs(shas)
+        return bool(removed)
 
     def find(
         self,
@@ -820,6 +863,9 @@ class LearningStore:
             if removed:
                 self._checkpoint()
             freed = self.gc_blobs(shas) if shas else 0
+            vault = self._forget_in_vault([clean])
+        if vault:
+            removed["audit_task"] = vault
         return PurgeReport(clean, tuple(sorted(removed.items())), freed, tuple(derived))
 
     def purge_missing_threads(self, existing: Iterable[str], *, older_than: float) -> int:
@@ -846,6 +892,12 @@ class LearningStore:
                     purged += 1
             except ValueError:
                 continue
+        if self._vault_exists():
+            from row_bot.learning import audit
+
+            for thread_id, newest in audit.vault_threads(root=self.root):
+                if thread_id not in keep and newest < older_than and self._forget_in_vault([thread_id]):
+                    purged += 1
         return purged
 
     # ── Per-chat opt-out ("Don't learn from this chat") ──────────────────
@@ -874,6 +926,9 @@ class LearningStore:
             if removed:
                 self._checkpoint()
             freed = self.gc_blobs(shas) if shas else 0
+            vault = self._forget_in_vault([clean])
+        if vault:
+            removed["audit_task"] = vault
         return PurgeReport(clean, tuple(sorted(removed.items())), freed, tuple(derived))
 
     def is_chat_opted_out(self, thread_id: str) -> bool:
@@ -933,6 +988,85 @@ class LearningStore:
 
         return self._mark_lessons("memory_id IS NOT NULL", ())
 
+    # ── The audit vault's held-out marks, and deletion reaching the vault ──
+
+    def add_marks(self, items: Iterable[tuple[str, str, str]], mark: str) -> int:
+        """Mark records as (kind, id, conversation); the audit vault marks what it holds out."""
+
+        rows = [(str(kind), str(record_id), str(mark), str(thread or ""), float(self._clock()))
+                for kind, record_id, thread in items if record_id]
+        if not rows or not self.exists():
+            return 0
+        with self._transaction() as connection:
+            connection.executemany(
+                "INSERT OR IGNORE INTO marks (kind, id, mark, thread_id, marked_at) VALUES (?, ?, ?, ?, ?)", rows)
+        return len(rows)
+
+    def held_out_ids(self) -> set[str]:
+        """Decisions the audit vault holds (or held), and corrections held out for it (O87): never
+        training data, never drafting evidence."""
+
+        with self._reader() as connection:
+            if connection is None:
+                return set()
+            return {str(row[0]) for row in connection.execute(
+                "SELECT id FROM marks WHERE kind = 'decision' AND mark = ?", (MARK_HELD_OUT,))}
+
+    def held_out_correction_ids(self) -> set[str]:
+        """The corrected decisions held out as hidden problems (O87), a subset of :meth:`held_out_ids`."""
+
+        with self._reader() as connection:
+            if connection is None:
+                return set()
+            return {str(row[0]) for row in connection.execute(
+                "SELECT id FROM marks WHERE kind = 'decision' AND mark = ?", (MARK_HELD_OUT_CORRECTION,))}
+
+    def meta_value(self, key: str, default: str = "") -> str:
+        """One of the store's own values (``meta``), or ``default``."""
+
+        with self._reader() as connection:
+            if connection is None:
+                return default
+            row = connection.execute("SELECT value FROM meta WHERE key = ?", (str(key),)).fetchone()
+        return str(row[0]) if row else default
+
+    def set_meta_values(self, values: dict[str, str]) -> None:
+        """Set some of the store's own values (one transaction)."""
+
+        with self._transaction() as connection:
+            connection.executemany(
+                "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [(str(key), str(value)) for key, value in values.items()])
+
+    def _vault_exists(self) -> bool:
+        try:
+            return (gate.folder_path(self.root) / VAULT_FILE).is_file()
+        except OSError:
+            return False
+
+    def _forget_in_vault(self, threads: Iterable[str]) -> int:
+        """A conversation's hidden tasks leave the vault (only when there is one: a path check)."""
+
+        if not self._vault_exists():
+            return 0
+        from row_bot.learning import audit
+
+        return audit.forget_threads(threads, root=self.root)
+
+    def _delete_vault(self) -> int:
+        if not self._vault_exists():
+            return 0
+        from row_bot.learning import audit
+
+        path = gate.folder_path(self.root) / VAULT_FILE
+        size = sum(Path(str(path) + suffix).stat().st_size for suffix in ("", "-wal")
+                   if Path(str(path) + suffix).is_file())
+        try:
+            audit.delete_vault(root=self.root)
+        except audit.AuditVaultError as error:
+            raise LearningStoreError("learning_data_busy") from error
+        return size
+
     # ── Delete learning data… ────────────────────────────────────────────
 
     def storage_bytes(self) -> int:
@@ -962,8 +1096,9 @@ class LearningStore:
         """
 
         with _LOCK:
+            vault_bytes = self._delete_vault()
             if not self.exists():
-                freed = self._remove_blobs()
+                freed = self._remove_blobs() + vault_bytes
                 return DeleteAllReport(deleted=bool(freed), bytes_freed=freed)
             size = self.storage_bytes()
             trained = tuple(
@@ -992,7 +1127,7 @@ class LearningStore:
                         "INSERT OR IGNORE INTO chat_optouts (thread_id, created_at) VALUES (?, ?)",
                         [(thread, now) for thread in opt_outs],
                     )
-        return DeleteAllReport(True, size, trained, len(opt_outs))
+        return DeleteAllReport(True, size + vault_bytes, trained, len(opt_outs))
 
     def _remove_blobs(self) -> int:
         folder = gate.folder_path(self.root)
@@ -1025,6 +1160,8 @@ __all__ = [
     "LearningStoreError",
     "MARK_CHAT_DELETED",
     "MARK_CHAT_EXCLUDED",
+    "MARK_HELD_OUT",
+    "MARK_HELD_OUT_CORRECTION",
     "MARK_MEMORY_DELETED",
     "MAX_BLOB_BYTES",
     "MIGRATIONS",

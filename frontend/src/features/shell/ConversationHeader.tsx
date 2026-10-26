@@ -37,6 +37,7 @@ export default function ConversationHeader({
   leading,
   incognito = false,
   menuActions,
+  trailingMenuActions = [],
   breadcrumb,
   children,
 }: {
@@ -62,6 +63,8 @@ export default function ConversationHeader({
    * entries (search, panels) come first.
    */
   menuActions?: MenuAction[];
+  /** Phone layout: items after the header's own (Learning's check item). */
+  trailingMenuActions?: MenuAction[];
   /**
    * A delegated agent's conversation: the way back to its parent, and the
    * agent's icon shown before the title on wide layouts.
@@ -147,6 +150,9 @@ export default function ConversationHeader({
               },
             ]
           : []),
+        ...trailingMenuActions.map((action, index) =>
+          index === 0 ? { ...action, separatorBefore: true } : action,
+        ),
       ]
     : [];
   return (

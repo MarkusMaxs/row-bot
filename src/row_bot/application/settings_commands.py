@@ -148,6 +148,7 @@ _BOOL_FIELDS = {
     ("preferences", "identity.self_improvement_enabled"),
     ("preferences", "dream_cycle.enabled"),
     ("learning", "enabled"),
+    ("learning", "paused"),
     ("learning", "sources.my_chats"),
     ("learning", "sources.workflows_and_goals"),
     ("learning", "sources.past_chats"),
@@ -268,6 +269,9 @@ def _uuid(value: Any) -> str:
 def _normal_value(page: Any, field: Any, value: Any) -> tuple[str, str, Any, bool]:
     if page not in _PAGES or type(field) is not str or not 1 <= len(field) <= 128:
         raise SettingsCommandError("invalid_settings_command")
+    if page == "learning" and not learning.preview_enabled():
+        # Learning (preview) exists only in a build started with its flag (O34).
+        raise SettingsCommandError("settings_action_unavailable")
     key = (page, field)
     secret = key in _SECRET_FIELDS
     if secret:
@@ -463,6 +467,13 @@ def review_settings_update(
             else "Turn off Learning: nothing new is recorded, tested or trained; your "
             "learning data is kept until you delete it"
         )
+    elif (page, field) == ("learning", "paused"):
+        summary = (
+            "Pause Learning: nothing new is recorded, tested or trained; changes and "
+            "models in use stay in use"
+            if intent["value"]
+            else "Resume Learning"
+        )
     elif (page, field) == ("voice", "tts.install"):
         summary = "Download and install Kokoro speech output locally"
     elif (page, field) == ("voice", "sensevoice.install"):
@@ -628,6 +639,23 @@ def _write_json_setting(root: Path, page: str, field: str, value: Any) -> None:
         updater.reload_saved_update_state(path)
     if page == "learning":
         # Turning Learning on creates its store; turning it off keeps the data.
+        learning.settings_saved(field, value)
+
+
+def write_learning_settings(values: Mapping[str, Any]) -> None:
+    """Save several Learning settings in one write (turning Learning on with the setup
+    sheet's choices), then let Learning react to each. Callers validate the values."""
+
+    root = get_row_bot_data_dir(create=False).absolute()
+    path = root / learning.SETTINGS_FILE
+    from row_bot.providers.config import provider_config_transaction
+
+    with provider_config_transaction(path):
+        document = _read_document(path)
+        for field, value in values.items():
+            _set_path(document, tuple(field.split(".")), value)
+        _write_document(path, document)
+    for field, value in values.items():
         learning.settings_saved(field, value)
 
 
@@ -1202,4 +1230,5 @@ __all__ = [
     "execute_settings_update",
     "read_settings_receipt",
     "review_settings_update",
+    "write_learning_settings",
 ]

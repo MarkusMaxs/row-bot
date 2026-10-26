@@ -54,6 +54,7 @@ from row_bot.agent_budget import (
     complete_budget_finalization,
     ExecutionBudgetExhausted,
     InvalidExecutionBudget,
+    ModelCallRefused,
     RowBotAgentState,
     exact_repeat_block_payload,
     framework_recursion_limit,
@@ -761,18 +762,23 @@ def _new_agent_graph_input(user_input: str, config: dict, *, agent=None) -> tupl
                 if not content:
                     continue
                 if str(item.get("role") or "") == "human":
+                    ui: dict[str, Any] = {
+                        "thread_event": True,
+                        "source_event_id": str(item.get("source_event_id") or ""),
+                    }
+                    # Learning (preview): the main model finishing a stuck personal model's turn. The
+                    # transcript shows only the note's public sentence, never this event's text.
+                    fallback = (item.get("row_bot_ui") or {}).get("learning_fallback") if isinstance(
+                        item.get("row_bot_ui"), dict) else None
+                    if isinstance(fallback, dict) and isinstance(fallback.get("text"), str):
+                        ui["learning_fallback"] = {
+                            "text": fallback["text"][:300],
+                            "version": int(fallback.get("version") or 0),
+                            "kind": str(fallback.get("kind") or "")[:64],
+                            "reason": str(fallback.get("reason") or "")[:64],
+                        }
                     event_messages.append(
-                        HumanMessage(
-                            content=content,
-                            additional_kwargs={
-                                "row_bot_ui": {
-                                    "thread_event": True,
-                                    "source_event_id": str(
-                                        item.get("source_event_id") or ""
-                                    ),
-                                }
-                            },
-                        )
+                        HumanMessage(content=content, additional_kwargs={"row_bot_ui": ui})
                     )
                 else:
                     event_messages.append(
@@ -1166,6 +1172,19 @@ def _is_transient_stream_disconnect(exc_str: str) -> bool:
         "server disconnected without sending a response",
     )
     return any(marker in s for marker in markers)
+
+
+def _refused_by_caller(exc: BaseException) -> bool:
+    """Whether a failed turn is a model call its caller's own limit refused (``ModelCallRefused``,
+    possibly wrapped): it ends quietly, never as an API error."""
+    current: BaseException | None = exc
+    for _ in range(8):
+        if current is None:
+            return False
+        if isinstance(current, ModelCallRefused):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 def _notify_api_error(friendly_msg: str) -> None:
@@ -6554,6 +6573,10 @@ def _invoke_agent_graph(user_input: str, enabled_tool_names: list[str], config: 
                 # Stop ended the model call (it closes a request mid-way): stopped, not failed.
                 raise TaskStoppedError("Task stopped during execution") from exc
             exc_str = str(exc)
+            if _refused_by_caller(exc):
+                logger.info("invoke_agent: a model call was refused by its caller's limit: %s", exc_str)
+                _learning_end_turn("failed", stop_event)
+                return exc_str
             if "tool_call" in exc_str and ("do not have a corresponding" in exc_str
                                             or "did not have response" in exc_str
                                             or "must be followed by tool" in exc_str):
@@ -9008,6 +9031,11 @@ def _stream_graph(agent, input_data, config: dict,
             logger.info("_stream_graph: the model call ended after Stop (%s)", type(exc).__name__)
             return
         exc_str = str(exc)
+        if _refused_by_caller(exc):
+            # The caller's own limit (Learning's evaluation budget), not the provider: no API-error notice.
+            logger.info("A model call was refused by its caller's limit: %s", exc_str)
+            yield ("error", exc_str)
+            return
         # Auto-repair orphaned tool calls and retry once. Never replay overflow (its retry was in the call).
         if _is_context_overflow_error(exc):
             _mark_context_overflow(_last_preparation_inputs(config))
@@ -9087,6 +9115,10 @@ def _stream_graph(agent, input_data, config: dict,
                             full_answer.append(content)
                             yield ("token", content)
             except Exception as retry_exc:
+                if _refused_by_caller(retry_exc):
+                    logger.info("A model call was refused by its caller's limit: %s", retry_exc)
+                    yield ("error", str(retry_exc))
+                    return
                 _rmsg = _friendly_api_error(str(retry_exc))
                 logger.error(
                     "_stream_graph retry failed during iteration: %s diagnostics=%s",
