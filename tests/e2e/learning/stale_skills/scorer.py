@@ -280,6 +280,8 @@ def metrics(timeline: world.Timeline, runs: Iterable[Mapping[str, Any]]) -> dict
         "stale_recall_surfaced_new": _rate([run for run in window if run.get("recalled_new")]),
         "stale_recall_did_not_surface_new": _rate([run for run in window if not run.get("recalled_new")]),
         "stale_all_after_change": _rate(after),
+        # Not the pre-registered rate: the same window, only the runs whose first attempt acted at all.
+        "stale_among_acted": _rate([run for run in window if run["verdict"] != NO_ACTION]),
         "window_verdicts": {verdict: sum(1 for run in window if run["verdict"] == verdict) for verdict in VERDICTS},
         "time_to_fix": fixes,
         "unchanged_success": _rate(unchanged, CURRENT),

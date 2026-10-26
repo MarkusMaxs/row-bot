@@ -42,12 +42,30 @@ def rule_check(timeline: world.Timeline) -> dict[str, Any]:
             "weekly": all(len(timeline.schedule[item.id]) >= 1 for item in world.PROCEDURES)}
 
 
-def arm_summary(data: dict[str, Any]) -> dict[str, Any]:
+def rescore(timeline: world.Timeline, state: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Every run and probe scored again from what the run saved (its first attempt's actions; the probe's reply), by
+    the scorer as it is now: the timeline is the only ground truth."""
+
+    runs = []
+    for item in state.get("runs") or ():
+        scored = scorer.score_run(timeline, item["id"], item["day"], item["attempts"][0]["actions"]).to_dict()
+        item["score"] = scored
+        runs.append({**scored, "skill_loaded": item.get("skill_loaded"), "recalled_new": item.get("recalled_new"),
+                     "passed_first": item.get("passed_first")})
+    probes = []
+    for item in state.get("probes") or ():
+        item["verdict"] = scorer.score_probe(item, item.get("answer") or "")
+        probes.append(item)
+    return scorer.metrics(timeline, runs), scorer.probe_metrics(probes)
+
+
+def arm_summary(data: dict[str, Any], state: dict[str, Any], timeline: world.Timeline) -> dict[str, Any]:
     gpu = round(float((data.get("gpu") or {}).get("seconds") or 0) / 3600, 2)
     skills = data.get("skills") or {}
+    metrics, probes = rescore(timeline, state)
     return {"model": (data.get("arm") or {}).get("arm"), "main_ref": (data.get("arm") or {}).get("main_ref"),
             "build": (data.get("arm") or {}).get("build"), "days_done": data.get("days_done"),
-            "metrics": data["metrics"], "probes": data["probes"],
+            "metrics": metrics, "probes": probes,
             "skills": {"made_by_consent": sorted(key for key, value in skills.items() if value.get("source") != "seeded"),
                        "seeded": sorted(key for key, value in skills.items() if value.get("source") == "seeded"),
                        "names_fact": sorted(key for key, value in skills.items() if value.get("names_fact")),
@@ -84,6 +102,7 @@ def markdown(summary: dict[str, Any]) -> str:
     row("recall surfaced the new fact", lambda a: _frac(a["metrics"]["stale_recall_surfaced_new"]))
     row("recall didn't", lambda a: _frac(a["metrics"]["stale_recall_did_not_surface_new"]))
     row("all runs after a change", lambda a: _frac(a["metrics"]["stale_all_after_change"]))
+    row("only window runs that acted (not pre-registered)", lambda a: _frac(a["metrics"]["stale_among_acted"]))
     row("window verdicts", lambda a: ", ".join(f"{k} {v}" for k, v in a["metrics"]["window_verdicts"].items()))
     row("**Unchanged procedures**: first acting step right", lambda a: _frac(a["metrics"]["unchanged_success"]))
     row("unchanged: first attempt passed (verifier and value)",
@@ -181,7 +200,7 @@ def main(argv: list[str] | None = None) -> int:
     for data, state in loaded:
         if [item["day"] for item in data["changes"]] != [item.day for item in timeline.changes]:
             raise SystemExit("the runs come from different timelines")
-        arms.append(arm_summary(data))
+        arms.append(arm_summary(data, state, timeline))
         records += [((data.get("arm") or {}).get("arm"), item) for item in state.get("runs") or ()]
     summary = {"person": world.PERSON, "seed": timeline.seed, "timeline": timeline.fingerprint(),
                "phrasing": timeline.phrasing, "changes": [item.to_dict() for item in timeline.changes],
