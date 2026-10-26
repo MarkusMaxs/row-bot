@@ -490,12 +490,12 @@ ANALYSIS = Obj({
     "interval_verdict": enum("better", "worse", "unclear"), "not_worse": BOOL,
 })
 SPLIT_ANALYSIS = Obj({
-    "primary": ANALYSIS, "majority_vote": ANALYSIS, "unclustered": ANALYSIS, "left_pair": COUNT,
+    "primary": ANALYSIS, "metric_v2": ANALYSIS, "majority_vote": ANALYSIS, "unclustered": ANALYSIS, "left_pair": COUNT,
     "by_kind": Map(KINDS, ANALYSIS), "exact_only": ANALYSIS, "per_main_model": Map(Text(pattern=MODEL_ORDINAL), ANALYSIS),
     "trusted_only": ANALYSIS, "without_pictures": ANALYSIS,
 }, optional=frozenset({"exact_only", "per_main_model", "trusted_only", "without_pictures"}))
-ARM_SPLIT = Obj({"problems": COUNT, "counted": COUNT, "mean": Maybe(SHARE), "runs": Map(RUN_STATUS, COUNT),
-                 "causes": Map(CAUSES, COUNT)})
+ARM_SPLIT = Obj({"problems": COUNT, "counted": COUNT, "mean": Maybe(SHARE), "mean_metric_v2": Maybe(SHARE),
+                 "guarded_runs": COUNT, "runs": Map(RUN_STATUS, COUNT), "causes": Map(CAUSES, COUNT)})
 TEST_PART = Obj({"split": SPLITS, "problems": COUNT, "clusters": COUNT, "difference": Maybe(SIGNED),
                  "low": Maybe(SIGNED), "high": Maybe(SIGNED), "p_value": Maybe(SHARE), "p_holm": Maybe(SHARE),
                  "margin": Maybe(SIGNED), "met": Maybe(BOOL)})
@@ -506,7 +506,7 @@ HYPOTHESIS = Obj({
     "superiority": Maybe(TEST_PART), "non_inferiority": Maybe(TEST_PART), "supported": Maybe(BOOL),
     "sensitivity": Maybe(Obj({"exact_only": ANALYSIS, "majority_vote": ANALYSIS, "unclustered": ANALYSIS,
                               "per_main_model": Map(Text(pattern=MODEL_ORDINAL), ANALYSIS),
-                              "corrected_problems": ANALYSIS, "checker_versions": COUNT,
+                              "corrected_problems": ANALYSIS, "checker_versions": COUNT, "metric_v2": ANALYSIS,
                               "trusted_only": ANALYSIS, "without_pictures": ANALYSIS})),
     "by_kind": Maybe(Map(KINDS, ANALYSIS)),
     "counts": Maybe(Obj({"lessons_in_use": COUNT, "ways_of_working_in_use": COUNT, "corrected_problems": COUNT})),
@@ -514,7 +514,8 @@ HYPOTHESIS = Obj({
 FREEZE = Obj({
     "format": enum(FORMAT), "schema_version": Num(integer=True, low=SCHEMA_VERSION, high=SCHEMA_VERSION),
     "mode": enum("freeze"), "run": RUN,
-    "design": Obj({"as_of": Text(pattern=DAY), "metric_version": COUNT, "repeats": COUNT, "seed": COUNT,
+    "design": Obj({"as_of": Text(pattern=DAY), "metric_version": COUNT, "previous_metric_version": COUNT,
+                   "repeats": COUNT, "seed": COUNT,
                    "resamples": COUNT, "permutations": COUNT, "task_tokens": COUNT, "runtime": RUNTIMES,
                    "serve_context": Maybe(COUNT), "container": BOOL, "main_reference": BOOL, "stopped": BOOL,
                    "hours": HOURS, "cloud_tokens": COUNT, "local_tokens": COUNT,
@@ -997,7 +998,9 @@ def assemble_freeze(result: Mapping[str, Any] | None, *, as_of: date, versions: 
                 "per_main_model": {key: _summary(value) for key, value in
                                    contrast["real_uncorrected"]["per_main_model"].items()},
                 "corrected_problems": _summary(contrast["real_corrected"]["primary"]),
-                "checker_versions": 1,
+                # §7: H1 under both checker versions (METRIC_VERSION 3's guard, and 2 before it), the same runs.
+                "checker_versions": 2,
+                "metric_v2": _summary(contrast["real_uncorrected"]["metric_v2"]),
                 # A7: trusted input only. A8: without the problems that carry a page picture.
                 "trusted_only": _summary(contrast["real_uncorrected"]["trusted_only"]),
                 "without_pictures": _summary(contrast["real_uncorrected"]["without_pictures"]),
@@ -1031,6 +1034,7 @@ def assemble_freeze(result: Mapping[str, Any] | None, *, as_of: date, versions: 
         "format": FORMAT, "schema_version": SCHEMA_VERSION, "mode": "freeze",
         "design": {
             "as_of": as_of.isoformat(), "metric_version": evaluation.METRIC_VERSION,
+            "previous_metric_version": evaluation.PREVIOUS_METRIC_VERSION,
             "repeats": int(result.get("repeats") or 0), "seed": evaluation.ANALYSIS_SEED,
             "resamples": evaluation.RESAMPLES, "permutations": evaluation.PERMUTATIONS,
             "task_tokens": int(((result.get("budget") or {}).get("task_tokens")) or 150_000),
@@ -1063,7 +1067,8 @@ def _part(split: str, found: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _split(part: Mapping[str, Any]) -> dict[str, Any]:
-    out: dict[str, Any] = {"primary": _summary(part["primary"]), "majority_vote": _summary(part["majority_vote"]),
+    out: dict[str, Any] = {"primary": _summary(part["primary"]), "metric_v2": _summary(part["metric_v2"]),
+                           "majority_vote": _summary(part["majority_vote"]),
                            "unclustered": _summary(part["unclustered"]), "left_pair": int(part["left_pair"]),
                            "by_kind": {key: _summary(value) for key, value in part["by_kind"].items()}}
     if "exact_only" in part:

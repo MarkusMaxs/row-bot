@@ -65,7 +65,7 @@ from row_bot.learning.calls import (
 from row_bot.learning.contracts import Cost, Decision, TaskFixture, TestRun, new_id
 from row_bot.learning.packs import PackTask, visible_tasks
 from row_bot.learning.packs.fake_apps import FakeApps
-from row_bot.learning.packs.verify import Outcome, normalize, solve, verify
+from row_bot.learning.packs.verify import GUARD_DETAIL, Outcome, normalize, solve, verify
 from row_bot.learning.sandbox import Sandbox, SandboxError
 from row_bot.learning.spending import TokenMeter
 from row_bot.learning.store import MARK_HELD_OUT
@@ -77,7 +77,13 @@ logger = logging.getLogger(__name__)
 # 2 (L2v): an answer check also passes a reply that states the expected value in a sentence without
 # giving the task's known wrong value first (``packs.verify``), and the real-runtime worker checks
 # the reply's last message. Results under 1 are never mixed with these (the arm cache keys on it).
-METRIC_VERSION = 2
+# 3 (L4a, O67): a final message that offers two or more distinct answers of the expected kind fails
+# (``packs.verify.offers_several``). Each result records whether it failed only by that guard
+# (``CaseResult.guarded``), so the freeze also reports version 2's reading (§7's sensitivity analysis)
+# without running anything twice; results under different versions are never mixed.
+METRIC_VERSION = 3
+#: The version before the guard, reported beside the primary one (pre-registration §7).
+PREVIOUS_METRIC_VERSION = 2
 # "21 of 24 passed": passed over passed + failed. A task that ran out of its budget or
 # steps failed; one the provider couldn't run (an error) or no check could decide
 # (unverified) is reported but left out of the denominator.
@@ -183,10 +189,17 @@ class CaseResult:
     detail: str = ""
     # Why a task that ran didn't pass, when the runner can tell (``eval_worker.CAUSES``): a code, never task text.
     cause: str = ""
+    # It failed only because its final message offered more than one answer (METRIC_VERSION 3's guard).
+    guarded: bool = False
 
     @property
     def passed(self) -> bool:
         return self.status == "passed"
+
+    def passed_under(self, version: int) -> bool:
+        """Whether it passed under ``version`` of the checker (2: before the commits-to-one-answer guard)."""
+
+        return self.passed or (version < METRIC_VERSION and self.status == "failed" and self.guarded)
 
     @property
     def counted(self) -> bool:
@@ -520,6 +533,7 @@ def run_pack_task(task: PackTask, arm: Arm, *, client: ModelClient, budget: Budg
     steps = tokens = local_tokens = 0
     status: Status = "failed"
     detail = cause = ""
+    guarded = False
     allowance = budget.task_tokens if arm_left is None else min(budget.task_tokens, max(0, arm_left))
     with Sandbox() as box:
         for name, content in task.files.items():
@@ -562,13 +576,13 @@ def run_pack_task(task: PackTask, arm: Arm, *, client: ModelClient, budget: Budg
         if finished:
             try:
                 verdict = verify(task, Outcome(answer, box.files(), apps.state()), backend=backend)
-                status, detail = ("passed" if verdict.passed else "failed"), verdict.detail
+                status, detail, guarded = ("passed" if verdict.passed else "failed"), verdict.detail, verdict.guarded
             except SandboxError as error:
                 status, detail = "error", f"the check could not run ({error})"
         elif status == "failed" and not cause:
             status, detail = "budget", "ran out of steps"
     return CaseResult(task.id, "pack", task.kind_of_work, status, task.verifier.kind, tokens, local_tokens, steps,
-                      round(time.monotonic() - started, 3), detail[:300], cause)
+                      round(time.monotonic() - started, 3), detail[:300], cause, guarded)
 
 
 # ── Replay: re-asking a captured decision at its prefix ─────────────────────
@@ -656,8 +670,13 @@ def compare_action(candidate: Action, reference: Action, *, check: Check = "exac
             return None, "called a tool first, which replay can't follow"
         if judge is not None:
             verdict = judge.judge(task_text, reference.text, candidate.text)
-            return verdict, "" if verdict else ("the judge could not tell" if verdict is None else "the judge failed it")
-        return _states(reference.text, candidate.text)
+        else:
+            verdict, detail = _states(reference.text, candidate.text)
+            if not verdict:
+                return verdict, detail
+        if verdict and _offers_alternatives(candidate.text, reference.text):
+            return False, GUARD_DETAIL
+        return verdict, "" if verdict else ("the judge could not tell" if verdict is None else "the judge failed it")
 
     if reference.tool_calls:
         if not candidate.tool_calls:
@@ -684,7 +703,29 @@ def compare_action(candidate: Action, reference: Action, *, check: Check = "exac
     if judge is None:
         return None, "a long answer and no calibrated judge"
     verdict = judge.judge(task_text, reference.text, candidate.text)
+    if verdict and _offers_alternatives(candidate.text, reference.text):
+        return False, GUARD_DETAIL
     return verdict, "" if verdict else ("the judge could not tell" if verdict is None else "the judge failed it")
+
+
+def _offers_alternatives(reply: str, reference: str) -> bool:
+    """A reply that offers a reference's number, date or identifier as one of several joined as a choice ("85 or
+    60 EUR") doesn't commit to one answer (METRIC_VERSION 3): the guard on answers that are judged or compared
+    with a person's stated answer."""
+
+    from row_bot.learning.packs.verify import offers_several
+
+    keys = [(float(value.replace(",", "")), "number") for value in _NUMBER_KEY.findall(_unkeyed(reference))]
+    keys += [(token, "exact") for token in _DATE_OR_ID.findall(str(reference or ""))]
+    return any(offers_several(reply, value, match=match, hedges=False) for value, match in keys)
+
+
+_DATE_OR_ID = re.compile(r"(?<![\w-])(?:\d{4}-\d{1,2}-\d{1,2}|[A-Za-z]{1,8}[-_]?\d+(?:[-_][A-Za-z0-9]+)*)(?![\w-])")
+_NUMBER_KEY = re.compile(r"(?<![\w.,-])\d[\d,]*(?:\.\d+)?(?![\w])")
+
+
+def _unkeyed(text: str) -> str:
+    return _DATE_OR_ID.sub(" ", str(text or ""))
 
 
 @dataclass(frozen=True)
@@ -1032,7 +1073,8 @@ def run_replay_case(case: ReplayCase, arm: Arm, *, client: ModelClient, budget: 
     status: Status = "unverified" if verdict is None else ("passed" if verdict else "failed")
     judged = not case.reference.tool_calls and case.check == "exact_action" and len(case.reference.text) > SHORT_TEXT
     return CaseResult(case.decision_id, "replay", case.kind_of_work, status, "judge" if judged else case.check,
-                      reply.tokens, reply.tokens if reply.local else 0, 1, round(time.monotonic() - started, 3), detail)
+                      reply.tokens, reply.tokens if reply.local else 0, 1, round(time.monotonic() - started, 3), detail,
+                      guarded=status == "failed" and detail == GUARD_DETAIL)
 
 
 # ── Pack runners and the main model's cache ─────────────────────────────────
@@ -1112,7 +1154,7 @@ class ArmCache:
         return CaseResult(task.id, "pack", task.kind_of_work, found["status"], str(found.get("check") or ""),
                           int(found.get("tokens") or 0), int(found.get("local_tokens") or 0),
                           int(found.get("steps") or 0), float(found.get("seconds") or 0.0), "kept from an earlier test",
-                          str(found.get("cause") or ""))
+                          str(found.get("cause") or ""), bool(found.get("guarded")))
 
     def put(self, key: str, case: CaseResult) -> None:
         if case.status not in ("passed", "failed", "budget"):
@@ -1120,7 +1162,7 @@ class ArmCache:
         entries = self._load()
         entries[key] = {"at": round(float(self.clock()), 3), "status": case.status, "check": case.check,
                         "tokens": case.tokens, "local_tokens": case.local_tokens, "steps": case.steps,
-                        "seconds": case.seconds, "cause": case.cause}
+                        "seconds": case.seconds, "cause": case.cause, "guarded": case.guarded}
         if len(entries) > _CACHE_ENTRIES:
             for old in sorted(entries, key=lambda item: entries[item]["at"])[: len(entries) - _CACHE_ENTRIES]:
                 entries.pop(old, None)
@@ -1930,14 +1972,15 @@ def _origin(corrected: bool | None) -> str | None:
 SPLITS: tuple[str, ...] = ("real_uncorrected", "real_corrected", "packs")
 
 
-def _scores(cases: Sequence[CaseResult], *, majority: bool = False) -> dict[str, float]:
+def _scores(cases: Sequence[CaseResult], *, majority: bool = False, version: int = METRIC_VERSION) -> dict[str, float]:
     """Each problem's score over its counted runs: the pass fraction ``s(i, a)`` (§6.1), or with
-    ``majority`` 1 when more than half of its counted runs passed, else 0 (§7's sensitivity analysis)."""
+    ``majority`` 1 when more than half of its counted runs passed, else 0 (§7's sensitivity analysis).
+    ``version`` reads the runs under that checker version (2: before the commits-to-one-answer guard)."""
 
     runs: dict[str, list[int]] = {}
     for case in cases:
         if case.counted:
-            runs.setdefault(case.task_id, []).append(int(case.passed))
+            runs.setdefault(case.task_id, []).append(int(case.passed_under(version)))
     if majority:
         return {task: 1.0 if 2 * sum(found) > len(found) else 0.0 for task, found in runs.items()}
     return {task: sum(found) / len(found) for task, found in runs.items()}
@@ -1985,6 +2028,8 @@ def _freeze_analysis(arms: Sequence[Arm], results: Mapping[str, Sequence[CaseRes
     by_split = {name: [task for task, found in split.items() if found == name] for name in SPLITS}
     fractions = {arm.name: _scores(results[arm.name]) for arm in arms}
     majority = {arm.name: _scores(results[arm.name], majority=True) for arm in arms}
+    # §7: H1 and H2 also under the checker version before the guard (the same runs, read without it).
+    previous = {arm.name: _scores(results[arm.name], version=PREVIOUS_METRIC_VERSION) for arm in arms}
 
     per_arm: dict[str, Any] = {}
     for arm in arms:
@@ -1993,9 +2038,12 @@ def _freeze_analysis(arms: Sequence[Arm], results: Mapping[str, Sequence[CaseRes
             wanted = set(problems)
             cases = [case for case in results[arm.name] if case.task_id in wanted]
             scored = [fractions[arm.name][task] for task in problems if task in fractions[arm.name]]
+            before = [previous[arm.name][task] for task in problems if task in previous[arm.name]]
             rows[name] = {
                 "problems": len(problems), "counted": len(scored),
                 "mean": round(sum(scored) / len(scored), 6) if scored else None,
+                "mean_metric_v2": round(sum(before) / len(before), 6) if before else None,
+                "guarded_runs": sum(1 for case in cases if case.counted and case.guarded),
                 "runs": dict(sorted(Counter(case.status for case in cases).items())),
                 "causes": dict(sorted(Counter(case.cause for case in cases if case.cause).items())),
             }
@@ -2012,6 +2060,7 @@ def _freeze_analysis(arms: Sequence[Arm], results: Mapping[str, Sequence[CaseRes
         for name, problems in by_split.items():
             part: dict[str, Any] = {
                 "primary": summary(fractions, base, other, problems, clusters),
+                "metric_v2": summary(previous, base, other, problems, clusters),
                 "majority_vote": summary(majority, base, other, problems, clusters),
                 "unclustered": summary(fractions, base, other, problems, unclustered),
                 "left_pair": sum(1 for task in problems
@@ -2089,7 +2138,8 @@ def freeze_check(arms: Sequence[Arm], *, as_of: float, asked_by: str, contrasts:
         })
     splits = {name: sum(1 for case in replay if (case.reference_source == "corrected") == (name == "real_corrected"))
               for name in SPLITS[:2]}
-    return {"metric_version": METRIC_VERSION, "repeats": comparison.repeats, "seed": int(seed),
+    return {"metric_version": METRIC_VERSION, "previous_metric_version": PREVIOUS_METRIC_VERSION,
+            "repeats": comparison.repeats, "seed": int(seed),
             "resamples": RESAMPLES, "permutations": PERMUTATIONS, "stopped": bool(comparison.stopped),
             "budget": budget.to_dict(),
             "problems": {**splits, "packs": len(tasks), "after_as_of": len(everything) - len(replay),
@@ -2203,6 +2253,7 @@ __all__ = [
     "MALFORMED_CALL",
     "MARK_HELD_OUT",
     "METRIC_VERSION",
+    "PREVIOUS_METRIC_VERSION",
     "ModelClient",
     "ModelJudge",
     "ModelReply",

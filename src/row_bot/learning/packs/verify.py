@@ -16,7 +16,7 @@ import json
 import math
 import re
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -44,6 +44,13 @@ class Verdict:
     kind: str
     detail: str = ""
     backend: str = ""
+
+    @property
+    def guarded(self) -> bool:
+        """It failed only because it offered more than one answer (METRIC_VERSION 3's guard): it passed
+        under version 2."""
+
+        return not self.passed and self.detail == GUARD_DETAIL
 
 
 def normalize(text: Any) -> str:
@@ -168,6 +175,9 @@ def _check_answer(task: PackTask, answer: str) -> Verdict:
         ok = bool(found) and all(abs(value - target) <= verifier.tolerance + 1e-9 for value in found)
     if not ok and verifier.match != "contains":
         ok = _states(task, answer)
+    if ok and offers_several(answer, expected, match=verifier.match, wrong=str(task.decoy.answer or ""),
+                             prompt=task.prompt, tolerance=verifier.tolerance):
+        return Verdict(False, "answer", GUARD_DETAIL)
     return Verdict(ok, "answer", "" if ok else f"expected {expected!r}")
 
 
@@ -177,7 +187,220 @@ def _check_json(task: PackTask, answer: str) -> Verdict:
     except ValueError:
         return Verdict(False, "json_answer", "the answer is not JSON")
     ok = _same(value, task.verifier.expected)
+    if ok and _several_json(answer):
+        return Verdict(False, "json_answer", GUARD_DETAIL)
     return Verdict(ok, "json_answer", "" if ok else "the JSON differs")
+
+
+# ── Commits to one answer (METRIC_VERSION 3, O67) ───────────────────────────
+#
+# Version 2 passes a reply that states the expected value unless it gives the known wrong value first, so a
+# reply that lists several candidates could pass. From version 3 a final message that **offers two or more
+# distinct answers of the expected kind** fails. It offers them when it holds two distinct values of that kind
+# (numbers, dates, times, weekdays, months, email addresses, identifiers shaped like the expected one; for a name
+# or other phrase, the expected phrase and the task's known wrong one) and
+#
+# - two of them are joined by a word or sign of choice ("or", "either", "/", "otherwise", "alternatively",
+#   "if", "unless", "maybe", "perhaps", "possibly", "might", "could") with no sentence end between them, or
+#   given as a range ("80-90", "between 80 and 90"); or
+# - the message hedges ("not sure", "it depends", "one of", "possible values", "candidates", …).
+#
+# A phrase also offers alternatives when it is joined to other words by "or" or "/" ("Ines Duarte or Tomas
+# Berg"). Context that names another value without offering it ("52,500 EUR is approved; the draft said 50,000")
+# still commits to one answer. Numbers that are part of an identifier, a date or a time, follow a reference word
+# ("section 3", "page 2"), restate the task's own numbers or are years are not candidates. Two or more different
+# JSON answers in one message offer several.
+
+GUARD_DETAIL = "offered more than one answer"
+
+_MONTHS = ("january", "february", "march", "april", "may", "june", "july", "august", "september", "october",
+           "november", "december")
+_MONTH_WORDS = "|".join(_MONTHS + ("jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov",
+                                   "dec"))
+_WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+_ISO_DATE = re.compile(r"(?<![\d-])(\d{4})-(\d{1,2})-(\d{1,2})(?![\d-])")
+_DAY_MONTH = re.compile(rf"\b(\d{{1,2}})(?:st|nd|rd|th)?\s+({_MONTH_WORDS})\.?,?\s+(\d{{4}})\b", re.I)
+_MONTH_DAY = re.compile(rf"\b({_MONTH_WORDS})\.?\s+(\d{{1,2}})(?:st|nd|rd|th)?,?\s+(\d{{4}})\b", re.I)
+_TIME = re.compile(r"(?<![\d:])(\d{1,2}):(\d{2})(?![\d:])")
+_EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+_IDENTIFIER = re.compile(r"(?<![\w-])[A-Za-z]{1,8}[-_]?\d+(?:[-_][A-Za-z0-9]+)*(?![\w-])")
+_WEEKDAY = re.compile(r"\b(" + "|".join(_WEEKDAYS) + r")s?\b", re.I)
+_MONTH = re.compile(r"\b(" + "|".join(_MONTHS) + r")\b", re.I)
+_REFERENCE = re.compile(
+    r"(?:section|sections|page|pages|p\.|line|lines|row|rows|item|step|steps|part|chapter|clause|paragraph|para|"
+    r"no\.|number|#|version|ticket|issue|invoice|order|ref|reference|amendment|phase|floor|room|table|figure|"
+    r"appendix|rule|article|task|question|option|case|week|level|grade|tier)\s*$", re.I)
+_LIST_MARKER = re.compile(r"\s*\d+[.)]\s")
+_CHOICE = re.compile(r"\bor\b|/|\beither\b|\botherwise\b|\balternatively\b|\bif\b|\bunless\b|\bmaybe\b|\bperhaps\b|"
+                     r"\bpossibly\b|\bmight\b|\bcould\b", re.I)
+_RANGE = re.compile(r"^\s*(?:-|–|—)\s*$")
+_HEDGE = re.compile(r"\bnot sure\b|\bunsure\b|\bunclear\b|\bcan(?:'|’)?t tell\b|\bcannot tell\b|\bcan(?:'|’)?t be sure\b|"
+                    r"\bit depends\b|\bdepending on\b|\bone of\b|\bpossible (?:values|answers)\b|\bcandidates?\b|"
+                    r"\bpossibilities\b|\boptions\b", re.I)
+_BREAK = re.compile(r"[.!?;\n](?:\s|$)|\n")
+
+
+@dataclass(frozen=True)
+class _Found:
+    start: int
+    end: int
+    value: Any
+
+
+def _shape(text: str) -> str:
+    return re.sub(r"\d", "9", re.sub(r"[A-Za-z]", "A", str(text)))
+
+
+def _kind_of(expected: Any, match: str) -> str:
+    if match == "number":
+        return "number"
+    text = str(expected[0] if isinstance(expected, (list, tuple)) and expected else expected or "").strip()
+    if _ISO_DATE.fullmatch(text) or _DAY_MONTH.fullmatch(text) or _MONTH_DAY.fullmatch(text):
+        return "date"
+    if _TIME.fullmatch(text):
+        return "time"
+    if text.casefold() in _WEEKDAYS:
+        return "weekday"
+    if text.casefold() in _MONTHS:
+        return "month"
+    if _EMAIL.fullmatch(text):
+        return "email"
+    if _IDENTIFIER.fullmatch(text):
+        return "identifier"
+    return "phrase"
+
+
+def _dates(text: str) -> list[_Found]:
+    found = [_Found(m.start(), m.end(), (int(m.group(1)), int(m.group(2)), int(m.group(3))))
+             for m in _ISO_DATE.finditer(text)]
+    for pattern, order in ((_DAY_MONTH, (3, 2, 1)), (_MONTH_DAY, (3, 1, 2))):
+        for m in pattern.finditer(text):
+            month_word = m.group(order[1]).casefold()[:3]
+            month = next(index for index, name in enumerate(_MONTHS, 1) if name.startswith(month_word))
+            found.append(_Found(m.start(), m.end(), (int(m.group(order[0])), month, int(m.group(order[2])))))
+    return found
+
+
+def _masked(text: str, *patterns: re.Pattern[str]) -> str:
+    for pattern in patterns:
+        text = pattern.sub(lambda m: " " * len(m.group(0)), text)
+    return text
+
+
+def _number_values(text: str) -> list[_Found]:
+    masked = _masked(text, _EMAIL, _ISO_DATE, _DAY_MONTH, _MONTH_DAY, _TIME, _IDENTIFIER)
+    found = []
+    for m in _NUMBER.finditer(masked):
+        if _REFERENCE.search(masked[max(0, m.start() - 24):m.start()]):
+            continue
+        line_start = masked.rfind("\n", 0, m.start()) + 1
+        if not masked[line_start:m.start()].strip() and _LIST_MARKER.match(masked, m.start()):
+            continue  # a numbered list's own marker ("1. ")
+        try:
+            found.append(_Found(m.start(), m.end(), float(m.group(0).replace(",", ""))))
+        except ValueError:
+            continue
+    return found
+
+
+def _candidates(answer: str, expected: Any, kind: str, *, wrong: str, prompt: str,
+                tolerance: float) -> list[_Found]:
+    """Every value of the expected kind the message gives, in order (values normalized)."""
+
+    if kind == "number":
+        target = float(expected)
+        asked = [item.value for item in _number_values(prompt)]
+        found = []
+        for item in _number_values(answer):
+            same = abs(item.value - target) <= tolerance + 1e-9
+            if not same and any(abs(item.value - value) <= 1e-9 for value in asked):
+                continue  # restates the task's own numbers
+            if not same and item.value.is_integer() and 1900 <= item.value <= 2100 and not 1900 <= target <= 2100:
+                continue  # a year
+            found.append(_Found(item.start, item.end, target if same else item.value))
+        return found
+    if kind == "date":
+        return _dates(answer)
+    if kind == "time":
+        return [_Found(m.start(), m.end(), (int(m.group(1)), int(m.group(2)))) for m in _TIME.finditer(answer)]
+    if kind == "weekday":
+        return [_Found(m.start(), m.end(), m.group(1).casefold()) for m in _WEEKDAY.finditer(answer)]
+    if kind == "month":
+        masked = _masked(answer, _DAY_MONTH, _MONTH_DAY)
+        return [_Found(m.start(), m.end(), m.group(1).casefold()) for m in _MONTH.finditer(masked)]
+    if kind == "email":
+        return [_Found(m.start(), m.end(), m.group(0).casefold()) for m in _EMAIL.finditer(answer)]
+    if kind == "identifier":
+        shape = _shape(str(expected[0] if isinstance(expected, (list, tuple)) else expected).upper())
+        return [_Found(m.start(), m.end(), m.group(0).upper()) for m in _IDENTIFIER.finditer(answer)
+                if _shape(m.group(0).upper()) == shape]
+    values = [str(item) for item in (expected if isinstance(expected, (list, tuple)) else [expected])]
+    phrases = [(value, "expected") for value in values]
+    if wrong and normalize(wrong) not in {normalize(item) for item in values}:
+        phrases.append((wrong, "wrong"))
+    found = []
+    for phrase, label in phrases:
+        target = normalize(phrase)
+        if not target:
+            continue
+        for m in re.finditer(rf"(?<![\w@]){re.escape(target)}(?![\w@-])", answer.casefold()):
+            found.append(_Found(m.start(), m.end(), label))
+    return sorted(found, key=lambda item: item.start)
+
+
+def _joined_phrase(answer: str, found: Sequence[_Found]) -> bool:
+    """The expected phrase is joined to other words by "or" or "/" ("Ines Duarte or Tomas Berg")."""
+
+    text = answer.casefold()
+    for item in found:
+        if item.value != "expected":
+            continue
+        after = text[item.end:item.end + 16]
+        before = text[max(0, item.start - 16):item.start]
+        if re.match(r"\s*,?\s*(?:or\b|/)\s*[\w\"'“(]", after) or re.search(r"(?:\bor|/|\beither)\s*$", before):
+            return True
+    return False
+
+
+def offers_several(answer: str, expected: Any, *, match: str = "exact", wrong: str = "", prompt: str = "",
+                   tolerance: float = 0.0, hedges: bool = True) -> bool:
+    """Whether a final message offers two or more distinct answers of the expected kind (METRIC_VERSION 3).
+    ``hedges=False`` reads only values joined as a choice or a range (a chat reply's own words, where "one of"
+    or "options" says nothing about the answer)."""
+
+    text = str(answer or "")
+    kind = _kind_of(expected, match)
+    found = _candidates(text, expected, kind, wrong=wrong, prompt=prompt, tolerance=tolerance)
+    if kind == "phrase" and _joined_phrase(text, found):
+        return True
+    if len({item.value for item in found}) < 2:
+        return False
+    if hedges and _HEDGE.search(text):
+        return True
+    ordered = sorted(found, key=lambda item: item.start)
+    for first, second in zip(ordered, ordered[1:]):
+        if first.value == second.value:
+            continue
+        between = text[first.end:second.start]
+        if len(between) > 80 or _BREAK.search(between):
+            continue
+        if _CHOICE.search(between) or _RANGE.match(between):
+            return True
+        if re.fullmatch(r"\s*and\s*", between, re.I) and re.search(r"\bbetween\s*$", text[:first.start], re.I):
+            return True
+    return False
+
+
+def _several_json(answer: str) -> bool:
+    """Two or more different JSON answers in fenced blocks."""
+
+    values = set()
+    for block in re.findall(r"```(?:json)?\s*(.*?)```", str(answer or ""), re.S):
+        try:
+            values.add(json.dumps(json.loads(block.strip()), sort_keys=True))
+        except ValueError:
+            continue
+    return len(values) > 1
 
 
 def _check_file(task: PackTask, files: Mapping[str, str]) -> Verdict:
@@ -299,4 +522,4 @@ def solve(task: PackTask, solution: Solution) -> Outcome:
     return Outcome(solution.answer, files, apps.state())
 
 
-__all__ = ["Outcome", "Verdict", "normalize", "numbers_in", "parse_json", "solve", "verify", "workspace_files"]
+__all__ = ["GUARD_DETAIL", "Outcome", "Verdict", "normalize", "offers_several", "numbers_in", "parse_json", "solve", "verify", "workspace_files"]
