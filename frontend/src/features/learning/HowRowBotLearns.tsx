@@ -65,8 +65,10 @@ export function MethodSummary({
           {method.since ? ` · since ${day(method.since)}` : ''}
         </p>
         <p className="learning-muted">
-          Kept {method.kept.toLocaleString()} of {plural(method.tried, 'idea')}{' '}
-          this month · {tokenWords(method.tokens)} tokens
+          {method.tried
+            ? `Kept ${method.kept.toLocaleString()} of ${plural(method.tried, 'idea')} this month`
+            : 'No ideas tested yet this month'}{' '}
+          · {tokenWords(method.tokens)} tokens
         </p>
       </div>
       <Button
@@ -129,11 +131,7 @@ function armLabel(arm: LearningMethodArm, trial: LearningMethodTrial): string {
 }
 
 /** The newest trial: each method's ideas kept per 1M tokens, with the denominators (designs §6). */
-function TrackRecord({
-  method,
-}: {
-  method: LearningMethod;
-}) {
+function TrackRecord({ method }: { method: LearningMethod }) {
   const trial = (method.trials ?? []).find((item) => item.outcome !== 'final');
   const next = method.next_trial;
   if (!trial)
@@ -165,8 +163,8 @@ function TrackRecord({
                 {perMillion(arm.per_million)}
               </td>
               <td data-label="Better on new problems">
-                {arm.better.toLocaleString()} of{' '}
-                {plural(arm.accepted, 'idea')} · {tokenWords(arm.tokens)} tokens
+                {arm.better.toLocaleString()} of {plural(arm.accepted, 'idea')}{' '}
+                · {tokenWords(arm.tokens)} tokens
               </td>
             </tr>
           ))}

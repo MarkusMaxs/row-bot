@@ -1,11 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import {
-  BookOpen,
-  Inbox,
-  MoreHorizontal,
-  Moon,
-  Search,
-} from 'lucide-react';
+import { BookOpen, Inbox, MoreHorizontal, Moon, Search } from 'lucide-react';
 import { clientError } from '../../api/errors';
 import type {
   LearningHardware,

@@ -40,10 +40,14 @@ it('Overview names the learning method and its month in counts, with Details', a
   ).toBeVisible();
 
   await userEvent.click(
-    within(section).getByRole('button', { name: 'How Row-Bot learns: details' }),
+    within(section).getByRole('button', {
+      name: 'How Row-Bot learns: details',
+    }),
   );
 
-  const sheet = await screen.findByRole('dialog', { name: 'How Row-Bot learns' });
+  const sheet = await screen.findByRole('dialog', {
+    name: 'How Row-Bot learns',
+  });
   expect(within(sheet).getByText('Learning method v3')).toBeVisible();
   expect(
     within(sheet).getByText(/^Looks first at mistakes you corrected/),
@@ -55,7 +59,9 @@ it('the track record shows each method on the same new problems with its denomin
   await userEvent.click(
     screen.getByRole('button', { name: 'How Row-Bot learns: details' }),
   );
-  const sheet = await screen.findByRole('dialog', { name: 'How Row-Bot learns' });
+  const sheet = await screen.findByRole('dialog', {
+    name: 'How Row-Bot learns',
+  });
 
   const table = within(sheet).getByRole('table', {
     name: 'Ideas kept by each method on the same new problems',
@@ -72,12 +78,16 @@ it('the track record shows each method on the same new problems with its denomin
     ),
   ).toBeVisible();
   const history = within(sheet).getByRole('region', { name: 'History' });
-  expect(within(history).getByText('v3: tries a way of working first')).toBeVisible();
+  expect(
+    within(history).getByText('v3: tries a way of working first'),
+  ).toBeVisible();
   expect(
     within(history).getByText('v2 tried and dropped: no better than v1'),
   ).toBeVisible();
   expect(within(history).getByText('v1: the first method')).toBeVisible();
-  const never = within(sheet).getByRole('region', { name: 'What it can never change' });
+  const never = within(sheet).getByRole('region', {
+    name: 'What it can never change',
+  });
   for (const item of [
     'Your goals and limits',
     'Approvals, tools and permissions',
@@ -128,7 +138,9 @@ it('a method tried and not better is one quiet Overnight line', () => {
       'Tried a new way of learning; it wasn’t better. Kept method v3.',
     ),
   ).toBeVisible();
-  expect(screen.queryByRole('button', { name: /Undo learning method/ })).toBeNull();
+  expect(
+    screen.queryByRole('button', { name: /Undo learning method/ }),
+  ).toBeNull();
 });
 
 it('before any comparison it says when one runs, in counts', async () => {
@@ -148,7 +160,9 @@ it('before any comparison it says when one runs, in counts', async () => {
   await userEvent.click(
     screen.getByRole('button', { name: 'How Row-Bot learns: details' }),
   );
-  const sheet = await screen.findByRole('dialog', { name: 'How Row-Bot learns' });
+  const sheet = await screen.findByRole('dialog', {
+    name: 'How Row-Bot learns',
+  });
 
   expect(
     within(sheet).getByText(
