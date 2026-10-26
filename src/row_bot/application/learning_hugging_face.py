@@ -34,9 +34,7 @@ def _trainer() -> Any:
 
 
 def _sign_in() -> Any:
-    from row_bot.learning.remote import auth
-
-    return auth.get()
+    return _trainer().sign_in()
 
 
 def available() -> bool:

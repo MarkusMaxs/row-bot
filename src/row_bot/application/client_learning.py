@@ -512,7 +512,9 @@ def _personal_model(settings: learning.LearningSettings) -> dict[str, Any]:
         "runtimes": _runtimes(),
         "examples": _examples(settings, engine == "installed"),
         "version": _version(),
-        "hugging_face": _hugging_face.view(settings) if settings.enabled else None,
+        # Read only once the person chose Hugging Face: its quote reads Hugging Face's public price list (cached).
+        "hugging_face": _hugging_face.view(settings) if settings.enabled and settings.train_where == "hugging_face"
+        else None,
         "room": _room_view(settings),
         "stronger_model": _stronger_view(settings),
         **_use_parts(),

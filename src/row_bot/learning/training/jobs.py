@@ -86,7 +86,8 @@ TERMINAL = frozenset(state for state, moves in TRANSITIONS.items() if not moves)
 # A worker may be live in these (or was, before a crash).
 LIVE = frozenset({"preparing", "running", "pausing"})
 # The job the Personal model view follows (newer ones first): anything not settled.
-CURRENT = frozenset({"planned", "waiting", "preparing", "running", "pausing", "paused", "evaluating", "failed"})
+CURRENT = frozenset({"planned", "waiting", "preparing", "running", "pausing", "paused", "evaluating", "failed",
+                     "unknown_remote"})
 # Pauses that wait for the person (Continue or Discard), not for a free computer.
 HELD = frozenset({"you", "app_closed", "worker_stopped"})
 

@@ -405,7 +405,16 @@ def test_only_delete_data_ever_deletes_learning_data(api, no_channels, chats, mo
     fields = {"version": 1, "kind": "document_lookups", "job_id": "job_unknown", "runtime": "ollama",
               "folder": "C:/nowhere", "item_id": "item_unknown", "model": "qwen3.5-9b", "download": "not_now",
               "conversation_id": "chat-b", "message_id": "run-msg-3", "signal_id": "sig_unknown",
-              "category": "wrong_answer", "change_id": "proposal_unknown", "text": "Use the ID"}
+              "category": "wrong_answer", "change_id": "proposal_unknown", "text": "Use the ID", "cap_usd": 20,
+              "quote_cost_cents": 100}
+    # Hugging Face (C1) is a fake here: its commands reach their own checks, never the network.
+    from row_bot.learning.remote import training as remote_training
+    from tests.fixtures.hugging_face import FakeHub, FakeSignIn
+
+    hub = FakeHub()
+    monkeypatch.setattr(remote_training, "_trainer", remote_training.RemoteTrainer(
+        data, hub=hub, sign_in=FakeSignIn(signed_in=False), card_mib=lambda: 32_607, start_threads=False,
+        flavors=lambda: []))
     extra = {"turn_on": {"setup": SETUP},
              "save_advanced": {"advanced": {"rank": 16, "learning_rate": 0.0002, "epochs": 3, "context": 16384}}}
 
