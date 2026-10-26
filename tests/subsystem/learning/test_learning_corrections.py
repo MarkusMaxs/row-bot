@@ -18,7 +18,7 @@ from row_bot.learning.evaluation import Arm
 from row_bot.learning.store import LearningStore
 from row_bot.learning.training import dataset, recipes
 from tests.fixtures.learning import CapturedWork, signal
-from tests.fixtures.learning_eval import ScriptedClient
+from tests.fixtures.learning_eval import ScriptedClient, calls_tool, says
 
 pytestmark = [pytest.mark.subsystem]
 
@@ -207,7 +207,8 @@ def test_replay_tests_a_held_out_correction_against_the_redos_move_and_says_only
         assert arm.cases == [] and result.clusters == {}  # aggregates only (E10)
 
 
-def test_a_teach_with_no_redo_waits_for_one(work, learning_on, clock):
+def test_a_teach_with_no_redo_and_no_answer_is_not_held_out(work, learning_on, clock):
+    # Amendment A3: with no reference it could be neither trained on nor tested, so it isn't held out.
     store = LearningStore(learning_on, clock=clock)
     answers = [work.turn(f"chat-{index}", f"Total {index}?", f"It's {index}.", tool=False, person_message=True)[-1]
                for index in range(2)]
@@ -218,8 +219,35 @@ def test_a_teach_with_no_redo_waits_for_one(work, learning_on, clock):
 
     report = evaluation.refresh_audit(store=store, asked_by="nightly")
 
-    assert report["corrections_added"] == 0 and report["corrections_waiting"] == 1
-    assert answers[1] in store.held_out_ids()  # still held out: nothing trains or drafts on it
+    assert report["corrections_added"] == 0 and report["corrections_waiting"] == 0
+    assert not set(answers) & store.held_out_ids()
+    assert holdout.waiting_for_vault(store) == set()
+
+
+def test_a_teach_with_its_answer_and_no_redo_is_a_hidden_problem_checked_against_that_answer(work, learning_on,
+                                                                                           clock):
+    # Teach's "What should it have done?" (L3b, O125): the person's answer is the reference when they don't
+    # redo the turn, so a held-out Teach can be one of H2's hidden corrected problems.
+    store = LearningStore(learning_on, clock=clock)
+    answers = [work.turn(f"chat-{index}", f"Total {index}?", f"It's {index}.", tool=False, person_message=True)[-1]
+               for index in range(2)]
+    for number, answer in enumerate(answers):
+        store.put(signal(f"chat-{number}", f"sig_{number}", decision_id=answer, created_at=clock.now + number,
+                         note="Wrong total", answer="It should have said 52,500 EUR."))
+    clock.advance(HOUR)
+
+    report = evaluation.refresh_audit(store=store, asked_by="nightly")
+
+    assert report["corrections_added"] == 1 and report["corrections_waiting"] == 0
+    for reply, passed in (("The total is 52,500 EUR.", 1), ("The total is 50,000 EUR.", 0)):
+        result = evaluation.audit_check([Arm("main")], asked_by="test", client=ScriptedClient(says(reply)), packs=(),
+                                        store=store, save=False, repeats=1, corrected=True)
+        [arm] = result.arms
+        assert (arm.passed, arm.total) == (passed, 1) and arm.cases == []
+    # A reply that calls a tool first can't be followed by replay: no check decides it (outside the count).
+    result = evaluation.audit_check([Arm("main")], asked_by="test", client=ScriptedClient(calls_tool("read_file", path="a")),
+                                    packs=(), store=store, save=False, repeats=1, corrected=True)
+    assert result.arms[0].total == 0
 
 
 def test_a_vault_task_corrected_later_retires_or_becomes_a_correction(work, learning_on, clock, monkeypatch):

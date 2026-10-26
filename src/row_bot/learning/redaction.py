@@ -15,6 +15,10 @@ codebase's own rules:
   headers) and every environment or header value (as
   ``mcp_client.logging.mask_mapping`` treats them) is dropped.
 
+Image data is never scanned or rewritten (capture moves pictures out of messages
+before redaction; a ``data:image/…`` URI left in text is skipped), so a picture
+is never corrupted or marks its record ``redacted``.
+
 Every function says whether it removed anything, so the record can be marked
 ``redacted``. Nothing here logs content.
 """
@@ -55,6 +59,8 @@ _QUOTED_SECRETS = (
     re.compile(r'(?i)("[^"\\\n]{0,64}?' + _CREDENTIAL_NAME + r'[^"\\\n]{0,64}?"\s*:\s*)"(?:[^"\\\n]|\\.)+"'),
     re.compile(r"(?i)('[^'\\\n]{0,64}?" + _CREDENTIAL_NAME + r"[^'\\\n]{0,64}?'\s*:\s*)'(?:[^'\\\n]|\\.)+'"),
 )
+# A picture's data inside text: left exactly as it is.
+_IMAGE_DATA = re.compile(r"data:image/[A-Za-z0-9.+-]{1,64};base64,[A-Za-z0-9+/=]+")
 # Argument names whose every value is a secret (environment variables, headers).
 _SECRET_CONTAINERS = frozenset({"env", "headers", "cookies", "cookie"})
 
@@ -119,8 +125,26 @@ def forget_known_secrets() -> None:
 
 
 def redact_text(text: str) -> tuple[str, bool]:
-    """``text`` without secrets, and whether anything was removed."""
+    """``text`` without secrets, and whether anything was removed. Image data (a ``data:image/…;base64,``
+    URI) is never scanned or rewritten: it isn't text, and a match inside it would only corrupt the picture."""
 
+    if not text:
+        return text, False
+    if "base64," not in text:
+        return _redact_plain(text)
+    parts: list[str] = []
+    changed = False
+    last = 0
+    for match in _IMAGE_DATA.finditer(text):
+        value, found = _redact_plain(text[last:match.start()])
+        parts += [value, match.group(0)]
+        changed = changed or found
+        last = match.end()
+    value, found = _redact_plain(text[last:])
+    return "".join([*parts, value]), changed or found
+
+
+def _redact_plain(text: str) -> tuple[str, bool]:
     if not text:
         return text, False
     from row_bot.evolution import redact_secrets

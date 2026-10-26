@@ -28,6 +28,7 @@ from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
 
+from row_bot import learning as gate
 from row_bot.learning import kinds
 
 logger = logging.getLogger(__name__)
@@ -158,6 +159,7 @@ def _write(state: UseState, root: Path | None = None) -> UseState:
     from row_bot.learning import atomic
 
     atomic.write_text(use_path(root), json.dumps(state.to_dict(), indent=1, sort_keys=True))
+    gate.changed()
     return state
 
 

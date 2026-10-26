@@ -531,8 +531,12 @@ class EvalWorker:
                 argv += ["--site", item]
             for item in paths:
                 argv += ["--path", item]
+        # Ways of working reach a turn through Learning's preview gate (L3b): an arm that carries them
+        # needs it in the worker too (its own throwaway profile has nothing else of Learning's).
+        carries = any(arm.get("ways") for arm in self.spec.get("arms") or () if isinstance(arm, Mapping))
+        extra = {"ROW_BOT_LEARNING_PREVIEW": "1"} if carries else None
         kwargs: dict[str, Any] = {
-            "cwd": str(folder / "work"), "env": worker_environment(data), "shell": False,
+            "cwd": str(folder / "work"), "env": worker_environment(data, extra=extra), "shell": False,
             "stdin": subprocess.PIPE, "stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "bufsize": 0,
         }
         if os.name == "nt":
@@ -833,6 +837,46 @@ def _register_fake_apps() -> list[str]:
     return list(APP_TOOLS.values())
 
 
+def seed_arm(arm: Mapping[str, Any]) -> int:
+    """Before one task's turn (L3b): the arm's lessons as the memories recall finds (``self_knowledge``, as
+    a lesson in use is) and its ways of working as the current overlay, in this throwaway profile.
+    Returns how many lessons were saved. ``_forget_task`` and :func:`unseed` take them away again."""
+
+    lessons = [item for item in arm.get("lessons") or () if isinstance(item, (list, tuple)) and len(item) == 2]
+    ways = [item for item in arm.get("ways") or () if isinstance(item, (list, tuple)) and len(item) == 2]
+    saved = 0
+    if lessons:
+        from row_bot import knowledge_graph
+
+        for title, text in lessons:
+            knowledge_graph.save_entity("self_knowledge", str(title)[:200] or "Lesson", str(text)[:2000],
+                                        source="learning")
+            saved += 1
+    if ways:
+        from row_bot.learning import behaviour
+
+        target = behaviour.path()
+        entries = [{"change_id": f"arm-{index}", "slot": str(slot), "text": " ".join(str(text).split())[:4000]}
+                   for index, (slot, text) in enumerate(ways)]
+        target.write_text(json.dumps({"format": behaviour.FORMAT, "schema_version": behaviour.SCHEMA_VERSION,
+                                      "active": 1, "history": [],
+                                      "versions": [{"number": 1, "entries": entries, "created_at": 0.0,
+                                                    "reason": "use", "change_id": ""}]}), encoding="utf-8")
+    return saved
+
+
+def unseed() -> None:
+    """After a task: no ways of working stay for the next task (or arm)."""
+
+    try:
+        from row_bot import learning
+
+        (learning.data_dir() / learning.WAYS_OF_WORKING_FILE).unlink(missing_ok=True)
+    except Exception as error:  # noqa: BLE001
+        logging.getLogger(__name__).info("An evaluation task's ways of working weren't removed (%s)",
+                                         type(error).__name__)
+
+
 def _forget_task(thread_id: str) -> None:
     """What one task's turn left in the worker's profile goes before the next task, so no task
     (or arm) finds another's conversation or memories (L2v): its thread, and every memory (the
@@ -1121,6 +1165,7 @@ def _run_task(message: Mapping[str, Any], spec: Mapping[str, Any], tools: list[s
     models.adopt_saved_default(str(arm["model_ref"]))
     names = [*tools, *(APP_TOOLS[app] for app in task.tools if app in APP_TOOLS)]
     max_calls = int(budget.get("max_steps") or task.max_steps) * TOOL_CALL_FACTOR
+    seed_arm(arm)
     gate.reset(int(budget.get("task_tokens") or 150_000), budget.get("cloud_cap"))
     _, baseline = _ledger_rows(0)
     thread_id = f"eval-{uuid.uuid4().hex[:16]}"
@@ -1156,6 +1201,7 @@ def _run_task(message: Mapping[str, Any], spec: Mapping[str, Any], tools: list[s
         # The task's usage rows first: deleting its conversation takes them with it.
         rows, _ = _ledger_rows(baseline)
         _forget_task(thread_id)
+        unseed()
     tokens = sum(row["input"] + row["output"] for row in rows)
     local = sum(row["input"] + row["output"] for row in rows if is_local_provider(row["provider"]))
     if gate.estimated and tokens < gate.spent and is_local_provider(_provider_of(str(arm["model_ref"]))):

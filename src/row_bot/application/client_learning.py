@@ -35,13 +35,28 @@ _ACTIONS = frozenset({
     "remove_engine", "delete_starting_model", "make_ready", "choose_runtime",
     "compare_version", "stop_compare", "use_version", "keep_version", "keep_not_now", "undo_use",
     "export_version", "delete_version", "save_advanced", "reset_advanced", "retrain_without", "dismiss",
-    "review_version", "use_smaller_model",
+    "review_version", "use_smaller_model", "change_starting_model",
+    "test_change", "use_change", "undo_change", "not_now_change", "dont_suggest_change", "edit_change",
+    "test_lesson", "delete_lesson",
 })
+# Changes Learning drafted (L3b): test, use, undo, not now, don't suggest again, edit; a lesson Row-Bot saved
+# for itself tested, or deleted. Every one is the person's own choice (D24).
+_CHANGE_ACTIONS = frozenset({"test_change", "use_change", "undo_change", "not_now_change", "dont_suggest_change",
+                             "edit_change", "test_lesson", "delete_lesson"})
+_CHANGE_ERRORS = {
+    "not_found": "learning_change_changed", "not_ready": "learning_change_changed",
+    "edited": "learning_change_changed", "not_in_use": "learning_change_changed",
+    "e9": "learning_change_refused", "never_automatic": "learning_change_refused",
+    "empty": "invalid_learning_command", "too_long": "invalid_learning_command",
+    "unknown_slot": "invalid_learning_command", "slot_full": "learning_change_refused",
+    "apply_failed": "learning_change_changed", "running": "learning_change_busy",
+}
 # Using the personal model (L2c2): its comparison, trial, keep and undo, Export…, Delete version,
 # Advanced and Retrain without it. Every one of them is the person's own choice (D24).
 _USE_ACTIONS = frozenset({"compare_version", "stop_compare", "use_version", "keep_version", "keep_not_now",
                           "undo_use", "export_version", "delete_version", "save_advanced", "reset_advanced",
-                          "retrain_without", "dismiss", "review_version", "use_smaller_model"})
+                          "retrain_without", "dismiss", "review_version", "use_smaller_model",
+                          "change_starting_model"})
 _KIND_ACTIONS = frozenset({"use_version", "keep_version", "keep_not_now", "undo_use"})
 _VERSION_NUMBER_ACTIONS = frozenset({"compare_version", "use_version", "export_version", "delete_version",
                                      "retrain_without", "review_version"})
@@ -96,6 +111,7 @@ _NOT_USED = {
     "unknown_source": "Learning can’t tell who this chat is with, so it isn’t used.",
     "my_chats_off": "Learning from your chats is off in Settings › Learning.",
     "workflows_and_goals_off": "Learning from workflows and goals is off in Settings › Learning.",
+    "incognito_chat": "Learning doesn’t use chats that are or were incognito.",
 }
 _LESSON_LIMIT = 200
 
@@ -224,8 +240,21 @@ def _night() -> dict[str, Any] | None:
         return None
 
 
-def _overnight(night: dict[str, Any] | None, today: date | None = None) -> dict[str, Any] | None:
-    """Last night's look (UX §3 Overnight): only a recent one, in counts."""
+def _tests() -> dict[str, Any] | None:
+    if not learning.store_exists():
+        return None
+    try:
+        from row_bot.learning import changes
+
+        return changes.last_tests(_store())
+    except Exception:
+        logger.debug("Learning could not read last night's tests", exc_info=True)
+        return None
+
+
+def _overnight(night: dict[str, Any] | None, today: date | None = None,
+               tests: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """Last night's look and its tests (UX §3 Overnight): only a recent one, in counts."""
 
     if not night or night.get("state") not in _OVERNIGHT_STATES:
         return None
@@ -235,49 +264,129 @@ def _overnight(night: dict[str, Any] | None, today: date | None = None) -> dict[
         return None
     if ((today or date.today()) - when).days > 1:
         return None
+    same = tests if tests and tests.get("night") == night.get("night") else {}
+
+    def count(name: str) -> int:
+        return max(0, int(same.get(name) or 0))
+
     return {"night": when.isoformat(), "state": night["state"], "found": max(0, int(night.get("found") or 0)),
             "drafted": max(0, int(night.get("drafted") or 0)), "left_out": max(0, int(night.get("refused") or 0)),
             "needs_examples": max(0, int(night.get("needs_examples") or 0)),
-            "looks_like_bug": max(0, int(night.get("bugs") or 0))}
+            "looks_like_bug": max(0, int(night.get("bugs") or 0)),
+            "tested": count("tested"), "ready": count("ready"), "not_better": count("not_better"),
+            "used": count("used"),
+            "tests_state": same.get("state") if same.get("state") in ("stopped", "limit", "claude_plan", "failed")
+            else None}
+
+
+def _testing_now() -> dict[str, Any] | None:
+    """The change being tested now ("Testing 'Pick documents by ID' on 24 tasks · 9 done"), else None."""
+
+    if not learning.store_exists():
+        return None
+    try:
+        from row_bot.learning import changes
+
+        found = changes.progress()
+    except Exception:
+        logger.debug("Learning could not read its test's progress", exc_info=True)
+        return None
+    if not found:
+        return None
+    return {"change_id": _text(found.get("change_id"), 128), "title": _text(found.get("title"), 200),
+            "done": max(0, int(found.get("done") or 0)), "total": max(0, int(found.get("total") or 0))}
 
 
 _CHANGE_OF = {"lesson": "lesson", "behaviour": "way_of_working", "create_skill": "skill", "patch_skill": "skill"}
+_CHANGE_VERDICTS = frozenset({"better", "no_difference", "worse", "worse_elsewhere"})
 _KINDS = ("document_lookups", "structured_transforms", "small_coding", "tool_workflows", "other")
 _WHY = ("chats", "corrections", "stops", "retries", "denials", "failures", "imported")
 
 
-def _changes() -> list[dict[str, Any]]:
-    """Learning's drafted changes waiting to be tested (UX §7), newest first."""
+def _test_view(meta: dict[str, Any]) -> dict[str, Any] | None:
+    test = meta.get("test")
+    if not isinstance(test, dict) or test.get("verdict") not in _CHANGE_VERDICTS:
+        return None
+    rows = [{"label": _text(row.get("label"), 120), "total": max(0, int(row.get("total") or 0)),
+             "without": max(0, int(row.get("without") or 0)), "with_change": max(0, int(row.get("with") or 0))}
+            for row in (test.get("rows") or ())[:4] if isinstance(row, dict)]
+    own = test.get("own") if isinstance(test.get("own"), dict) else {}
 
-    if not learning.store_exists():
-        return []
+    def points(value: Any) -> float | None:
+        return None if value is None else round(float(value) * 100, 1)
+
+    return {"verdict": test["verdict"], "rows": rows, "note": _text(test.get("note"), 300),
+            "small": bool(test.get("small")), "tested_at": _iso(test.get("tested_at")),
+            "difference": points(own.get("difference")), "low": points(own.get("low")),
+            "high": points(own.get("high"))}
+
+
+def _diff_of(proposal: dict[str, Any]) -> str:
+    """A skill edit's before/after (``patch_skill``), read when the change is shown."""
+
+    if proposal.get("proposal_type") != "patch_skill":
+        return ""
+    payload = proposal.get("payload") or {}
     try:
-        from row_bot.learning import diagnosis
+        from row_bot import evolution
 
-        proposals = diagnosis.drafts(_store())
+        found = evolution.build_skill_diff_preview(str(payload.get("target_skill") or ""),
+                                                   str(payload.get("updated_instructions") or ""))
     except Exception:
-        logger.debug("Learning could not read its drafted changes", exc_info=True)
+        logger.debug("Learning couldn't show a skill edit's diff", exc_info=True)
+        return ""
+    return _text(found.get("diff"), 6000)
+
+
+def _changes() -> list[dict[str, Any]]:
+    """Learning's changes (UX §7): waiting to be tested, testing, ready, edited, in use and not used,
+    newest first. Not-used changes older than 30 days drop off the list."""
+
+    try:
+        from row_bot.learning import behaviour, changes, diagnosis
+
+        store = _store() if learning.store_exists() else None
+        gone = diagnosis._gone_attempts(store) if store is not None else set()  # noqa: SLF001 - its own module's rule
+        proposals = [item for item in changes.learning_changes()
+                     if changes.block(item).get("attempt_id") not in gone or changes.view_state(item) == "in_use"]
+    except Exception:
+        logger.debug("Learning could not read its changes", exc_info=True)
         return []
     found = []
+    month_ago = (datetime.now() - timedelta(days=30)).isoformat()
     for proposal in proposals:
-        payload = proposal.get("payload") or {}
-        meta = payload.get("learning") or {}
         change = _CHANGE_OF.get(str(proposal.get("proposal_type")))
-        if change is None or proposal.get("status") != "draft" or meta.get("state") != "waiting_to_test":
+        if change is None:
             continue
+        state = changes.view_state(proposal)
+        if state == "not_used" and str(proposal.get("updated_at") or "") < month_ago:
+            continue
+        payload = proposal.get("payload") or {}
+        meta = changes.block(proposal)
         why = meta.get("why") if isinstance(meta.get("why"), dict) else {}
         text = payload.get("text") or payload.get("description") or payload.get("updated_instructions") or ""
         kind = str(meta.get("kind_of_work") or "other")
+        reason = str(meta.get("state") or "")
         found.append({
             "id": _text(proposal.get("id"), 128),
             "change": change,
             "title": _text(proposal.get("title"), 200),
             "kind": kind if kind in _KINDS else "other",
-            "state": "waiting_to_test",
+            "state": state,
             "created_at": _text(proposal.get("created_at"), 64),
             "text": _text(text, 1200),
             "why": {key: max(0, int(why.get(key) or 0)) for key in _WHY},
             "never_automatic": bool(meta.get("never_automatic")),
+            "setting": behaviour.describe(str(payload.get("slot") or "")) if change == "way_of_working" else "",
+            "diff": _diff_of(proposal),
+            "test": _test_view(meta),
+            "used_by": meta.get("used_by") if state == "in_use" and meta.get("used_by") in ("person", "automatic")
+            else None,
+            "used_at": _iso(meta.get("used_at")) if state == "in_use" else None,
+            "not_used": ({"turned_down": "turned_down", "undone": "undone"}.get(reason, "not_better")
+                         if state == "not_used" else None),
+            "snoozed": bool(meta.get("snoozed_at")) and state == "ready",
+            "agent_saved": meta.get("origin") == "agent_saved",
         })
     return found[:50]
 
@@ -285,7 +394,13 @@ def _changes() -> list[dict[str, Any]]:
 def _kinds_learning(changes: list[dict[str, Any]]) -> list[dict[str, str]]:
     """Kinds of work with a change waiting to be tested, or that need more examples (UX §3)."""
 
-    states: dict[str, str] = {item["kind"]: "testing_change" for item in changes}
+    states: dict[str, str] = {}
+    rank = ("change_in_use", "change_ready", "testing_change")
+    for item in changes:
+        state = {"in_use": "change_in_use", "ready": "change_ready", "waiting_to_test": "testing_change",
+                 "testing": "testing_change", "edited": "testing_change"}.get(item["state"])
+        if state and (item["kind"] not in states or rank.index(state) < rank.index(states[item["kind"]])):
+            states[item["kind"]] = state
     if learning.store_exists():
         try:
             from row_bot.learning.contracts import Attempt
@@ -390,6 +505,7 @@ def _personal_model(settings: learning.LearningSettings) -> dict[str, Any]:
         "examples": _examples(settings, engine == "installed"),
         "version": _version(),
         "room": _room_view(settings),
+        "stronger_model": _stronger_view(settings),
         **_use_parts(),
     }
 
@@ -442,6 +558,90 @@ def _use_smaller_model(model_id: str) -> str:
     name = hardware.STARTING_MODELS[model_id].name
     words = _answer_download("download")
     return f"Switched to {name}. {words}"
+
+
+#: The order of the starting models, smallest first (a later one is stronger).
+_STRENGTH = {model_id: index for index, model_id in enumerate(learning.STARTING_MODELS)}
+STRONGER_ITEM = "stronger_model:"
+
+
+def _stronger_view(settings: learning.LearningSettings) -> dict[str, Any] | None:
+    """O124: a build that certifies a stronger starting model this card trains (what setup would recommend
+    now) offers it once in the Personal model view, until the person switches or dismisses it."""
+
+    from row_bot.learning import versions
+    from row_bot.learning.training import hardware
+
+    try:
+        check = hardware.peek()
+        offered = check.starting_models if check is not None and check.can_train else ()
+        if not offered or settings.train_where != "this_computer":
+            return None
+        best = offered[0]
+        if _STRENGTH.get(best.id, -1) <= _STRENGTH.get(settings.starting_model, -1):
+            return None
+        if STRONGER_ITEM + best.id in versions.dismissed():
+            return None
+        return _model_view(best)
+    except Exception:
+        logger.debug("Learning could not tell whether a stronger starting model fits", exc_info=True)
+        return None
+
+
+def _change_busy() -> bool:
+    """Something is in flight for the starting model in use: training (or a run with steps that may go on),
+    a version being made from it, or its download."""
+
+    from row_bot.learning import runner as runner_module
+    from row_bot.learning.training import releases
+
+    if _training_runs():
+        return True
+    view = _downloads_view()
+    if view is not None and view.state == "downloading":
+        return True
+    if not learning.store_exists():
+        return False
+    job = runner_module.get().supervisor.jobs.current()
+    if job is None or job.state == "failed":
+        return False
+    if job.state in ("planned", "waiting"):
+        return bool(job.steps_done)
+    if job.state != "evaluating" or not job.version:
+        return True
+    state = releases.read_state(releases.version_dir(int(job.version)))
+    return state is None or state.phase in (releases.EXPORTING, releases.MAKING_READY)
+
+
+def _change_starting_model(model_id: str) -> str:
+    """O124: the person chose another certified starting model in Settings (after the client's ask, with
+    its download size and the free space): it becomes the starting model, a run planned for the old one that
+    never trained a step is set aside, and its download starts. Versions already made stay as they are (each
+    is compared with its own starting model); the old model's files stay until the person deletes them."""
+
+    from row_bot.learning import runner as runner_module
+    from row_bot.learning import versions
+    from row_bot.learning.training import hardware
+
+    settings = learning.read_settings()
+    check = hardware.peek()
+    offered = {model.id for model in check.starting_models} if check is not None and check.can_train else set()
+    if model_id not in offered:
+        raise ClientPlatformError("learning_training_changed")
+    name = hardware.STARTING_MODELS[model_id].name
+    if model_id == settings.starting_model:
+        return f"{name} is already the starting model."
+    if _change_busy():
+        raise ClientPlatformError("learning_download_busy")
+    if learning.store_exists():
+        jobs = runner_module.get().supervisor.jobs
+        job = jobs.current()
+        if job is not None and job.state in ("planned", "waiting") and not job.steps_done:
+            jobs.move(job.id, "stopped", reason="model_changed")
+    _save({"starting_model": model_id})
+    runner_module.forget_card_room()
+    versions.dismiss(STRONGER_ITEM + model_id)  # the offer is answered
+    return f"Switched to {name}. {_answer_download('download')}"
 
 
 def _use_parts() -> dict[str, Any]:
@@ -771,10 +971,16 @@ def _training(settings: learning.LearningSettings) -> dict[str, Any]:
 
 
 def _data() -> dict[str, Any]:
+    from row_bot.learning.store import PICTURE_CAP_BYTES
+
     if not learning.store_exists():
-        return {"exists": False, "bytes": 0}
+        return {"exists": False, "bytes": 0, "picture_bytes": 0, "picture_cap_bytes": PICTURE_CAP_BYTES}
+    pictures = 0
     try:
-        size = _store().storage_bytes()
+        store = _store()
+        size = store.storage_bytes()
+        # Pictures from browser and computer use (P2): part of the size, kept within their own cap.
+        pictures = store.picture_stats().bytes
         vault = learning.folder_path() / "audit.db"
         if vault.is_file():
             size += vault.stat().st_size
@@ -785,7 +991,8 @@ def _data() -> dict[str, Any]:
             size += sum(path.stat().st_size for path in runs.rglob("*") if path.is_file() and not path.is_symlink())
     except OSError:
         size = 0
-    return {"exists": True, "bytes": max(0, int(size))}
+    return {"exists": True, "bytes": max(0, int(size)), "picture_bytes": max(0, int(pictures)),
+            "picture_cap_bytes": PICTURE_CAP_BYTES}
 
 
 def _owner_unset_channels() -> list[dict[str, str]]:
@@ -872,8 +1079,9 @@ def read_learning(*, validate: Callable[[], None]) -> dict[str, Any]:
         "opted_out_conversations": [_text(item, 256) for item in opted_out[:2000]],
         "owner_unset_channels": _owner_unset_channels(),
         "needs_you": _needs_you(settings),
-        "overnight": _overnight(night),
+        "overnight": _overnight(night, tests=_tests() if settings.enabled else None),
         "changes": changes,
+        "testing_now": _testing_now() if settings.enabled else None,
         "kinds_learning": _kinds_learning(changes) if settings.enabled else [],
     }
     data["revision"] = sha256(
@@ -984,12 +1192,42 @@ def read_learning_conversation(conversation_id: str, *, validate: Callable[[], N
 
 
 def read_learning_lessons(*, validate: Callable[[], None]) -> dict[str, Any]:
-    """Lessons: so far only the ones Row-Bot saved for itself during chats (its troubleshooting
-    memories), which nothing has tested yet. Read-only."""
+    """Lessons (UX §7): those Learning put into use (In use, or Off after Undo), with their kind of work and
+    how often recall used them this month, and those Row-Bot saved for itself during chats (its
+    troubleshooting memories), marked Not tested with Test it."""
 
     _require_preview()
     validate()
     items: list[dict[str, Any]] = []
+    linked: set[str] = set()
+    try:
+        from row_bot.learning import changes
+
+        for proposal in changes.learning_changes():
+            if proposal.get("proposal_type") != "lesson":
+                continue
+            meta = changes.block(proposal)
+            state = changes.view_state(proposal)
+            memory_id = str(meta.get("memory_id") or "")
+            if memory_id:
+                linked.add(memory_id)
+            if meta.get("origin") == "agent_saved":
+                continue  # shown below, as the memory it tests
+            if state == "in_use" or (state == "not_used" and meta.get("state") == "undone"):
+                kind = str(meta.get("kind_of_work") or "other")
+                items.append({
+                    "id": _text(proposal.get("id"), 128), "title": _text(proposal.get("title"), 200),
+                    "text": _text((proposal.get("payload") or {}).get("text"), 600), "origin": "learning",
+                    "status": "in_use" if state == "in_use" else "off", "kind": kind if kind in _KINDS else "other",
+                    "used": changes.used_this_month(memory_id) if state == "in_use" else 0,
+                    "change_id": _text(proposal.get("id"), 128),
+                    "updated_at": _text(proposal.get("updated_at"), 64),
+                })
+        tested = {str(changes.block(item).get("memory_id") or ""): item for item in changes.learning_changes()
+                  if changes.block(item).get("origin") == "agent_saved"}
+    except Exception:
+        logger.debug("Learning could not read its lessons", exc_info=True)
+        tested = {}
     try:
         from row_bot import knowledge_graph
 
@@ -999,18 +1237,32 @@ def read_learning_lessons(*, validate: Callable[[], None]) -> dict[str, Any]:
         rows = []
     for row in rows:
         subject = _text(row.get("subject"), 200).strip()
-        if not subject:
+        memory_id = _text(row.get("id"), 128)
+        if not subject or (memory_id in linked and memory_id not in tested):
             continue
+        status = "not_tested"
+        change_id = ""
+        if memory_id in tested:
+            from row_bot.learning import changes
+
+            proposal = tested[memory_id]
+            change_id = _text(proposal.get("id"), 128)
+            status = {"testing": "testing", "waiting_to_test": "testing", "ready": "tested_better",
+                      "in_use": "tested_better", "not_used": "tested_not_better"}.get(changes.view_state(proposal),
+                                                                                       "not_tested")
         items.append({
-            "id": _text(row.get("id"), 128),
+            "id": memory_id,
             "title": subject,
             "text": _text(row.get("description"), 600),
             "origin": "agent_saved",
-            "status": "not_tested",
+            "status": status,
+            "kind": None,
+            "used": 0,
+            "change_id": change_id,
             "updated_at": _text(row.get("updated_at"), 64),
         })
     validate()
-    return {"items": items, "total": len(items)}
+    return {"items": items[:_LESSON_LIMIT], "total": len(items)}
 
 
 def read_learning_version(version: int, *, validate: Callable[[], None]) -> dict[str, Any]:
@@ -1220,6 +1472,8 @@ def _target(action: str, command: dict[str, Any]) -> str:
         return "learning:version"
     if action in _USE_ACTIONS:
         return "learning:use"
+    if action in _CHANGE_ACTIONS:
+        return f"learning:change:{command.get('change_id', '')}"
     return "learning:settings"
 
 
@@ -1315,6 +1569,8 @@ def _use_action(action: str, wire: dict[str, Any]) -> str:
 
     if action == "use_smaller_model":
         return _use_smaller_model(str(wire.get("model") or ""))
+    if action == "change_starting_model":
+        return _change_starting_model(str(wire.get("model") or ""))
     settings = learning.read_settings()
     version = wire.get("version")
     kind = wire.get("kind") or ""
@@ -1568,7 +1824,13 @@ def execute_learning(command: dict, *, owner_id: str, validate: Callable[[], Non
     if action == "dismiss" and not item_id:
         raise ClientPlatformError("invalid_learning_command")
     model_id = _text(command.get("model"), 32)
-    if action == "use_smaller_model" and model_id not in learning.STARTING_MODELS:
+    if action in ("use_smaller_model", "change_starting_model") and model_id not in learning.STARTING_MODELS:
+        raise ClientPlatformError("invalid_learning_command")
+    change_id = _text(command.get("change_id"), 128)
+    if action in _CHANGE_ACTIONS and not change_id:
+        raise ClientPlatformError("invalid_learning_command")
+    text = str(command.get("text") or "")
+    if action == "edit_change" and not (text.strip() and len(text) <= 4000):
         raise ClientPlatformError("invalid_learning_command")
     target = _target(action, command)
     wire = {
@@ -1592,6 +1854,9 @@ def execute_learning(command: dict, *, owner_id: str, validate: Callable[[], Non
         "advanced": dict(advanced_values) if isinstance(advanced_values, dict) else None,
         "item_id": item_id,
         "model": model_id,
+        "change_id": change_id,
+        "text": text[:4000],
+        "answer": _text(command.get("answer"), 2000),
     }
     existing = admissions.read_command_metadata(owner_id, command["command_id"])
     if existing is not None:
@@ -1620,6 +1885,8 @@ def execute_learning(command: dict, *, owner_id: str, validate: Callable[[], Non
     try:
         validate()
         summary, signal = _perform(action, command, wire, conversation, signal_id, setup_values)
+        # Every other window reads Learning again (O127); this one gets the snapshot in its receipt.
+        learning.changed()
         validate()
     except ClientPlatformError as error:
         # A refusal is final: the same command answers it again, and the next can run.
@@ -1686,6 +1953,7 @@ def _perform(
                 tool_call_id=wire["tool_call_id"],
                 category=wire["category"],
                 note=wire["note"],
+                answer=wire["answer"],
             )
         except teach.TeachError as error:
             raise ClientPlatformError(error.code) from None
@@ -1702,6 +1970,8 @@ def _perform(
         summary = _version_action(action, wire["runtime"])
     elif action in _USE_ACTIONS:
         summary = _use_action(action, wire)
+    elif action in _CHANGE_ACTIONS:
+        summary = _change_action(action, wire)
     elif action == "delete_data":
         from row_bot.learning.store import LearningStoreError
         from row_bot.learning.training import jobs as training_jobs
@@ -1727,6 +1997,46 @@ def _perform(
         # An action no branch handles is refused: it never falls through to deleting learning data.
         raise ClientPlatformError("invalid_learning_command")
     return summary, signal
+
+
+def _change_action(action: str, wire: dict[str, Any]) -> str:
+    """One of the person's choices about a change Learning drafted (L3b; designs/learning-ux.md §4, §7)."""
+
+    from row_bot.learning import changes
+
+    change_id = wire["change_id"]
+    try:
+        if action == "use_change":
+            changes.use(change_id)
+            return "Now in use."
+        if action == "undo_change":
+            changes.undo(change_id)
+            return "Undone. Row-Bot works as it did before."
+        if action == "not_now_change":
+            changes.not_now(change_id)
+            return "It stays in Changes › Ready."
+        if action == "dont_suggest_change":
+            changes.dont_suggest(change_id)
+            return "Row-Bot won’t suggest this again unless something new comes up."
+        if action == "edit_change":
+            changes.edit(change_id, wire["text"])
+            return "Edited: test again before using."
+        if action == "test_change":
+            if changes.testing().running():
+                raise changes.ChangeError("running")
+            changes.test_again(change_id)
+            changes.testing().start(change_id)
+            return "Testing it now. It stops while you use Row-Bot and carries on later."
+        if action == "test_lesson":
+            if changes.testing().running():
+                raise changes.ChangeError("running")
+            found = changes.draft_saved_lesson(change_id)
+            changes.testing().start(str(found["id"]))
+            return "Testing it now. It stops while you use Row-Bot and carries on later."
+        changes.delete_lesson(change_id)
+        return "Lesson deleted."
+    except changes.ChangeError as error:
+        raise ClientPlatformError(_CHANGE_ERRORS.get(error.code, "learning_change_changed")) from None
 
 
 def read_learning_receipt(command_id: str, *, owner_id: str, validate: Callable[[], None]) -> dict:

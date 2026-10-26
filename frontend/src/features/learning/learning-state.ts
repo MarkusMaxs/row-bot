@@ -12,6 +12,7 @@ import type {
   LearningTraining,
   LearningVersionDetails,
 } from '../../api/types';
+import { useLiveUpdate } from '../../live';
 import { useRuntime } from '../../runtime';
 
 /** The handshake capability of a build started with ROW_BOT_LEARNING_PREVIEW=1 (O34). */
@@ -100,12 +101,22 @@ function pageVisible() {
 
 type View = { snapshot: LearningSnapshot | null; error: string };
 
-/** One shared Learning state per connection: Settings, Home and chats see the same. */
+/**
+ * One shared Learning state: Settings, Home and chats see the same. It is read
+ * when a surface first asks on a connection, and again whenever Learning's
+ * state changes on the server (O127: the `learning` live topic; a reconnect
+ * fires it too), so background work (a version ready overnight, a comparison
+ * done) shows at once, without a reload.
+ */
 class LearningStore {
   private view: View = { snapshot: null, error: '' };
   private listeners = new Set<() => void>();
   private identity = '';
   private reading: Promise<LearningSnapshot | null> | null = null;
+  // A change heard while a read was under way: read once more when it ends.
+  private stale = false;
+  // A change heard this frame (every surface hears it): one read for them all.
+  private heard = false;
   private readonly controller: ClientController;
 
   constructor(controller: ClientController) {
@@ -130,7 +141,7 @@ class LearningStore {
     this.publish({ snapshot, error: '' });
   }
 
-  /** Read once per connection (a new sign-in or restart reads again). */
+  /** The first read on a connection (a new sign-in or restart reads again). */
   ensure(identity: string) {
     if (identity === this.identity && (this.view.snapshot || this.reading))
       return;
@@ -158,8 +169,23 @@ class LearningStore {
     );
     this.reading = reading.finally(() => {
       this.reading = null;
+      if (this.stale) {
+        this.stale = false;
+        void this.reload();
+      }
     });
     return this.reading;
+  };
+
+  /** Learning changed on the server: read it again (nothing before the first read). */
+  changed = () => {
+    if (!this.identity || this.heard) return;
+    this.heard = true;
+    queueMicrotask(() => {
+      this.heard = false;
+      if (this.reading) this.stale = true;
+      else void this.reload();
+    });
   };
 
   run = async (
@@ -389,6 +415,10 @@ export function useLearning(): LearningIO | null {
   useEffect(() => {
     if (store && preview && identity) store.ensure(identity);
   }, [identity, preview, store]);
+  // Learning's state changed on the server (O127): every surface showing it reads it again at once.
+  useLiveUpdate(['learning'], () => {
+    if (store && preview) store.changed();
+  });
   return useMemo(
     () =>
       controller && store && preview

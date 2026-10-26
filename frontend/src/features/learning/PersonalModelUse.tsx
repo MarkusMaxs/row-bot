@@ -933,7 +933,6 @@ export function AdvancedSection({
   const [values, setValues] = useState(advanced.values);
   useEffect(() => setValues(advanced.values), [advanced.values]);
   const ids = {
-    model: useId(),
     rank: useId(),
     rate: useId(),
     epochs: useId(),
@@ -968,24 +967,8 @@ export function AdvancedSection({
       <div className="learning-sheet">
         <p className="learning-muted">
           Recommended for this computer. Changes apply to the next training run.
+          The starting model is in Learning settings.
         </p>
-        {row(
-          ids.model,
-          'Starting model',
-          <Select
-            id={ids.model}
-            value={values.starting_model}
-            onChange={(event) =>
-              setValues({ ...values, starting_model: event.target.value })
-            }
-          >
-            {advanced.choices.starting_model.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name}
-              </option>
-            ))}
-          </Select>,
-        )}
         {row(
           ids.rank,
           'LoRA rank',

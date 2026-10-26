@@ -39,7 +39,12 @@ export function learningSnapshot(
     past_chats: { state: 'none', total: 0, done: 0 },
     personal_model: personalModel(),
     training: trainingRun(),
-    data: { exists: false, bytes: 0 },
+    data: {
+      exists: false,
+      bytes: 0,
+      picture_bytes: 0,
+      picture_cap_bytes: 10_000_000_000,
+    },
     opted_out_conversations: [],
     owner_unset_channels: [],
     ...overrides,
@@ -189,6 +194,32 @@ export const GPU_8GB: LearningHardware = {
   ],
   engine_download_bytes: 2_170_000_000,
   free_bytes: 512_000_000_000,
+};
+
+/** A 32 GB card certified for the 9B (O124): setup recommends it; the 2B fits too. */
+export const GPU_32GB: LearningHardware = {
+  ...GPU_8GB,
+  gpu: {
+    name: 'NVIDIA GeForce RTX 5090',
+    memory_gb: 32,
+    label: 'NVIDIA GeForce RTX 5090 (32 GB)',
+  },
+  tier: {
+    id: '32gb',
+    label: '32 GB',
+    certified: true,
+    summary: 'Can train medium models (about 9B) on your tasks.',
+  },
+  starting_models: [
+    {
+      id: 'qwen3.5-9b',
+      name: 'Qwen3.5 9B',
+      licence: 'Apache 2.0',
+      download_bytes: 19_300_000_000,
+    },
+    ...GPU_8GB.starting_models,
+  ],
+  free_bytes: 700_000_000_000,
 };
 
 export const NO_GPU: LearningHardware = {
@@ -392,7 +423,6 @@ export function advancedState(
   overrides: Partial<LearningAdvanced> = {},
 ): LearningAdvanced {
   const values = {
-    starting_model: 'qwen3.5-2b',
     rank: 16,
     learning_rate: 0.0002,
     epochs: 1,
@@ -404,7 +434,6 @@ export function advancedState(
     recommended: values,
     changed: false,
     choices: {
-      starting_model: [{ id: 'qwen3.5-2b', name: 'Qwen3.5 2B' }],
       rank: [8, 16, 32, 64],
       learning_rate: [0.00005, 0.0001, 0.0002, 0.0003, 0.0005],
       epochs: [1, 2, 3],
@@ -515,6 +544,36 @@ export function draftedChange(
     never_automatic: false,
     ...overrides,
   };
+}
+
+/** A change that passed its test (L3b): Ready, with its table. */
+export function testedChange(
+  overrides: Partial<LearningChangeView> = {},
+): LearningChangeView {
+  return draftedChange({
+    id: 'proposal_ready',
+    title: 'Pick documents by ID, not title',
+    state: 'ready',
+    test: {
+      verdict: 'better',
+      rows: [
+        {
+          label: 'Document lookups it hadn’t seen',
+          total: 12,
+          without: 7,
+          with_change: 10,
+        },
+        { label: 'Other tasks', total: 10, without: 10, with_change: 10 },
+      ],
+      note: 'Testing used 850K tokens · Small test, so expect some variation.',
+      small: true,
+      tested_at: new Date(Date.now() - 7_200_000).toISOString(),
+      difference: 25,
+      low: 8.3,
+      high: 41.7,
+    },
+    ...overrides,
+  });
 }
 
 /** Last night's look (L3a): found 3, drafted 2 by default. */

@@ -18,11 +18,18 @@ a paired person who is not the owner. Anything it can't classify is denied.
   ``SMS_USER_PHONE``, ``WHATSAPP_USER_PHONE``). People paired by code are
   approved to talk to Row-Bot, but they are not the owner.
 - :func:`check` is what the capture seams call (after :func:`row_bot.learning.is_enabled`).
+
+**Incognito chats (N11).** Learning never records a chat that is incognito, nor one that was
+(incognito turned off again): every later request in it still carries what was said while it was
+incognito, so nothing of it is read from then on. A delegated Agent's thread answers for the chat
+that started it. What Learning recorded before the chat turned incognito stays, as memories already
+saved from it stay (the dataset still uses it; "Don't learn from this chat" deletes it).
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Protocol
@@ -46,6 +53,7 @@ GOAL = "goal"
 LEARNING_OFF = "learning_off"
 LEARNING_PAUSED = "learning_paused"
 CHAT_OPTED_OUT = "chat_opted_out"
+INCOGNITO_CHAT = "incognito_chat"
 UNKNOWN_SOURCE = "unknown_source"
 SHARED_CONVERSATION = "shared_conversation"
 NOT_OWNER = "not_owner"
@@ -83,6 +91,8 @@ class SourceFacts:
     with_owner: bool | None = None
     goal: bool = False
     historical: bool = False
+    # The conversation (or the one a delegated Agent's thread belongs to) is or was incognito (N11).
+    incognito: bool = False
 
 
 @dataclass(frozen=True)
@@ -111,6 +121,8 @@ def decide(facts: SourceFacts, settings: ScopeSettings, *, opted_out: bool = Fal
         return _deny(LEARNING_PAUSED)
     if opted_out:
         return _deny(CHAT_OPTED_OUT)
+    if facts.incognito:
+        return _deny(INCOGNITO_CHAT)
     if facts.conversation not in ("app", "channel", "workflow"):
         return _deny(UNKNOWN_SOURCE)
     if facts.conversation == "channel":
@@ -152,6 +164,8 @@ class ThreadInfo:
     channel: str | None = None
     channel_target: str = ""
     shared: bool | None = None
+    # Incognito now, or turned off after being incognito (N11 keeps where): never recorded.
+    incognito: bool = False
 
 
 class ThreadLookup(Protocol):
@@ -159,10 +173,20 @@ class ThreadLookup(Protocol):
 
     def owner_identity(self, channel: str) -> str: ...
 
+    def incognito(self, thread_id: str) -> bool:
+        """Only :attr:`ThreadInfo.incognito` (capture asks it again while a turn runs)."""
+        ...
+
 
 class SavedThreads:
     """Reads ``thread_meta``, workflow runs, Agent runs, channel refs and the
     channels' configured owner ids. Imports those owners only when asked."""
+
+    def incognito(self, thread_id: str) -> bool:
+        from row_bot import threads
+
+        state = threads.incognito_state(thread_id)
+        return state.incognito or state.boundary is not None
 
     def thread(self, thread_id: str) -> ThreadInfo:
         from row_bot import threads
@@ -170,6 +194,7 @@ class SavedThreads:
         context = threads._get_thread_cleanup_context(thread_id)  # noqa: SLF001 - one read of the row
         if not context.get("exists"):
             return ThreadInfo(exists=False)
+        incognito = self.incognito(thread_id)
         thread_type = str(context.get("thread_type") or "")
         parent = ""
         if thread_type == "agent_child":
@@ -191,7 +216,7 @@ class SavedThreads:
             logger.debug("Learning could not read a conversation's channel", exc_info=True)
             # Unknown origin: treat it as a channel conversation we can't classify.
             return ThreadInfo(exists=True, thread_type=thread_type, parent_thread_id=parent,
-                              channel="", shared=None)
+                              channel="", shared=None, incognito=incognito)
         if ref:
             channel = str(ref.get("channel") or "")
             target = str(ref.get("target") or "")
@@ -207,6 +232,7 @@ class SavedThreads:
             channel=channel,
             channel_target=target,
             shared=shared,
+            incognito=incognito,
         )
 
     def owner_identity(self, channel: str) -> str:
@@ -266,6 +292,7 @@ def describe_thread(
     try:
         current = clean
         info = source.thread(current)
+        incognito = info.incognito
         for _ in range(_MAX_AGENT_DEPTH):
             if not info.exists or info.thread_type != "agent_child":
                 break
@@ -273,6 +300,7 @@ def describe_thread(
                 return SourceFacts("unknown", thread_id=clean, goal=goal, historical=historical)
             current = info.parent_thread_id
             info = source.thread(current)
+            incognito = incognito or info.incognito
         else:
             return SourceFacts("unknown", thread_id=clean, goal=goal, historical=historical)
         if not info.exists or info.thread_type == "agent_child":
@@ -294,10 +322,11 @@ def describe_thread(
                 with_owner=with_owner,
                 goal=goal,
                 historical=historical,
+                incognito=incognito,
             )
         conversation: Conversation = "workflow" if info.is_workflow else "app"
         return SourceFacts(conversation, thread_id=clean, root_thread_id=current, goal=goal,
-                           historical=historical)
+                           historical=historical, incognito=incognito)
     except Exception:
         logger.debug("Learning could not classify a conversation; denying", exc_info=True)
         return SourceFacts("unknown", thread_id=clean, goal=goal, historical=historical)
@@ -355,6 +384,14 @@ def check(
     )[0]
 
 
+def is_incognito(thread_ids: Iterable[str], *, lookup: ThreadLookup | None = None) -> bool:
+    """Whether any of these conversations is or was incognito (N11): capture asks it again for a turn
+    that is already being written, so a chat turned incognito midway records nothing more."""
+
+    source = lookup or SavedThreads()
+    return any(source.incognito(thread) for thread in dict.fromkeys(filter(None, thread_ids)))
+
+
 def set_chat_opt_out(thread_id: str, opted_out: bool, *, store: LearningStore | None = None) -> int:
     """"Don't learn from this chat": opting out purges what Learning recorded from
     it; opting back in restores nothing. Returns how many records were purged."""
@@ -374,6 +411,7 @@ def set_chat_opt_out(thread_id: str, opted_out: bool, *, store: LearningStore | 
 __all__ = [
     "CHAT_OPTED_OUT",
     "GOAL",
+    "INCOGNITO_CHAT",
     "LEARNING_OFF",
     "LEARNING_PAUSED",
     "MY_CHATS_OFF",
@@ -395,6 +433,7 @@ __all__ = [
     "check",
     "decide",
     "describe_thread",
+    "is_incognito",
     "resolve",
     "set_chat_opt_out",
 ]

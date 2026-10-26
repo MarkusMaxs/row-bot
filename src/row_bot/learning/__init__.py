@@ -238,6 +238,21 @@ def invalidate() -> None:
     _cache = None
 
 
+def changed() -> None:
+    """Learning's state changed: every open client reads its Learning screens again at once (O127).
+
+    Only the ``learning`` live topic's name and revision go out (B407), never what changed. Called when a
+    setting is saved, a Learning command runs, a job or other Learning record changes state (a version
+    planned, training, finished or failed; the past-chat import starting or done), a version's phase moves
+    (ready, couldn't start), a comparison starts, moves on or finishes, the download changes state, the
+    vault refreshes and a personal model's use is recorded. Capture's own records never call it.
+    """
+
+    from row_bot.application.live_updates import publish
+
+    publish("learning")
+
+
 def settings_saved(field: str, value: Any) -> None:
     """React to one saved Learning setting.
 
@@ -251,6 +266,7 @@ def settings_saved(field: str, value: Any) -> None:
     invalidate()
     if not _PREVIEW:
         return
+    changed()
     if field == "enabled" and value is True:
         try:
             from row_bot.learning.store import LearningStore
@@ -305,6 +321,29 @@ def start_past_chat_import() -> None:
         logger.warning("Learning could not start reading past chats (%s)", type(exc).__name__)
 
 
+def start_blob_sweep() -> Any:
+    """The one-off sweep on this build's first start (P2): in the background, remove the blobs no
+    Learning record references any more (a deleted or switched-off chat's messages and pictures that
+    earlier builds left behind), logging counts only. Learning on or off: it is maintenance on kept
+    data. One path check without a store; once it has run, one value read. Returns the thread, if any."""
+
+    if not store_exists():
+        return None
+    import threading
+
+    def sweep() -> None:
+        try:
+            from row_bot.learning.store import LearningStore
+
+            LearningStore().sweep_once()
+        except Exception as exc:
+            logger.warning("Learning could not sweep its unreferenced files (%s)", type(exc).__name__)
+
+    thread = threading.Thread(target=sweep, name="learning-blob-sweep", daemon=True)
+    thread.start()
+    return thread
+
+
 def start_runner() -> None:
     """Start the quiet-hours runner while Learning is on (L2a): it pauses training that
     stopped when Row-Bot closed, then looks once a minute for what is due."""
@@ -340,6 +379,77 @@ def route_turn(**request: Any) -> Any | None:
     except Exception as exc:
         logger.warning("Learning couldn't route a turn; the main model answers (%s)", type(exc).__name__)
         return None
+
+
+WAYS_OF_WORKING_FILE = "learning_ways_of_working.json"
+
+
+def ways_of_working_text() -> str:
+    """The ways of working in use (E7, D18), as the agent's stable system section, or "". The agent
+    reads it once per turn. While none was ever used this is one path check and imports nothing; ways
+    of working in use stay in use while Learning is off or paused (UX §8); without the preview flag
+    nothing is added (O34)."""
+
+    if not _PREVIEW:
+        return ""
+    try:
+        if not (data_dir() / WAYS_OF_WORKING_FILE).is_file():
+            return ""
+        from row_bot.learning import behaviour
+
+        return behaviour.section_text()
+    except Exception as exc:
+        logger.warning("Learning couldn't read its ways of working; Row-Bot's own apply (%s)", type(exc).__name__)
+        return ""
+
+
+LESSONS_FILE = "learning_lessons.json"
+
+
+def lesson_memory_ids() -> set[str]:
+    """The memories that are lessons in use (E5), for the chat's quiet "Used a lesson" line. While none was
+    ever used this is one path check; without the preview flag there are none (O34)."""
+
+    if not _PREVIEW:
+        return set()
+    try:
+        path = data_dir() / LESSONS_FILE
+        if not path.is_file():
+            return set()
+        found = json.loads(path.read_text(encoding="utf-8")).get("lessons")
+        return {str(key) for key in found} if isinstance(found, dict) else set()
+    except Exception as exc:
+        logger.debug("Learning couldn't read its lessons in use (%s)", type(exc).__name__)
+        return set()
+
+
+def note_lessons_recalled(memory_ids: Iterable[str]) -> None:
+    """A turn's recall showed these memories: counts the lessons in use among them ("used 3 times this
+    month"). Nothing while no lesson is in use."""
+
+    ids = [str(item) for item in memory_ids if item]
+    if not ids or not lesson_memory_ids().intersection(ids):
+        return
+    try:
+        from row_bot.learning import changes
+
+        changes.note_recalled(ids)
+    except Exception as exc:
+        logger.debug("Learning couldn't count a recalled lesson (%s)", type(exc).__name__)
+
+
+def lesson_memory_deleted_soon(old_id: str, new_id: str) -> None:
+    """A Dream merge is about to delete a ``self_knowledge`` memory that a lesson in use may be (O7):
+    the lesson moves to the surviving memory instead of being marked deleted. Nothing without a store."""
+
+    try:
+        if not store_exists():
+            return
+        from row_bot.learning import changes
+
+        changes.relink_lesson(str(old_id or ""), str(new_id or ""))
+    except Exception as exc:
+        logger.warning("Learning couldn't move a lesson to its merged memory (%s)", type(exc).__name__)
 
 
 def offered_personal_models() -> dict[str, str]:
@@ -401,6 +511,8 @@ __all__ = [
     "STARTING_MODELS",
     "STORE_FILE",
     "TRAIN_PLACES",
+    "WAYS_OF_WORKING_FILE",
+    "changed",
     "data_dir",
     "folder_path",
     "invalidate",
@@ -417,4 +529,9 @@ __all__ = [
     "start_runner",
     "store_exists",
     "store_path",
+    "ways_of_working_text",
+    "lesson_memory_deleted_soon",
+    "lesson_memory_ids",
+    "note_lessons_recalled",
+    "LESSONS_FILE",
 ]

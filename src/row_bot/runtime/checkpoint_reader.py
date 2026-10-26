@@ -37,6 +37,10 @@ class BlobReader:
         self.blob = blob
         self.revision = revision
         self._nodes = 0
+        # Learning (preview, L3b): the memories that are lessons in use, and whether the turn being read
+        # recalled one ("Used a lesson" under its reply). One path check while there is none.
+        self._lessons: frozenset[str] | None = None
+        self._recalled_lesson = False
 
     def _read(self, size: int) -> bytes:
         value = self.blob.read(size)
@@ -260,8 +264,43 @@ class BlobReader:
             if index >= first:
                 record = self.message(position)
                 if record:
+                    if record["role"] == "user":
+                        self._recalled_lesson = False
+                    elif (self._recalled_lesson and record["role"] == "assistant" and not record["tool_call_ids"]
+                          and not record["tool_ids_lazy"] and not record["note"]):
+                        record["used_lesson"] = True
+                        self._recalled_lesson = False
                     yield index, record
             position = end
+
+    def lesson_memories(self) -> frozenset[str]:
+        if self._lessons is None:
+            try:
+                from row_bot import learning
+
+                self._lessons = frozenset(learning.lesson_memory_ids())
+            except Exception:  # noqa: BLE001 - no line rather than no transcript
+                self._lessons = frozenset()
+        return self._lessons
+
+    def _note_turn_context(self, position: int) -> None:
+        """A turn context's recalled memories: does any of them hold a lesson in use?"""
+
+        lessons = self.lesson_memories()
+        if not lessons:
+            return
+        context = self.fields(position, {"memory_ids"})
+        if "memory_ids" not in context:
+            return
+        ids = self.node(context["memory_ids"])
+        if ids.kind != "array":
+            return
+        current = ids.body
+        for _ in range(min(ids.size, 64)):
+            if self.text(current, 128) in lessons:
+                self._recalled_lesson = True
+                return
+            current = self.end(current)
 
     def message(self, position: int) -> dict | None:
         node = self.node(position)
@@ -331,6 +370,7 @@ class BlobReader:
             if name == "HumanMessage" and "row_bot_turn_context" in metadata:
                 # Row-Bot's per-turn context for the model (row_bot.turn_context): never a row
                 # of the transcript, its exports or its search.
+                self._note_turn_context(metadata["row_bot_turn_context"])
                 return None
             if name == "HumanMessage":
                 public_position = metadata.get("platform_public_content")
@@ -577,6 +617,8 @@ class BlobReader:
             row["cut_short"] = True
         if record.get("answered_by"):
             row["answered_by"] = record["answered_by"]
+        if record.get("used_lesson"):
+            row["used_lesson"] = True
         content = bytearray()
         for chunk in self.content_chunks(record):
             if len(content) + len(chunk) > maximum:

@@ -163,19 +163,24 @@ class QuietHours:
         return (self.now() - began).total_seconds() >= DREAM_GRACE_SECONDS
 
 
+MORNING_KEY = "changes.morning"
+
+
 class NightLook:
-    """The night's look for things to improve (L3a): after Dream, while nobody uses Row-Bot, before
-    training. ``client`` and ``check_model`` are the diagnosis call's (tests pass fakes)."""
+    """The night's look for things to improve (L3a) and its tests (L3b): after Dream, while nobody uses
+    Row-Bot, before training. ``client`` and ``check_model`` are the diagnosis call's, ``tester`` makes the
+    changes' tester (tests pass fakes)."""
 
     def __init__(self, *, lease: Any, root: Path | None = None, hours: QuietHours | None = None,
                  client: Any = None, check_model: Callable[[], None] | None = None,
-                 clock: Callable[[], float] | None = None) -> None:
+                 clock: Callable[[], float] | None = None, tester: Callable[[], Any] | None = None) -> None:
         self.lease = lease
         self._root = root
         self.hours = hours or QuietHours(root)
         self.client = client
         self.check_model = check_model
         self.clock = clock
+        self.tester = tester
 
     def _store(self) -> Any:
         from row_bot.learning.store import LearningStore
@@ -186,12 +191,29 @@ class NightLook:
         began = self.hours.started_at()
         return began.date().isoformat() if began is not None else None
 
-    def done_tonight(self) -> bool:
+    def looked_tonight(self) -> bool:
         from row_bot.learning import diagnosis
 
         night = self.tonight()
         found = diagnosis.last_night(self._store()) if gate.store_exists(self._root) else None
         return bool(night and found and found.get("night") == night and found.get("state") != "stopped")
+
+    def tested_tonight(self) -> bool:
+        """Tonight's tests finished, or nothing waits to be tested (L3b)."""
+
+        from row_bot.learning import changes
+
+        night = self.tonight()
+        found = changes.last_tests(self._store()) if gate.store_exists(self._root) else None
+        if found and found.get("night") == night and found.get("state") not in ("stopped",):
+            return True
+        try:
+            return not changes.due()
+        except Exception:  # noqa: BLE001 - the changes can't be read: nothing to test tonight
+            return True
+
+    def done_tonight(self) -> bool:
+        return self.looked_tonight() and self.tested_tonight()
 
     def due(self) -> bool:
         """Learning is on, it is quiet hours after Dream, and tonight's look hasn't finished."""
@@ -210,6 +232,56 @@ class NightLook:
         night = self.tonight()
         if night is None:
             return None
+        report = self._look(night) if not self.looked_tonight() else None
+        if self.looked_tonight() and not self.tested_tonight():
+            self._test(night)
+        return report
+
+    def _stop(self) -> bool:
+        return not gate.is_enabled(self._root) or not self.lease.read().free
+
+    def morning(self, notify: Callable[[str], None] | None = None) -> str | None:
+        """The morning summary (UX "Notifications: at most once a morning"): once quiet hours are over, last
+        night's changes ready to review and those put into use by themselves, in one quiet notice. Nothing
+        when there is nothing to say; never twice for one night. Returns what it said."""
+
+        if self.hours.inside() or not gate.is_enabled(self._root) or not gate.store_exists(self._root):
+            return None
+        from row_bot.learning import changes
+
+        store = self._store()
+        tests = changes.last_tests(store) or {}
+        night = str(tests.get("night") or "")
+        if not night or store.meta_value(MORNING_KEY, "") == night:
+            return None
+        from datetime import date
+
+        try:
+            if (self.hours.now().date() - date.fromisoformat(night)).days > 1:
+                return None
+        except ValueError:
+            return None
+        ready, used = int(tests.get("ready") or 0) - int(tests.get("used") or 0), int(tests.get("used") or 0)
+        parts = []
+        if ready > 0:
+            parts.append(f"{ready} change{'s' if ready != 1 else ''} ready to review")
+        if used > 0:
+            parts.append(f"{used} change{'s' if used != 1 else ''} put into use by "
+                         f"{'themselves' if used != 1 else 'itself'} (Undo in Learning)")
+        store.set_meta_values({MORNING_KEY: night})
+        if not parts:
+            return None
+        text = "Overnight: " + " · ".join(parts)
+        if notify is not None:
+            notify(text)
+        else:
+            from row_bot import notifications
+
+            notifications.notify("Learning", text, sound="none", toast_type="info", source="learning",
+                                 requested=True)
+        return text
+
+    def _look(self, night: str) -> Any:
         from row_bot.learning import diagnosis, holdout
 
         store = self._store()
@@ -231,13 +303,25 @@ class NightLook:
 
             client = LedgerModelClient()
         try:
-            return diagnosis.run(
-                store, client=client, night=night,
-                should_stop=lambda: not gate.is_enabled(self._root) or not self.lease.read().free,
-                check_model=self.check_model or diagnosis.check_default_model)
+            return diagnosis.run(store, client=client, night=night, should_stop=self._stop,
+                                 check_model=self.check_model or diagnosis.check_default_model)
         except Exception:
             logger.exception("Learning's look for things to improve failed")
             diagnosis.note_night(store, night, "failed")
+            return None
+
+    def _test(self, night: str) -> Any:
+        """Tonight's drafts tested (L3b), under the same stop rule as the look; training waits for them."""
+
+        from row_bot.learning import changes, diagnosis
+
+        try:
+            tester = self.tester() if self.tester is not None else changes.Tester(
+                self._root, store=self._store(), client=self.client,
+                check_model=self.check_model or diagnosis.check_default_model)
+            return changes.test_waiting(tester, night=night, should_stop=self._stop)
+        except Exception:
+            logger.exception("Learning couldn't test tonight's changes")
             return None
 
 
@@ -422,7 +506,8 @@ class LearningRunner:
         with self._lock:
             if self.look is not None:
                 try:
-                    self.look.tick()  # Dream → the night's look → training
+                    self.look.tick()  # Dream → the night's look and its tests → training
+                    self.look.morning()
                 except Exception:
                     logger.exception("Learning's look for things to improve failed")
             try:

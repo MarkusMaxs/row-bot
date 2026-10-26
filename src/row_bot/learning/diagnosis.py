@@ -287,9 +287,8 @@ def standing(issue: Issue, proposals: Sequence[Mapping[str, Any]], attempts: Seq
 SYSTEM = """You are Row-Bot's Learning. You look at one recurring problem in the person's own work with Row-Bot \
 and decide the single change most likely to fix it. Choose exactly one:
 - lesson: a short "do it this way" note Row-Bot recalls when relevant: one or two general sentences.
-- way_of_working: a standing instruction for how Row-Bot works, in one slot: guidance (general guidance), \
-tool_guidance (how to use its tools), recall (how much to look up from memory), delegation (when to hand work \
-to a helper), step_budget (how many steps to take).
+- way_of_working: a standing instruction for how Row-Bot works, one or two sentences, in one slot: guidance \
+(how to approach the work), tool_guidance (how to use its tools), delegation (when to hand work to a helper).
 - create_skill: a new reusable procedure: a snake_case name, a one-line description and numbered steps.
 - patch_skill: a change to one of the existing skills listed: its name and its full updated instructions.
 - train: the person's own model should learn this kind of work from these examples.
