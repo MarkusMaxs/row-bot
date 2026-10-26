@@ -638,7 +638,7 @@ def get() -> LearningRunner:
             comparisons = Comparisons(lease=supervisor.lease, training=supervisor.training)
             remote = remote_module_get(supervisor.jobs, RemoteTrainer)
             remote_planner = Planner(jobs=supervisor.jobs, engine=remote, recipe_for=remote.recipe,
-                                     backend="hugging_face")
+                                     measure=remote.measure, backend="hugging_face")
             remote.dataset = LearningDataset(remote_planner)
             _runner = LearningRunner(supervisor, planner=planner, releases=ReleaseMaker(jobs=supervisor.jobs),
                                      comparisons=comparisons, unloader=OwnModelUnloader(),

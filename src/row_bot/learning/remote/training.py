@@ -386,6 +386,14 @@ class RemoteTrainer:
             raise RemoteError("no_model")
         return advanced.apply(recipes.load(model.remote_recipe), self._root)
 
+    def measure(self, rows: list[Any], max_seq: int) -> list[tuple[int, int]]:
+        """The Hugging Face planner's exact row lengths (``measure_rows``) for the chosen model."""
+
+        model = self.choice()
+        if model is None or model.pinned is None:
+            raise RemoteError("no_model")
+        return measure_rows(rows, max_seq, model=model.pinned, root=self._root)
+
     def ready(self) -> bool:
         """The planner's "engine" for a Hugging Face run: signed in, with a model this computer can run."""
 
@@ -952,6 +960,66 @@ class RemoteTrainer:
         write_record(replace(current, phase="cleaned" if not failed else current.phase,
                              cleaned_at=None if failed else self.clock(), cleanup_failed=failed), self._root)
         _changed()
+
+
+# ── Counting a run's tokens on this computer ────────────────────────────────
+
+TOKENIZERS_FOLDER = "tokenizers"
+MEASURE_SECONDS = 900.0
+
+
+def tokenizer_folder(model: Any, root: Path | None = None, *, fetcher: Any = None) -> Path:
+    """The chosen model's tokenizer and chat template (its small pinned files, never its weights: about 25 MB),
+    downloaded once from Hugging Face and checked against their pins: a computer that trains on Hugging Face
+    has no engine or starting model to count a row's tokens with, and rows are kept by their exact length,
+    as training renders them (O71/O96), like on a computer that trains here."""
+
+    from row_bot.learning.training import engine, fetch
+
+    folder = engine.learning_runtimes(root) / TOKENIZERS_FOLDER / model.id
+    fetcher = fetcher or fetch.Fetcher()
+    for item in model.files:
+        if item.name.endswith(".safetensors") or item.name in ("README.md", "LICENSE"):
+            continue
+        fetcher.fetch(fetch.Pinned(model.url(item), item.name, item.sha256, item.size), folder)
+    return folder
+
+
+def measure_rows(rows: list[Any], max_seq: int, *, model: Any, root: Path | None = None,
+                 fetcher: Any = None) -> list[tuple[int, int]]:
+    """Each row's tokens and target tokens, counted by the engine's own ``measure`` mode (its renderer, the
+    model's own tokenizer and chat template) in Row-Bot's own interpreter and Hugging Face's ``transformers``
+    from Row-Bot's full install, out of Row-Bot's process, under the engine's network guard."""
+
+    import shutil
+    import sys
+    import sysconfig
+    import tempfile
+
+    from row_bot.learning.training import dataset as dataset_module
+    from row_bot.learning.training import engine, lockfile
+
+    folder = tokenizer_folder(model, root, fetcher=fetcher)
+    work = Path(tempfile.mkdtemp(prefix="measure-"))
+    try:
+        rows_path, out = work / "rows.jsonl", work / "lengths.json"
+        rows_path.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8")
+        env = engine._base_environment(work / "home")  # noqa: SLF001 - the engine's own clean environment
+        env.update({key: value for key, value in hub_module.SWITCHES.items()})
+        env.update({"HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1"})
+        argv = [sys.executable, "-I", "-S", str(lockfile.ENGINE_DIR / "entry.py"), "measure", "--site",
+                sysconfig.get_paths()["purelib"], "--model", str(folder), "--rows", str(rows_path), "--out", str(out)]
+        result = engine.run_owned(argv, cwd=work / "home", env=env, timeout=MEASURE_SECONDS, check=lambda: None)
+        try:
+            lengths = json.loads(out.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            lengths = None
+        if result.code != 0 or not isinstance(lengths, list) or len(lengths) != len(rows):
+            logger.warning("Learning couldn't count a Hugging Face run's rows (exit %s)", result.code)
+            raise dataset_module.DatasetError("measure_failed")
+        return [(int(item[0]), int(item[1])) for item in lengths]
+    finally:
+        shutil.rmtree(work, ignore_errors=True)  # the rows are learning data: never left behind
 
 
 def download_gguf(job_id: str, number: int, folder: Path, *, trainer: RemoteTrainer | None = None,
