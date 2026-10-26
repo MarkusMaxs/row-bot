@@ -4034,14 +4034,16 @@ class LearningDownload(WireModel):
 
 
 class LearningRuntime(WireModel):
-    """Where a personal model can run ("Runs in", D10)."""
+    """Where a personal model can run ("Runs in", D10; Row-Bot's own server, O75)."""
 
-    id: Literal["ollama", "lmstudio", "llama_cpp", "vllm"]
+    id: Literal["row_bot", "ollama", "lmstudio", "llama_cpp", "vllm"]
     name: str = Field(max_length=64)
-    # Row-Bot registers the model there itself (Ollama); the others are loaded with one command.
+    # Row-Bot registers the model there itself (its own server, Ollama); the others are loaded with one command.
     automated: bool
-    # Whether the runtime is installed here (known for Ollama only).
+    # Whether the runtime is installed here (known for Row-Bot's own server and Ollama).
     installed: bool | None = None
+    # False where it can't run on this computer (Row-Bot's own server without an NVIDIA card that can train).
+    available: bool = True
 
 
 class LearningExamples(WireModel):
@@ -4065,8 +4067,9 @@ class LearningVersion(WireModel):
     failure: Literal[
         "not_enough_disk", "adapter_missing", "engine_missing", "tools_missing", "export_failed", "not_installed",
         "not_running", "not_local", "create_failed", "not_loaded", "probe_failed", "tool_turn_failed",
+        "server_missing", "server_unavailable", "server_failed", "load_failed",
     ] | None = None
-    runtime: Literal["ollama", "lmstudio", "llama_cpp", "vllm"]
+    runtime: Literal["row_bot", "ollama", "lmstudio", "llama_cpp", "vllm"]
     quantization: Literal["Q8_0", "Q4_K_M"]
     file_name: str | None = Field(default=None, max_length=128)
     file_bytes: int = Field(ge=0)
@@ -4174,7 +4177,7 @@ class LearningUse(WireModel):
 
 
 class LearningAdvancedValues(WireModel):
-    starting_model: str = Field(max_length=64)
+    # The starting model isn't an Advanced choice (O124): Settings › Starting model › Change… sets it.
     rank: int = Field(ge=1, le=512)
     learning_rate: float = Field(gt=0, le=1)
     epochs: int = Field(ge=1, le=100)
@@ -4182,13 +4185,7 @@ class LearningAdvancedValues(WireModel):
     method: Literal["standard"] = "standard"
 
 
-class LearningAdvancedModelChoice(WireModel):
-    id: str = Field(max_length=64)
-    name: str = Field(max_length=128)
-
-
 class LearningAdvancedChoices(WireModel):
-    starting_model: list[LearningAdvancedModelChoice] = Field(max_length=8)
     rank: list[int] = Field(max_length=8)
     learning_rate: list[float] = Field(max_length=8)
     epochs: list[int] = Field(max_length=8)
@@ -4214,6 +4211,15 @@ class LearningAdvanced(WireModel):
     data_mix: list[LearningDataMixItem] = Field(max_length=4)
 
 
+class LearningCardRoom(WireModel):
+    # O112: training waited for room on the graphics card this many quiet-hours nights; what its run needs
+    # free on the card and what the card had; the next smaller model Row-Bot offers (None: none smaller).
+    nights: int = Field(ge=0, le=7)
+    need_gb: float = Field(ge=0, le=4096)
+    free_gb: float = Field(ge=0, le=4096)
+    smaller: LearningStartingModel | None = None
+
+
 class LearningPersonalModel(WireModel):
     train_in_quiet_hours: bool
     train_where: Literal["this_computer", "hugging_face"]
@@ -4231,7 +4237,7 @@ class LearningPersonalModel(WireModel):
     starting_model_bytes: int = Field(ge=0)
     download_state: LearningDownload
     # Where personal models run (the person's choice) and the choices here.
-    runtime: Literal["ollama", "lmstudio", "llama_cpp", "vllm"] = "ollama"
+    runtime: Literal["row_bot", "ollama", "lmstudio", "llama_cpp", "vllm"] = "row_bot"
     runtimes: list[LearningRuntime] = Field(default_factory=list, max_length=8)
     # The count of usable examples once the engine is installed; null before.
     examples: LearningExamples | None = None
@@ -4243,6 +4249,11 @@ class LearningPersonalModel(WireModel):
     uses: list[LearningUse] = Field(default_factory=list, max_length=4)
     advanced: LearningAdvanced | None = None
     export_folder: str = Field(default="", max_length=1024)
+    # O112: two or more quiet-hours nights without room on the card (else None).
+    room: LearningCardRoom | None = None
+    # O124: a stronger starting model this card trains than the one in use (what setup would recommend
+    # now), offered once in the Personal model view until the person switches or dismisses it (else None).
+    stronger_model: LearningStartingModel | None = None
 
 
 class LearningNeedsYou(WireModel):
@@ -4257,9 +4268,125 @@ class LearningNeedsYou(WireModel):
     title: str = Field(max_length=200)
 
 
+LearningAnyKind = Literal["document_lookups", "structured_transforms", "small_coding", "tool_workflows", "other"]
+
+
+class LearningOvernight(WireModel):
+    """Last night's look for things to improve (L3a; UX §3 Overnight), in counts the client words."""
+
+    # The quiet-hours night it ran (local date).
+    night: str = Field(max_length=16)
+    # done/nothing: it looked; stopped: the person came back, it goes on later that night; claude_plan:
+    # Learning makes no calls through the person's Claude plan (O99); no_model, limit, unavailable, failed.
+    state: Literal["done", "nothing", "stopped", "claude_plan", "no_model", "limit", "unavailable", "failed"]
+    found: int = Field(ge=0)
+    drafted: int = Field(ge=0)
+    # Ideas left out by E9 (they'd have added an address, a link, a password or a permission, or rested on
+    # no feedback from the person).
+    left_out: int = Field(ge=0)
+    needs_examples: int = Field(ge=0)
+    looks_like_bug: int = Field(ge=0)
+    # L3b: the night's tests ("Tested 3 ideas: 1 ready, 2 not better") and the changes automatic mode put
+    # into use by itself (listed with Undo); how the tests ended when they didn't finish.
+    tested: int = Field(default=0, ge=0)
+    ready: int = Field(default=0, ge=0)
+    not_better: int = Field(default=0, ge=0)
+    used: int = Field(default=0, ge=0)
+    tests_state: Literal["stopped", "limit", "claude_plan", "failed"] | None = None
+
+
+class LearningChangeWhy(WireModel):
+    """Why a change was drafted, in counts only (never anyone's words, UX §4)."""
+
+    chats: int = Field(ge=0)
+    corrections: int = Field(ge=0)
+    stops: int = Field(ge=0)
+    retries: int = Field(ge=0)
+    denials: int = Field(ge=0)
+    failures: int = Field(ge=0)
+    # How many of them came from past chats Learning read when it was turned on.
+    imported: int = Field(ge=0)
+
+
+class LearningTestRow(WireModel):
+    """One row of a change's test (UX §4): tasks of a kind, passed without and with the change."""
+
+    label: str = Field(max_length=120)
+    total: int = Field(ge=0)
+    without: int = Field(ge=0)
+    with_change: int = Field(ge=0)
+
+
+class LearningChangeTest(WireModel):
+    """A change's test result, in counts (aggregates only, E10)."""
+
+    # better: Ready; the others are why it isn't used ("No clear difference", "Worse on other tasks").
+    verdict: Literal["better", "no_difference", "worse", "worse_elsewhere"]
+    rows: list[LearningTestRow] = Field(max_length=4)
+    # "Testing used 85K tokens · Small test, so expect some variation."
+    note: str = Field(max_length=300)
+    small: bool
+    tested_at: str | None = Field(default=None, max_length=64)
+    # Experiment details: the mean paired difference on its kind of work, in points, and its 95% interval.
+    difference: float | None = None
+    low: float | None = None
+    high: float | None = None
+
+
+class LearningChangeView(WireModel):
+    """A change Learning drafted (UX §4, §7): waiting to be tested, testing, ready, edited (test again before
+    using), in use (with Undo) or not used."""
+
+    id: str = Field(max_length=128)
+    change: Literal["lesson", "way_of_working", "skill"]
+    title: str = Field(max_length=200)
+    kind: LearningAnyKind
+    state: Literal["waiting_to_test", "testing", "ready", "edited", "in_use", "not_used"]
+    created_at: str = Field(max_length=64)
+    # The lesson or way of working in its own words, or what a skill is for.
+    text: str = Field(max_length=1200)
+    why: LearningChangeWhy
+    # It rests only on tool or web content: it never goes into use by itself (E9).
+    never_automatic: bool
+    # A way of working: what it changes, in plain words ("How Row-Bot uses its tools").
+    setting: str = Field(default="", max_length=120)
+    # A skill edit: its before/after.
+    diff: str = Field(default="", max_length=6000)
+    test: LearningChangeTest | None = None
+    # In use: who put it there (automatic mode: "Used by itself") and when.
+    used_by: Literal["person", "automatic"] | None = None
+    used_at: str | None = Field(default=None, max_length=64)
+    # Not used: tested and not better, turned down ("Don't suggest this again") or undone.
+    not_used: Literal["not_better", "turned_down", "undone"] | None = None
+    # Ready, and the person said Not now: it isn't asked about in Needs you.
+    snoozed: bool = False
+    # A lesson Row-Bot saved for itself during a chat, being tested.
+    agent_saved: bool = False
+
+
+class LearningTestingNow(WireModel):
+    """The change being tested now ("Testing 'Pick documents by ID' on 24 tasks · 9 done")."""
+
+    change_id: str = Field(max_length=128)
+    title: str = Field(max_length=200)
+    done: int = Field(ge=0)
+    total: int = Field(ge=0)
+
+
+class LearningKindState(WireModel):
+    """Where Learning stands on a kind of work (UX §3 "What Row-Bot is learning"), besides models in use."""
+
+    kind: LearningAnyKind
+    state: Literal["testing_change", "needs_examples", "change_ready", "change_in_use"]
+
+
 class LearningData(WireModel):
     exists: bool
     bytes: int = Field(ge=0)
+    # Of ``bytes``: the pictures kept from browser and computer use, and the most they may take (the
+    # oldest go first past it).
+    picture_bytes: int = Field(ge=0)
+    picture_cap_bytes: int = Field(ge=0)
 
 
 class LearningChannelNote(WireModel):
@@ -4276,7 +4403,7 @@ class LearningRunnerStatus(WireModel):
         "train_off", "hugging_face", "no_engine", "no_data", "quiet_hours", "after_dream", "now", "in_use", "chat",
         "workflow", "indexing", "dream", "you", "app_closed", "worker_stopped", "out_of_gpu_memory", "out_of_disk",
         "cannot_resume", "data_unreadable", "engine_error", "learning_off", "learning_paused", "extraction",
-        "planned", "planning", "up_to_date", "gpu_busy", "comparing",
+        "planned", "planning", "up_to_date", "gpu_busy", "memory_busy", "comparing",
     ] | None = None
 
 
@@ -4324,6 +4451,12 @@ class LearningSnapshot(WireModel):
     opted_out_conversations: list[Annotated[str, StringConstraints(max_length=256)]] = Field(max_length=2000)
     owner_unset_channels: list[LearningChannelNote] = Field(max_length=8)
     needs_you: list[LearningNeedsYou] = Field(default_factory=list, max_length=20)
+    # L3a: last night's look for things to improve, the changes it drafted and where each kind of work stands.
+    overnight: LearningOvernight | None = None
+    changes: list[LearningChangeView] = Field(default_factory=list, max_length=50)
+    kinds_learning: list[LearningKindState] = Field(default_factory=list, max_length=5)
+    # L3b: the change being tested now, if any.
+    testing_now: LearningTestingNow | None = None
 
 
 class LearningNamedValue(WireModel):
@@ -4396,16 +4529,37 @@ class LearningTier(WireModel):
     label: str = Field(max_length=32)
     certified: bool
     summary: str = Field(max_length=256)
+    # The computer's memory (RAM and virtual memory) its training needs free here, as measured (O105).
+    system_memory_gb: int | None = Field(default=None, ge=1, le=4096)
+    # The graphics memory its training needs free on the card (its measured peak with a margin, O112).
+    card_need_gb: float | None = Field(default=None, ge=0, le=4096)
+
+
+class LearningMemory(WireModel):
+    # The most RAM and virtual memory can hold (Windows' commit limit; Linux: RAM and swap), and what is
+    # free of it now; ``system`` words the advice ("raise virtual memory" or "add swap").
+    limit_gb: int = Field(ge=0, le=65536)
+    free_gb: int = Field(ge=0, le=65536)
+    system: Literal["windows", "linux", "other"]
 
 
 class LearningHardware(WireModel):
     # old_driver: a card that fits, with an NVIDIA driver older than 570 ("Update your NVIDIA
-    # driver to train here"); container: Row-Bot's Docker image, which doesn't train (O46).
-    state: Literal["gpu", "old_driver", "small_gpu", "no_gpu", "container", "unknown"]
+    # driver to train here"); container: Row-Bot's Docker image, which doesn't train (O46);
+    # low_memory: a card that could train, on a computer whose RAM and virtual memory can't hold
+    # its smallest tier's training (O105; ``tier`` says what it needs).
+    state: Literal["gpu", "old_driver", "small_gpu", "low_memory", "no_gpu", "container", "unknown"]
     gpu: LearningGpu | None
     # The certified recipe tier this computer trains with, and larger ones still being measured.
     tier: LearningTier | None
     larger_tiers: list[LearningTier] = Field(max_length=8)
+    # Certified larger tiers the card fits but the computer's memory can't hold (O105).
+    memory_short: list[LearningTier] = Field(default_factory=list, max_length=8)
+    memory: LearningMemory | None = None
+    # O112: what the card had free when checked, and the tier Row-Bot recommends for it (the largest whose
+    # need fits; None when the card's free memory couldn't be read).
+    card_free_gb: float | None = Field(default=None, ge=0, le=4096)
+    recommended: LearningTier | None = None
     starting_models: list[LearningStartingModel] = Field(max_length=8)
     engine_download_bytes: int = Field(ge=0)
     free_bytes: int | None = Field(default=None, ge=0)
@@ -4420,12 +4574,19 @@ class LearningConversation(WireModel):
 
 
 class LearningLessonView(WireModel):
+    # A lesson Learning put into use: its change; one Row-Bot saved for itself: its memory.
     id: str = Field(max_length=128)
     title: str = Field(max_length=200)
     text: str = Field(max_length=600)
-    # Row-Bot saved it for itself during a chat; nothing has tested it yet.
-    origin: Literal["agent_saved"]
-    status: Literal["not_tested"]
+    # learning: tested and put into use by Learning (E5); agent_saved: Row-Bot saved it for itself during
+    # a chat (Not tested, with Test it).
+    origin: Literal["agent_saved", "learning"]
+    status: Literal["not_tested", "testing", "tested_better", "tested_not_better", "in_use", "off"]
+    kind: LearningAnyKind | None = None
+    # How often recall used it this month ("used 12 times this month").
+    used: int = Field(default=0, ge=0)
+    # The change it is (or its test), for Turn off, Undo and Experiment details.
+    change_id: str = Field(default="", max_length=128)
     updated_at: str = Field(max_length=64)
 
 
@@ -4440,7 +4601,7 @@ class LearningSetupChoices(WireModel):
     monthly_token_limit: int = Field(ge=0, le=1_000_000_000)
     train_in_quiet_hours: bool
     train_where: Literal["this_computer", "hugging_face"]
-    starting_model: Literal["qwen3.5-2b"] = "qwen3.5-2b"
+    starting_model: Literal["qwen3.5-2b", "qwen3.5-9b"] = "qwen3.5-2b"
 
 
 class LearningCommand(WireModel):
@@ -4454,9 +4615,14 @@ class LearningCommand(WireModel):
         "remove_engine", "delete_starting_model", "make_ready", "choose_runtime",
         "compare_version", "stop_compare", "use_version", "keep_version", "keep_not_now", "undo_use",
         "export_version", "delete_version", "save_advanced", "reset_advanced", "retrain_without", "dismiss",
-        "review_version",
+        "review_version", "use_smaller_model", "change_starting_model",
+        "test_change", "use_change", "undo_change", "not_now_change", "dont_suggest_change", "edit_change",
+        "test_lesson", "delete_lesson",
     ]
     setup: LearningSetupChoices | None = None
+    # use_smaller_model (O112): the smaller starting model the Personal model view offered;
+    # change_starting_model (O124): the certified starting model the person chose in Settings.
+    model: Literal["", "qwen3.5-2b", "qwen3.5-9b"] = ""
     # L2c2: the version an action is for, the kind of work, Export…'s folder, Advanced's values and a
     # Needs you line to dismiss.
     version: int | None = Field(default=None, ge=1, le=100_000)
@@ -4465,7 +4631,7 @@ class LearningCommand(WireModel):
     advanced: LearningAdvancedValues | None = None
     item_id: str = Field(default="", max_length=128)
     # choose_runtime: where personal models run.
-    runtime: Literal["", "ollama", "lmstudio", "llama_cpp", "vllm"] = ""
+    runtime: Literal["", "row_bot", "ollama", "lmstudio", "llama_cpp", "vllm"] = ""
     # The training run a training action is for (the one the person saw).
     job_id: str = Field(default="", max_length=128)
     conversation_id: str = Field(default="", max_length=256)
@@ -4474,7 +4640,13 @@ class LearningCommand(WireModel):
     tool_call_id: str = Field(default="", max_length=256)
     category: Literal["wrong_answer", "wrong_tool_or_step", "ignored_instructions", "other"] | None = None
     note: str = Field(default="", max_length=2000)
+    # Teach's optional "What should it have done?" (L3b).
+    answer: str = Field(default="", max_length=2000)
     signal_id: str = Field(default="", max_length=128)
+    # L3b: the change an action is for (a lesson's memory for test_lesson and delete_lesson), and an Edit's
+    # new words.
+    change_id: str = Field(default="", max_length=128)
+    text: str = Field(default="", max_length=4000)
     download: Literal["download", "not_now"] | None = None
 
 
@@ -8059,6 +8231,8 @@ class TranscriptRow(WireModel):
     # Learning (preview): the reply came from the person's personal model ("Answered
     # by your personal model").
     answered_by: Literal["personal_model"] | None = None
+    # Learning (preview): its turn recalled a lesson in use ("Used a lesson").
+    used_lesson: bool = False
 
 
 class Snapshot(WireModel):

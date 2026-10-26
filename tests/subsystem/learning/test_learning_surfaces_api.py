@@ -142,7 +142,7 @@ def test_with_the_preview_flag_the_app_offers_learning_off_with_the_setup_defaul
     model = snapshot["personal_model"]
     assert model["starting_model"]["name"] == "Qwen3.5 2B" and model["download"] == "not_asked"
     assert model["engine"] == "not_downloaded"
-    assert snapshot["data"] == {"exists": False, "bytes": 0}
+    assert snapshot["data"] == {"exists": False, "bytes": 0, "picture_bytes": 0, "picture_cap_bytes": 10_000_000_000}
     # Reading Learning creates nothing.
     assert learning_files(data) == []
 
@@ -369,6 +369,11 @@ def test_delete_learning_data_removes_it_and_switched_off_chats_stay_off(api, no
     _turn_on(client, headers)
     _captured_reply(data, "chat-b", "run-msg-3")
     _ok(_command(client, headers, "opt_out", conversation_id="chat-a"))
+    from row_bot import evolution
+
+    evolution.create_proposal(insight_ids=[], proposal_type="lesson", title="Drafted from chat-b",
+                              rationale="r", status="draft",
+                              payload={"text": "t", "learning": {"attempt_id": "att_1", "state": "waiting_to_test"}})
 
     receipt = _ok(_command(client, headers, "delete_data"))
 
@@ -377,6 +382,40 @@ def test_delete_learning_data_removes_it_and_switched_off_chats_stay_off(api, no
     assert store.find("decision") == [] and store.find("episode") == []
     assert store.opted_out_chats() == ["chat-a"]
     assert receipt["snapshot"]["opted_out_conversations"] == ["chat-a"]
+    assert evolution.list_proposals() == [] and receipt["snapshot"]["changes"] == []  # its drafts went too
+
+
+def test_only_delete_data_ever_deletes_learning_data(api, no_channels, chats, monkeypatch):
+    # The command dispatcher's last branch deletes everything: every other action the API accepts, whatever
+    # its fields, ends in its own branch (or is refused) and never reaches it.
+    import typing
+
+    from row_bot.api.v1 import security
+    from row_bot.api.v1.schemas import LearningCommand
+
+    client, headers, data, _ = api
+    monkeypatch.setattr(security.ClientSecurity, "rate", lambda self, session, lane: None)  # ~70 requests in a row
+    _turn_on(client, headers)
+    _captured_reply(data, "chat-a", "run-msg-3")  # the actions below name chat-b (opt_out removes its own)
+    deleted: list[str] = []
+    monkeypatch.setattr(LearningStore, "delete_all", lambda self: deleted.append("store") or None)
+    actions = [action for action in typing.get_args(LearningCommand.model_fields["action"].annotation)
+               if action != "delete_data"]
+    actions.sort(key=lambda action: action in ("turn_off", "pause"))  # everything else while Learning is on
+    fields = {"version": 1, "kind": "document_lookups", "job_id": "job_unknown", "runtime": "ollama",
+              "folder": "C:/nowhere", "item_id": "item_unknown", "model": "qwen3.5-2b", "download": "not_now",
+              "conversation_id": "chat-b", "message_id": "run-msg-3", "signal_id": "sig_unknown",
+              "category": "wrong_answer", "change_id": "proposal_unknown", "text": "Use the ID"}
+    extra = {"turn_on": {"setup": SETUP},
+             "save_advanced": {"advanced": {"rank": 16, "learning_rate": 0.0002, "epochs": 3, "context": 16384}}}
+
+    reached = 0
+    for action in actions:
+        response = _command(client, headers, action, **fields, **extra.get(action, {}))
+        reached += response.status_code != 422  # the API took it (it reached Learning's own checks)
+
+    assert len(actions) >= 30 and reached == len(actions) and deleted == []
+    assert LearningStore(data).owned_by("chat-a")  # what Learning recorded is still there
 
 
 def test_delete_with_nothing_to_delete_is_refused(api, no_channels):
@@ -434,3 +473,82 @@ def test_lessons_lists_what_row_bot_saved_for_itself_as_not_tested(api, monkeypa
     assert asked == ["self_knowledge"]
     assert [(item.title, item.status, item.origin) for item in page.items] == [
         ("Browser: login page detection", "not_tested", "agent_saved")]
+
+
+# ── L3a: the next look, last night's look and the drafted changes ────────────
+
+
+def test_the_snapshot_says_when_learning_looks_next_and_what_last_night_drafted(api, no_channels, monkeypatch):
+    from datetime import date, datetime
+
+    from row_bot import evolution
+    from row_bot.application import client_learning
+    from row_bot.learning import diagnosis
+
+    client, headers, data, _ = api
+    off = _snapshot(client, headers)
+    assert off["quiet_hours"]["next_look_at"] is None and off["changes"] == [] and off["overnight"] is None
+    _turn_on(client, headers)
+    store = LearningStore(data)
+    night = date.today().isoformat()
+    diagnosis._save(store, diagnosis.NightReport(night, found=3, drafted=1, refused=1, needs_examples=1))
+    evolution.create_proposal(
+        insight_ids=[], proposal_type="lesson", title="Use the current policy", rationale="It read the old one.",
+        payload={"text": "Answer from the newest approved policy and say which.", "kind_of_work": "document_lookups",
+                 "learning": {"issue": "document_lookups:corrected", "attempt_id": "att_1", "state": "waiting_to_test",
+                              "kind_of_work": "document_lookups", "never_automatic": False,
+                              "why": {"chats": 2, "corrections": 2}}}, status="draft")
+
+    snapshot = _snapshot(client, headers)
+
+    assert snapshot["overnight"] == {"night": night, "state": "done", "found": 3, "drafted": 1, "left_out": 1,
+                                     "needs_examples": 1, "looks_like_bug": 0, "tested": 0, "ready": 0,
+                                     "not_better": 0, "used": 0, "tests_state": None}
+    [change] = snapshot["changes"]
+    assert (change["change"], change["kind"], change["state"]) == ("lesson", "document_lookups", "waiting_to_test")
+    assert change["why"]["corrections"] == 2 and change["why"]["chats"] == 2
+    assert snapshot["kinds_learning"] == [{"kind": "document_lookups", "state": "testing_change"}]
+    assert snapshot["quiet_hours"]["next_look_at"] is not None
+    # Tonight's look: in quiet hours before it ran, it is due now; once it ran, the next is tomorrow's.
+    settings = learning.read_settings()
+    at_two = datetime(2026, 10, 23, 2, 0)
+    assert client_learning._next_look(1, 5, settings, None, at_two) == "2026-10-23T02:00"
+    assert client_learning._next_look(1, 5, settings, {"night": "2026-10-23", "state": "done"}, at_two) \
+        == "2026-10-24T01:00"
+    assert client_learning._next_look(1, 5, settings, None, datetime(2026, 10, 23, 14, 0)) == "2026-10-24T01:00"
+
+
+def test_a_tested_change_is_reviewed_used_and_undone_through_the_api(api, no_channels, chats):
+    # L3b: the snapshot lists a tested change as Ready with its test (counts only); Use this change answers
+    # "Now in use." and Undo takes it back out; Edit asks to test again; E9 words are refused at use.
+    from row_bot import evolution
+
+    client, headers, data, _ = api
+    _turn_on(client, headers)
+    learning_block = {"issue": "tool_workflows:corrected", "attempt_id": None, "kind_of_work": "tool_workflows",
+                      "state": "tested", "never_automatic": False, "why": {"chats": 2, "corrections": 2},
+                      "test": {"verdict": "better", "rows": [{"label": "Tool workflows it hadn’t seen", "total": 8,
+                                                              "without": 5, "with": 7}],
+                               "note": "Testing used 400K tokens.", "small": True, "tested_at": 1.0,
+                               "own": {"problems": 8, "difference": 0.25, "low": 0.0, "high": 0.5}}}
+    change = evolution.create_proposal(insight_ids=[], proposal_type="behaviour", title="Check the calendar first",
+                                       rationale="r", status="ready", dedupe=False,
+                                       payload={"text": "Check the calendar before booking.", "slot": "tool_guidance",
+                                                "kind_of_work": "tool_workflows", "learning": learning_block})["id"]
+
+    [view] = _snapshot(client, headers)["changes"]
+    assert (view["state"], view["change"], view["setting"]) == ("ready", "way_of_working", "How Row-Bot uses its tools")
+    assert view["test"]["rows"] == [{"label": "Tool workflows it hadn’t seen", "total": 8, "without": 5,
+                                     "with_change": 7}]
+    assert view["test"]["difference"] == 25.0 and view["test"]["verdict"] == "better"
+
+    used = _ok(_command(client, headers, "use_change", change_id=change))
+    assert used["summary"] == "Now in use."
+    [view] = used["snapshot"]["changes"]
+    assert view["state"] == "in_use" and view["used_by"] == "person"
+    assert {item["state"] for item in used["snapshot"]["kinds_learning"]} == {"change_in_use"}
+    undone = _ok(_command(client, headers, "undo_change", change_id=change))
+    assert undone["snapshot"]["changes"][0]["state"] == "not_used"
+    assert undone["snapshot"]["changes"][0]["not_used"] == "undone"
+    refused = _command(client, headers, "use_change", change_id=change)
+    assert refused.status_code == 409 and refused.json()["code"] == "learning_change_changed"

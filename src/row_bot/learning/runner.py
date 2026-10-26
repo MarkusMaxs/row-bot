@@ -1,7 +1,12 @@
-"""Learning's quiet-hours runner (L2a; L3a adds diagnosis to the same slot).
+"""Learning's quiet-hours runner (L2a; L3a adds the nightly look for things to improve).
 
 Quiet hours are Dream Cycle's hours (D12). Once a minute while Learning is on the runner
-looks at what is due, after Dream:
+looks at what is due, after Dream, in this order:
+
+- **the night's look for things to improve** (L3a, :class:`NightLook`): once a night, when nobody
+  is using Row-Bot, the vault takes its share of new work and held-out corrections first, then
+  ``diagnosis`` groups issues and drafts changes. It stops before its next model call when the
+  person comes back or Learning is paused, and goes on later that night;
 
 - a personal-model training run starts or continues when **Train during quiet hours**
   is on, training happens on this computer, the training engine and its weights are
@@ -24,6 +29,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -59,6 +65,37 @@ def _read_json(path: Path) -> object:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
+
+
+# O112: quiet-hours nights training waited for room on the graphics card (newest last, a week at most); after
+# ROOM_NIGHTS of them the Personal model view says so and offers the next smaller model. Cleared when a run starts.
+ROOM_FILE = "card_room.json"
+ROOM_NIGHTS = 2
+
+
+def _room_path(root: Path | None = None) -> Path:
+    from row_bot.learning.training import jobs as jobs_module
+
+    return jobs_module.models_dir(root) / ROOM_FILE
+
+
+def card_room(root: Path | None = None) -> dict | None:
+    """The nights training waited for room on the card: ``nights`` (dates), the card's ``free_mib`` and the
+    run's ``need_mib`` when last seen, and the ``model`` it waited to train. None when it never waited."""
+
+    data = _read_json(_room_path(root))
+    if not isinstance(data, dict) or not isinstance(data.get("nights"), list):
+        return None
+    nights = [night for night in data["nights"] if isinstance(night, str)][-7:]
+    return {"nights": nights, "free_mib": int(data.get("free_mib") or 0), "need_mib": int(data.get("need_mib") or 0),
+            "model": str(data.get("model") or "")} if nights else None
+
+
+def forget_card_room(root: Path | None = None) -> None:
+    try:
+        _room_path(root).unlink(missing_ok=True)
+    except OSError:
+        logger.debug("Learning couldn't forget the nights it waited for the card", exc_info=True)
 
 
 class QuietHours:
@@ -126,13 +163,176 @@ class QuietHours:
         return (self.now() - began).total_seconds() >= DREAM_GRACE_SECONDS
 
 
+MORNING_KEY = "changes.morning"
+
+
+class NightLook:
+    """The night's look for things to improve (L3a) and its tests (L3b): after Dream, while nobody uses
+    Row-Bot, before training. ``client`` and ``check_model`` are the diagnosis call's, ``tester`` makes the
+    changes' tester (tests pass fakes)."""
+
+    def __init__(self, *, lease: Any, root: Path | None = None, hours: QuietHours | None = None,
+                 client: Any = None, check_model: Callable[[], None] | None = None,
+                 clock: Callable[[], float] | None = None, tester: Callable[[], Any] | None = None) -> None:
+        self.lease = lease
+        self._root = root
+        self.hours = hours or QuietHours(root)
+        self.client = client
+        self.check_model = check_model
+        self.clock = clock
+        self.tester = tester
+
+    def _store(self) -> Any:
+        from row_bot.learning.store import LearningStore
+
+        return LearningStore(self._root, clock=self.clock) if self.clock is not None else LearningStore(self._root)
+
+    def tonight(self) -> str | None:
+        began = self.hours.started_at()
+        return began.date().isoformat() if began is not None else None
+
+    def looked_tonight(self) -> bool:
+        from row_bot.learning import diagnosis
+
+        night = self.tonight()
+        found = diagnosis.last_night(self._store()) if gate.store_exists(self._root) else None
+        return bool(night and found and found.get("night") == night and found.get("state") != "stopped")
+
+    def tested_tonight(self) -> bool:
+        """Tonight's tests finished, or nothing waits to be tested (L3b)."""
+
+        from row_bot.learning import changes
+
+        night = self.tonight()
+        found = changes.last_tests(self._store()) if gate.store_exists(self._root) else None
+        if found and found.get("night") == night and found.get("state") not in ("stopped",):
+            return True
+        try:
+            return not changes.due()
+        except Exception:  # noqa: BLE001 - the changes can't be read: nothing to test tonight
+            return True
+
+    def done_tonight(self) -> bool:
+        return self.looked_tonight() and self.tested_tonight()
+
+    def due(self) -> bool:
+        """Learning is on, it is quiet hours after Dream, and tonight's look hasn't finished."""
+
+        if not gate.is_enabled(self._root) or not gate.store_exists(self._root):
+            return False
+        if not self.hours.inside() or not self.hours.dream_done():
+            return False
+        return not self.done_tonight()
+
+    def tick(self) -> Any:
+        """Run tonight's look when it is due and the computer is free; returns its report, else None."""
+
+        if not self.due() or not self.lease.read().free:
+            return None
+        night = self.tonight()
+        if night is None:
+            return None
+        report = self._look(night) if not self.looked_tonight() else None
+        if self.looked_tonight() and not self.tested_tonight():
+            self._test(night)
+        return report
+
+    def _stop(self) -> bool:
+        return not gate.is_enabled(self._root) or not self.lease.read().free
+
+    def morning(self, notify: Callable[[str], None] | None = None) -> str | None:
+        """The morning summary (UX "Notifications: at most once a morning"): once quiet hours are over, last
+        night's changes ready to review and those put into use by themselves, in one quiet notice. Nothing
+        when there is nothing to say; never twice for one night. Returns what it said."""
+
+        if self.hours.inside() or not gate.is_enabled(self._root) or not gate.store_exists(self._root):
+            return None
+        from row_bot.learning import changes
+
+        store = self._store()
+        tests = changes.last_tests(store) or {}
+        night = str(tests.get("night") or "")
+        if not night or store.meta_value(MORNING_KEY, "") == night:
+            return None
+        from datetime import date
+
+        try:
+            if (self.hours.now().date() - date.fromisoformat(night)).days > 1:
+                return None
+        except ValueError:
+            return None
+        ready, used = int(tests.get("ready") or 0) - int(tests.get("used") or 0), int(tests.get("used") or 0)
+        parts = []
+        if ready > 0:
+            parts.append(f"{ready} change{'s' if ready != 1 else ''} ready to review")
+        if used > 0:
+            parts.append(f"{used} change{'s' if used != 1 else ''} put into use by "
+                         f"{'themselves' if used != 1 else 'itself'} (Undo in Learning)")
+        store.set_meta_values({MORNING_KEY: night})
+        if not parts:
+            return None
+        text = "Overnight: " + " · ".join(parts)
+        if notify is not None:
+            notify(text)
+        else:
+            from row_bot import notifications
+
+            notifications.notify("Learning", text, sound="none", toast_type="info", source="learning",
+                                 requested=True)
+        return text
+
+    def _look(self, night: str) -> Any:
+        from row_bot.learning import diagnosis, holdout
+
+        store = self._store()
+        try:
+            holdout.mark_corrections(store)  # first: drafting never sees a correction held out tonight
+        except Exception:
+            logger.exception("Learning couldn't hold out tonight's corrections; it looks again tomorrow night")
+            diagnosis.note_night(store, night, "failed")
+            return None
+        try:
+            from row_bot.learning import evaluation
+
+            evaluation.refresh_audit(store=store, asked_by="quiet hours")
+        except Exception:
+            logger.warning("Learning couldn't refresh its hidden tests tonight", exc_info=True)
+        client = self.client
+        if client is None:
+            from row_bot.learning.calls import LedgerModelClient
+
+            client = LedgerModelClient()
+        try:
+            return diagnosis.run(store, client=client, night=night, should_stop=self._stop,
+                                 check_model=self.check_model or diagnosis.check_default_model)
+        except Exception:
+            logger.exception("Learning's look for things to improve failed")
+            diagnosis.note_night(store, night, "failed")
+            return None
+
+    def _test(self, night: str) -> Any:
+        """Tonight's drafts tested (L3b), under the same stop rule as the look; training waits for them."""
+
+        from row_bot.learning import changes, diagnosis
+
+        try:
+            tester = self.tester() if self.tester is not None else changes.Tester(
+                self._root, store=self._store(), client=self.client,
+                check_model=self.check_model or diagnosis.check_default_model)
+            return changes.test_waiting(tester, night=night, should_stop=self._stop)
+        except Exception:
+            logger.exception("Learning couldn't test tonight's changes")
+            return None
+
+
 class LearningRunner:
     """Decides what is due and asks the supervisor to start it. With a ``planner`` (L2c) it plans
-    runs from the dataset, and with ``releases`` it makes each finished run a version."""
+    runs from the dataset, and with ``releases`` it makes each finished run a version. With a
+    ``look`` (L3a) the night's look for things to improve runs first."""
 
     def __init__(self, supervisor: TrainingSupervisor, *, root: Path | None = None,
                  hours: QuietHours | None = None, planner: Any = None, releases: Any = None,
-                 comparisons: Any = None, unloader: Any = None) -> None:
+                 comparisons: Any = None, unloader: Any = None, look: NightLook | None = None) -> None:
         self.supervisor = supervisor
         self._root = root
         self.hours = hours or QuietHours(root)
@@ -141,6 +341,7 @@ class LearningRunner:
         # L2c2: a ready version's comparison, and O51's unloading of Row-Bot's own resident model.
         self.comparisons = comparisons
         self.unloader = unloader
+        self.look = look
         self._last = RunnerStatus("off")
         self._lock = threading.Lock()
 
@@ -226,9 +427,22 @@ class LearningRunner:
         if not act:
             if not self.supervisor.gpu_free():
                 return RunnerStatus("waiting", "gpu_busy")  # another app holds the card's memory
+            if not self.supervisor.memory_free():
+                return RunnerStatus("waiting", "memory_busy")  # other apps hold the computer's memory (O105)
             return RunnerStatus("scheduled", "now")
         if self.comparisons is not None and self.comparisons.running():
             return RunnerStatus("waiting", "comparing")  # a version's comparison has the card
+        # Row-Bot's own model server (O75) gives the card back first: it holds personal models only while
+        # they answer, and nothing answers now (training starts only when no chat runs, the lease).
+        server = sys.modules.get("row_bot.learning.training.llama_server")
+        if server is not None:
+            try:
+                if server.release_card():
+                    from row_bot.learning.training import hardware
+
+                    hardware.forget_memory_reading()
+            except Exception:
+                logger.debug("Learning couldn't stop its model server for training", exc_info=True)
         if (trigger == "quiet_hours" and self.unloader is not None and not self.supervisor.gpu_free()
                 and self.hours.inside()):
             # O51: in quiet hours, with nobody using Row-Bot for 30 minutes, Row-Bot's own resident
@@ -243,10 +457,39 @@ class LearningRunner:
         try:
             self.supervisor.start(job, trigger)
         except TrainingError as error:
-            if error.code == "gpu_busy":
-                return RunnerStatus("waiting", "gpu_busy")
+            if error.code in ("gpu_busy", "memory_busy"):
+                if error.code == "gpu_busy" and trigger == "quiet_hours":
+                    self._note_no_room()
+                return RunnerStatus("waiting", error.code)
             return RunnerStatus("nothing_to_do", "no_data" if error.code == "nothing_to_train" else error.code)
+        forget_card_room(self._root)
         return RunnerStatus("training")
+
+    def _note_no_room(self) -> None:
+        """Tonight training waited for room on the card (O112): noted once a night, with what was free."""
+
+        began = self.hours.started_at()
+        if began is None:
+            return
+        night = began.date().isoformat()
+        found = card_room(self._root) or {"nights": []}
+        if night in found["nights"]:
+            return
+        from row_bot import learning as gate
+        from row_bot.learning import atomic
+        from row_bot.learning.training import hardware
+
+        reading = hardware.gpu_memory()
+        need = hardware.training_need_mib(hardware.peek()) or 0
+        record = {"nights": [*found["nights"], night][-7:],
+                  "free_mib": max(0, reading[1] - reading[0]) if reading else 0, "need_mib": int(need),
+                  "model": gate.read_settings(self._root).starting_model}
+        try:
+            path = _room_path(self._root)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            atomic.write_text(path, json.dumps(record))
+        except OSError:
+            logger.debug("Learning couldn't note a night without room on the card", exc_info=True)
 
     def status(self) -> RunnerStatus:
         """What is due now, without acting (the snapshot reads this)."""
@@ -261,8 +504,18 @@ class LearningRunner:
         """One pass: start or continue what is due, and make a finished run a version."""
 
         with self._lock:
+            if self.look is not None:
+                try:
+                    self.look.tick()  # Dream → the night's look and its tests → training
+                    self.look.morning()
+                except Exception:
+                    logger.exception("Learning's look for things to improve failed")
             try:
-                self._last = self._decide(act=True)
+                if self.look is not None and self.look.due():
+                    # Tonight's look hasn't finished (the person came back): training waits for it.
+                    self._last = RunnerStatus("waiting", "in_use")
+                else:
+                    self._last = self._decide(act=True)
             except Exception:
                 logger.exception("Learning's quiet-hours runner failed")
             if self.releases is not None:
@@ -306,7 +559,8 @@ def get() -> LearningRunner:
             supervisor.dataset = LearningDataset(planner)
             comparisons = Comparisons(lease=supervisor.lease, training=supervisor.training)
             _runner = LearningRunner(supervisor, planner=planner, releases=ReleaseMaker(jobs=supervisor.jobs),
-                                     comparisons=comparisons, unloader=OwnModelUnloader())
+                                     comparisons=comparisons, unloader=OwnModelUnloader(),
+                                     look=NightLook(lease=supervisor.lease))
         return _runner
 
 
@@ -315,9 +569,10 @@ def loaded() -> LearningRunner | None:
 
 
 def configure(*, engine=None, dataset=None, lease=None, planner=None, releases=None,
-              comparisons=None) -> TrainingSupervisor:
-    """Plug in the training engine, the dataset compiler, the lease, the planner, the release maker or
-    the comparisons (L2b, L2c, L2c2; the fake ones in tests and the browser fixture)."""
+              comparisons=None, look=None) -> TrainingSupervisor:
+    """Plug in the training engine, the dataset compiler, the lease, the planner, the release maker,
+    the comparisons or the night's look (L2b, L2c, L2c2, L3a; the fake ones in tests and the browser
+    fixture)."""
 
     runner = get()
     supervisor = runner.supervisor
@@ -327,8 +582,12 @@ def configure(*, engine=None, dataset=None, lease=None, planner=None, releases=N
             runner.planner.engine = engine
     if dataset is not None:
         supervisor.dataset = dataset
+    if look is not None:
+        runner.look = look
     if lease is not None:
         supervisor.lease = lease
+        if runner.look is not None:
+            runner.look.lease = lease
     if planner is not None:
         runner.planner = planner
     if releases is not None:
@@ -447,6 +706,7 @@ __all__ = [
     "DREAM_GRACE_SECONDS",
     "INTERVAL_SECONDS",
     "LearningRunner",
+    "NightLook",
     "QuietHours",
     "RunnerStatus",
     "configure",

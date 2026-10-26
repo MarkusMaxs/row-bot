@@ -15,6 +15,8 @@ import {
   ENGINE_TELEMETRY,
   limitMeaning,
   limitOptions,
+  memoryAdvice,
+  memoryNeedWords,
   quietHoursWords,
   sizeWords,
 } from './words';
@@ -38,6 +40,22 @@ export function defaultChoices(
     train_where: snapshot.personal_model.train_where,
     starting_model: 'qwen3.5-2b',
   };
+}
+
+/**
+ * O112: when the card's free memory can't hold its own tier's model, say why Row-Bot recommends a
+ * smaller one ("Your graphics card has about 6 GB free now…, so Row-Bot recommends Qwen3.5 2B").
+ */
+function roomNote(hardware: LearningHardware): string {
+  const recommended = hardware.recommended;
+  const tier = hardware.tier;
+  if (!recommended || !tier || recommended.id === tier.id) return '';
+  const model = hardware.starting_models[0]?.name ?? 'a smaller model';
+  const free = hardware.card_free_gb ?? 0;
+  const larger = tier.card_need_gb
+    ? ` Larger models need about ${Math.ceil(tier.card_need_gb)} GB free on it.`
+    : '';
+  return `Your graphics card has about ${Math.floor(free)} GB free now (your display and other apps use the rest), so Row-Bot recommends ${model}.${larger}`;
 }
 
 /** What this computer can do, in words, while the check runs and after. */
@@ -72,8 +90,37 @@ function HardwareRows({
         </div>
       </div>
     );
+  if (hardware.state === 'low_memory' && hardware.tier) {
+    // O105: the card could train, but RAM and virtual memory together can't hold its smallest run.
+    return (
+      <div className="learning-stack-tight">
+        <p>
+          <span className="learning-label">This computer: </span>
+          {hardware.gpu?.label}
+        </p>
+        <p>
+          This computer’s memory can’t hold training yet: it needs about{' '}
+          {hardware.tier.system_memory_gb} GB of RAM and virtual memory, and
+          this computer has {hardware.memory?.limit_gb} GB.
+        </p>
+        <p className="learning-muted">
+          {memoryAdvice(hardware.memory?.system)}
+        </p>
+        <div className="learning-actions-inline">
+          <Button className="small" onClick={onCheckAgain}>
+            Check again
+          </Button>
+        </div>
+      </div>
+    );
+  }
   if (hardware.state === 'gpu' && hardware.tier) {
-    const model = hardware.starting_models[0];
+    // Every certified model this card trains, its own tier's first (the recommendation, D3).
+    const models = hardware.starting_models;
+    // O105: larger tiers the card fits but the computer's memory can't hold (the smallest one's need).
+    const short = hardware.memory_short?.[0];
+    // What the recommended model's training needs of the computer's memory (O105, O112).
+    const needs = (hardware.recommended ?? hardware.tier).system_memory_gb;
     return (
       <div className="learning-stack-tight">
         <p>
@@ -81,12 +128,31 @@ function HardwareRows({
           {hardware.gpu?.label}
         </p>
         <p>{hardware.tier.summary}</p>
+        {roomNote(hardware) && (
+          <p className="learning-muted">{roomNote(hardware)}</p>
+        )}
+        {needs && <p className="learning-muted">{memoryNeedWords(needs)}</p>}
+        {short && hardware.memory && (
+          <div className="learning-stack-tight">
+            <p className="learning-muted">
+              Larger models need about {short.system_memory_gb} GB of RAM and
+              virtual memory to train, and this computer has{' '}
+              {hardware.memory.limit_gb} GB.{' '}
+              {memoryAdvice(hardware.memory.system)}
+            </p>
+            <div className="learning-actions-inline">
+              <Button className="small" onClick={onCheckAgain}>
+                Check again
+              </Button>
+            </div>
+          </div>
+        )}
         {hardware.larger_tiers.map((tier) => (
           <p className="learning-muted" key={tier.id}>
             {tier.summary}
           </p>
         ))}
-        {model && (
+        {models.length > 0 && (
           <label className="learning-field" htmlFor={modelId}>
             <span className="learning-label">Starting model</span>
             <Select
@@ -100,10 +166,12 @@ function HardwareRows({
                 })
               }
             >
-              <option value={model.id}>
-                {model.name} · {model.licence} ·{' '}
-                {sizeWords(model.download_bytes)} download
-              </option>
+              {models.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.name} · {model.licence} ·{' '}
+                  {sizeWords(model.download_bytes)} download
+                </option>
+              ))}
             </Select>
           </label>
         )}
@@ -225,8 +293,18 @@ export function LearningSetupSheet({
   const check = (refresh = false) => {
     setHardwareError('');
     if (refresh) setHardware(null);
-    io.hardware(refresh).then(setHardware, (cause: unknown) =>
-      setHardwareError(clientError(cause).message),
+    io.hardware(refresh).then(
+      (found) => {
+        setHardware(found);
+        // The card's own tier's model is the recommendation (D3), chosen when the card is read.
+        const recommended = found.starting_models[0]?.id as
+          LearningSetupChoices['starting_model'] | undefined;
+        if (recommended)
+          setChoices((current) =>
+            current ? { ...current, starting_model: recommended } : current,
+          );
+      },
+      (cause: unknown) => setHardwareError(clientError(cause).message),
     );
   };
   useEffect(() => {

@@ -292,3 +292,45 @@ def test_the_trainer_keeps_standard_input_to_itself(tmp_path):
 
     seen = json.loads(done.stdout)
     assert seen == {"first": "frame one\n", "own": ["", ""], "rest": "frame two\n"}
+
+
+def test_the_export_merges_each_adapted_layer_a_file_at_a_time_and_keeps_everything_else(tmp_path):
+    """L2x: a 27B model's 55 GB never sits in memory to merge (one weights file at a time)."""
+
+    torch = pytest.importorskip("torch")
+    tensors = pytest.importorskip("safetensors.torch")
+    model, adapter = tmp_path / "model", tmp_path / "adapter"
+    model.mkdir()
+    adapter.mkdir()
+    q = "model.language_model.layers.0.self_attn.q_proj.weight"
+    weight = torch.arange(12, dtype=torch.float32).reshape(3, 4).to(torch.bfloat16)
+    tensors.save_file({q: weight, "mtp.fc.weight": torch.ones(2, 2, dtype=torch.bfloat16)},
+                      str(model / "model-00001-of-00002.safetensors"))
+    tensors.save_file({"model.language_model.layers.1.mlp.down_proj.weight": torch.zeros(3, 4, dtype=torch.bfloat16)},
+                      str(model / "model-00002-of-00002.safetensors"))
+    (model / "config.json").write_text("{}", encoding="utf-8")
+    (model / "tokenizer.json").write_text("{}", encoding="utf-8")
+    a = torch.tensor([[1.0, 0, 0, 0], [0, 1.0, 0, 0]])
+    b = torch.tensor([[1.0, 0], [0, 1.0], [1.0, 1.0]])
+    prefix = "base_model.model.model.language_model.layers.0.self_attn.q_proj"
+    tensors.save_file({f"{prefix}.lora_A.weight": a, f"{prefix}.lora_B.weight": b},
+                      str(adapter / "adapter_model.safetensors"))
+    (adapter / "adapter_config.json").write_text(json.dumps({"r": 2, "lora_alpha": 4}), encoding="utf-8")
+
+    merged = tmp_path / "merged"
+    assert trainer.merge_streaming(model, adapter, merged) == 1
+
+    first = tensors.load_file(str(merged / "model-00001-of-00002.safetensors"))
+    assert first[q].dtype == torch.bfloat16
+    assert torch.equal(first[q], (weight.float() + 2.0 * (b @ a)).to(torch.bfloat16))  # W + alpha/r * B @ A
+    assert torch.equal(first["mtp.fc.weight"], torch.ones(2, 2, dtype=torch.bfloat16))  # not adapted: as it was
+    second = tensors.load_file(str(merged / "model-00002-of-00002.safetensors"))
+    assert torch.equal(second["model.language_model.layers.1.mlp.down_proj.weight"], torch.zeros(3, 4,
+                                                                                                 dtype=torch.bfloat16))
+    assert (merged / "config.json").is_file() and (merged / "tokenizer.json").is_file()
+
+    elsewhere = "base_model.model.model.language_model.layers.9.self_attn.q_proj"
+    tensors.save_file({f"{elsewhere}.lora_A.weight": a, f"{elsewhere}.lora_B.weight": b},
+                      str(adapter / "adapter_model.safetensors"))
+    with pytest.raises(ValueError):  # an adapter for layers this model doesn't have
+        trainer.merge_streaming(model, adapter, tmp_path / "merged-2")

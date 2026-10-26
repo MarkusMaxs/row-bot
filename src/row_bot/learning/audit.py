@@ -6,6 +6,10 @@
 - Replay tasks from the person's own recent work: held-out model-call decisions with
   their captured request and the action to compare against, copied in by
   :meth:`AuditVault.refresh`.
+- Held-out corrections (O87): every 2nd confirmed correction (``holdout``), with its
+  corrected action as the reference, copied in by :meth:`AuditVault.hold_corrections`.
+- Only the main model's work (amendment A5): evaluation never offers a decision the personal
+  model made, and :meth:`AuditVault.retire_personal` retires one held before that rule.
 
 **Where**: its own file, ``learning/audit.db`` in the data folder (never ``learning.db``),
 created only while Learning is on. ``secure_delete`` is on, so purged tasks are
@@ -356,8 +360,10 @@ class AuditVault:
             if fresh:
                 self._set_meta(connection, "horizon", repr(fresh[-1].created_at))
             self._set_meta(connection, "seen", seen)
+            # The cap is the uncorrected decisions' (every 4th); held-out corrections are kept apart (O87).
             active = [str(row[0]) for row in connection.execute(
-                "SELECT id FROM tasks WHERE retired_at IS NULL ORDER BY source_at DESC, id DESC")]
+                "SELECT id FROM tasks WHERE retired_at IS NULL AND origin = 'replay'"
+                " ORDER BY source_at DESC, id DESC")]
             retire = active[MAX_REPLAY_TASKS:]
             for task_id in retire:
                 connection.execute("UPDATE tasks SET retired_at = ?, content = NULL WHERE id = ?", (now, task_id))
@@ -365,15 +371,105 @@ class AuditVault:
             _log(connection, now, asked_by, caller, "refresh", f"added {len(added)}", len(added))
         return RefreshReport(len(fresh), tuple(added), len(retire), held)
 
-    def replay_tasks(self, *, asked_by: str) -> list[dict[str, Any]]:
-        """The active replay tasks' content, for evaluation to run. Logged."""
+    def hold_corrections(self, candidates: Sequence[ReplayCandidate], *, asked_by: str) -> tuple[str, ...]:
+        """Hold corrected decisions (O87) with their corrected action as the reference. Each one
+        ``holdout`` held out comes here once it has a corrected action (no every-4th draw: holdout
+        already chose every 2nd). A decision the vault already took as uncorrected, and that the
+        person corrected later, becomes a correction task. Returns the ids added or converted."""
+
+        caller = require_reader(_SEAL, "hold_corrections")
+        now = float(self._clock())
+        added: list[str] = []
+        with self._open() as connection:
+            for item in sorted(candidates, key=lambda found: (found.created_at, found.decision_id)):
+                row = connection.execute("SELECT origin FROM tasks WHERE id = ?", (item.decision_id,)).fetchone()
+                content = json.dumps(dict(item.content), sort_keys=True, ensure_ascii=False)
+                if row is None:
+                    connection.execute(
+                        "INSERT INTO tasks (id, origin, kind_of_work, thread_id, conversation_id, source_at,"
+                        " added_at, content) VALUES (?, 'correction', ?, ?, ?, ?, ?, ?)",
+                        (item.decision_id, item.kind_of_work, item.thread_id, item.conversation_id, item.created_at,
+                         now, content))
+                elif row[0] == "replay":
+                    connection.execute(
+                        "UPDATE tasks SET origin = 'correction', content = ?, retired_at = NULL, added_at = ?"
+                        " WHERE id = ?", (content, now, item.decision_id))
+                else:
+                    continue
+                added.append(item.decision_id)
+            _log(connection, now, asked_by, caller, "refresh", f"added {len(added)} corrections", len(added))
+        return tuple(added)
+
+    def correction_ids(self) -> set[str]:
+        """The corrected decisions the vault holds (ids only, for evaluation's refresh)."""
+
+        require_reader(_SEAL, "correction_ids")
+        if not vault_exists(self._root):
+            return set()
+        with _connect(self._root, create=False) as connection:
+            if connection is None:
+                return set()
+            return {str(row[0]) for row in connection.execute("SELECT id FROM tasks WHERE origin = 'correction'")}
+
+    def retire_corrected(self, decision_ids: Iterable[str], *, asked_by: str) -> int:
+        """Retire uncorrected tasks whose decision the person has since corrected, stopped or retried:
+        their captured action is no longer a reference (O19's eligibility: no signal). Returns how many."""
+
+        caller = require_reader(_SEAL, "retire_corrected")
+        wanted = sorted({str(item) for item in decision_ids if item})
+        if not wanted or not vault_exists(self._root):
+            return 0
+        now = float(self._clock())
+        retired = 0
+        with self._open() as connection:
+            for start in range(0, len(wanted), 400):
+                chunk = wanted[start:start + 400]
+                marks = ", ".join("?" for _ in chunk)
+                retired += connection.execute(
+                    f"UPDATE tasks SET retired_at = ?, content = NULL WHERE origin = 'replay' AND retired_at IS NULL"
+                    f" AND id IN ({marks})", (now, *chunk)).rowcount
+            if retired:
+                _log(connection, now, asked_by, caller, "refresh", f"retired {retired} corrected later", retired)
+        return retired
+
+    def retire_personal(self, decision_ids: Iterable[str], *, asked_by: str) -> int:
+        """Retire held tasks of any origin that rest on the personal model's work (amendment A5: the vault's
+        references are the main model's). They keep the ``personal`` origin, so they are never taken again,
+        and their decisions stay held out. Returns how many were retired now."""
+
+        caller = require_reader(_SEAL, "retire_personal")
+        wanted = sorted({str(item) for item in decision_ids if item})
+        if not wanted or not vault_exists(self._root):
+            return 0
+        now = float(self._clock())
+        retired = 0
+        with self._open() as connection:
+            for start in range(0, len(wanted), 400):
+                chunk = wanted[start:start + 400]
+                marks = ", ".join("?" for _ in chunk)
+                retired += connection.execute(
+                    f"UPDATE tasks SET origin = 'personal', retired_at = ?, content = NULL"
+                    f" WHERE retired_at IS NULL AND id IN ({marks})", (now, *chunk)).rowcount
+                # One the size cap retired before keeps its time; it is marked too, so it is never taken again.
+                connection.execute(f"UPDATE tasks SET origin = 'personal' WHERE origin != 'personal' AND id IN ({marks})",
+                                   chunk)
+            if retired:
+                _log(connection, now, asked_by, caller, "refresh", f"retired {retired} personal model", retired)
+        return retired
+
+    def replay_tasks(self, *, asked_by: str, origin: str | None = None) -> list[dict[str, Any]]:
+        """The active replay tasks' content, for evaluation to run (``origin``: ``replay`` for the
+        uncorrected decisions, ``correction`` for the held-out corrections; None for both). Logged."""
 
         caller = require_reader(_SEAL, "replay_tasks")
+        where = "" if origin is None else " AND origin = ?"
         with self._open() as connection:
             rows = connection.execute(
                 "SELECT id, kind_of_work, thread_id, conversation_id, source_at, content FROM tasks"
-                " WHERE retired_at IS NULL AND content IS NOT NULL ORDER BY source_at, id").fetchall()
-            _log(connection, self._clock(), asked_by, caller, "run", "replay tasks", len(rows))
+                " WHERE retired_at IS NULL AND content IS NOT NULL" + where + " ORDER BY source_at, id",
+                () if origin is None else (origin,)).fetchall()
+            _log(connection, self._clock(), asked_by, caller, "run",
+                 "replay tasks" if origin is None else f"{origin} tasks", len(rows))
         found = []
         for row in rows:
             try:
@@ -423,10 +519,14 @@ class AuditVault:
         with self._open() as connection:
             active = int(connection.execute(
                 "SELECT COUNT(*) FROM tasks WHERE retired_at IS NULL AND content IS NOT NULL").fetchone()[0])
+            corrected = int(connection.execute(
+                "SELECT COUNT(*) FROM tasks WHERE retired_at IS NULL AND content IS NOT NULL"
+                " AND origin = 'correction'").fetchone()[0])
             retired = int(connection.execute(
                 "SELECT COUNT(*) FROM tasks WHERE retired_at IS NOT NULL").fetchone()[0])
             _log(connection, self._clock(), asked_by, caller, "summary", "counts")
-        return {"pack_tasks": len(hidden.TASKS), "replay_tasks": active, "retired_replay_tasks": retired}
+        return {"pack_tasks": len(hidden.TASKS), "replay_tasks": active, "correction_tasks": corrected,
+                "retired_replay_tasks": retired}
 
     def looks(self, *, limit: int = 200) -> list[Look]:
         """The newest looks first."""

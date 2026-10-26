@@ -22,7 +22,10 @@ on. It leaves when idle, when Learning is turned off (dropping what is queued) a
 on :func:`shutdown`. It never keeps a database handle between batches.
 
 - Per turn, once, before anything of it is written, it decides scope (D27,
-  ``scope.resolve``): denied means nothing of that turn is written. It finds the
+  ``scope.resolve``): denied means nothing of that turn is written. A chat that
+  is or was incognito (N11) is denied; one that turns incognito while its turn
+  runs is asked again with every later batch, and nothing more of that turn is
+  written (what was written before stays, as memories saved before do). It finds the
   conversation a delegated Agent's thread belongs to (``conversation_id``), the
   parent episode, and the reply the person's message followed (the next-message
   marker, ``Episode.follows_decision_id``).
@@ -30,6 +33,11 @@ on :func:`shutdown`. It never keeps a database handle between batches.
   content-addressed blob, and a request is the ordered list of its messages'
   hashes plus the tool schemas by hash (:data:`REQUEST_FORMAT`), so the prefix a
   turn's calls share is stored once.
+- A picture in a message (5.3's page picture after a browser or computer action)
+  is moved out before redaction (``pictures``): its original bytes are a blob of
+  their own, named in the message and in the request (``pictures``), so redaction
+  never reads picture data and no message blob holds base64. Past the size cap
+  (``store.PICTURE_CAP_BYTES``) the oldest pictures are dropped.
 - A batch is written with ``put_blobs`` then ``put_many`` (one transaction each).
   ``LearningStoreError("learning_off")`` drops the queue; records of a chat opted
   out meanwhile are skipped by the store.
@@ -42,6 +50,7 @@ reasoning moved out of the answer, F32), the kept version is
 
 from __future__ import annotations
 
+import hashlib
 import itertools
 import json
 import logging
@@ -55,13 +64,12 @@ from pathlib import Path
 from typing import Any
 
 from row_bot import learning as gate
-from row_bot.learning import redaction
+from row_bot.learning import pictures, redaction
 from row_bot.learning.contracts import Decision, Episode, Record, Signal, new_id, valid_thread_id
-from row_bot.learning.store import LearningStore, LearningStoreError
+from row_bot.learning.store import REQUEST_FORMAT, LearningStore, LearningStoreError
 
 logger = logging.getLogger(__name__)
 
-REQUEST_FORMAT = "row_bot.learning.model_request"
 TOOL_CALL_FORMAT = "row_bot.learning.tool_call"
 APPROVAL_FORMAT = "row_bot.learning.approval"
 
@@ -252,6 +260,22 @@ class _Flush:
 # ── Writing ─────────────────────────────────────────────────────────────────
 
 
+@dataclass(frozen=True)
+class _Serialised:
+    """A message as stored: the object it came from, its blob, whether redaction changed it, and the
+    pictures moved out of it (by hash)."""
+
+    message: Any
+    sha: str
+    changed: bool
+    data: bytes
+    pictures: Mapping[str, bytes]
+
+    @property
+    def size(self) -> int:
+        return len(self.data) + sum(len(item) for item in self.pictures.values())
+
+
 class _Sink:
     """Blobs and records gathered for one batch."""
 
@@ -259,12 +283,11 @@ class _Sink:
         self.blobs: dict[str, bytes] = {}
         self.records: list[Record] = []
         # Messages serialised in this batch: remembered once the batch is written.
-        self.staged: dict[int, tuple[Any, str, bool, bytes]] = {}
+        self.staged: dict[int, _Serialised] = {}
         self.turns: dict[int, Turn] = {}
+        self.pictures = False
 
     def blob(self, data: bytes) -> str:
-        import hashlib
-
         sha = hashlib.sha256(data).hexdigest()
         self.blobs.setdefault(sha, data)
         return sha
@@ -311,7 +334,7 @@ class Capture:
         # Writer-side memory (only the writer touches these).
         self._last_turn: OrderedDict[str, Turn] = OrderedDict()
         self._decision_by_message: OrderedDict[str, tuple[str, str]] = OrderedDict()
-        self._message_cache: OrderedDict[int, tuple[Any, str, bool, bytes]] = OrderedDict()
+        self._message_cache: OrderedDict[int, _Serialised] = OrderedDict()
         self._message_cache_bytes = 0
         self.dropped = 0
 
@@ -667,13 +690,17 @@ class Capture:
     def _write(self, root: Path, items: list[Any]) -> None:
         store = self._store_factory(root)
         sink = _Sink()
+        incognito: dict[str, bool] = {}  # asked once per conversation in a batch
         for item in items:
             try:
                 if isinstance(item, _Retry):
                     self._retry_records(store, item, sink)
                     continue
                 turn = item.turn
+                asked = turn.resolved
                 if not self._resolve(turn, store):
+                    continue
+                if asked and self._turned_incognito(turn, incognito):
                     continue
                 if isinstance(item, _End):
                     # A turn that recorded nothing leaves no empty episode (unless it was stopped).
@@ -698,19 +725,23 @@ class Capture:
         if not sink.records:
             return
         store.put_blobs(list(sink.blobs.values()))
-        store.put_many(sink.records)
+        if store.put_many(sink.records) < len(sink.records):
+            # A chat switched off meanwhile: its records were skipped, so its blobs go too.
+            store.gc_blobs(sink.blobs)
         for turn in sink.turns.values():
             turn.written = True
+        if sink.pictures:
+            store.keep_pictures_within()
         if any(isinstance(item, _End) for item in items):
             # A finished turn's messages won't be sent again: the cache stays small.
             self._message_cache.clear()
             self._message_cache_bytes = 0
         for key, value in sink.staged.items():
             self._message_cache[key] = value
-            self._message_cache_bytes += len(value[3])
+            self._message_cache_bytes += value.size
         while self._message_cache and (len(self._message_cache) > _MAX_MESSAGE_CACHE
                                        or self._message_cache_bytes > _MAX_MESSAGE_CACHE_BYTES):
-            self._message_cache_bytes -= len(self._message_cache.popitem(last=False)[1][3])
+            self._message_cache_bytes -= self._message_cache.popitem(last=False)[1].size
 
     def _resolve(self, turn: Turn, store: LearningStore) -> bool:
         """Scope (D27) and where the turn belongs, once per turn, before anything is written."""
@@ -750,6 +781,20 @@ class Capture:
             self._last_turn.popitem(last=False)
         return True
 
+    def _turned_incognito(self, turn: Turn, asked: dict[str, bool]) -> bool:
+        """N11: the turn's chat turned incognito after its scope was decided. Nothing more of the turn is
+        written, including what is queued now; what was written before stays."""
+
+        from row_bot.learning import scope
+
+        for thread in dict.fromkeys((turn.thread_id, turn.conversation_id)):
+            if thread not in asked:
+                asked[thread] = scope.is_incognito([thread], lookup=self._lookup)
+            if asked[thread]:
+                turn.allowed = False
+                return True
+        return False
+
     def _parent_thread(self, turn: Turn) -> str:
         """The conversation a delegated Agent's thread was started from (its Agent run's parent)."""
 
@@ -772,38 +817,45 @@ class Capture:
         if _FIDELITY_RANK[fidelity] > _FIDELITY_RANK[turn.fidelity]:
             turn.fidelity = fidelity
 
-    def _message_blob(self, message: Any, sink: _Sink) -> tuple[str, bool]:
+    def _message_blob(self, message: Any, sink: _Sink) -> _Serialised:
         """A message's blob. A turn's later calls send the same message objects again:
-        each is serialised and redacted once, and its bytes are handed to the store again
-        (which writes nothing it already has), so a purge in between can't leave a
-        record pointing at a freed blob."""
+        each is serialised and redacted once, and its bytes (and its pictures') are handed to
+        the store again (which writes nothing it already has), so a purge in between can't
+        leave a record pointing at a freed blob. Pictures leave the message before redaction."""
 
         key = id(message)
-        for known in (self._message_cache.get(key), sink.staged.get(key)):
-            if known is not None and known[0] is message:
-                sink.blobs.setdefault(known[1], known[3])
-                return known[1], known[2]
-        value, changed = redaction.redact_content(_message_dict(message))
-        data = _canonical(value)
-        sha = sink.blob(data)
-        sink.staged[key] = (message, sha, changed, data)
-        return sha, changed
+        known = next((found for found in (self._message_cache.get(key), sink.staged.get(key))
+                      if found is not None and found.message is message), None)
+        if known is None:
+            value, moved = pictures.split(_message_dict(message))
+            value, changed = redaction.redact_content(value)
+            data = _canonical(value)
+            known = _Serialised(message, hashlib.sha256(data).hexdigest(), changed, data, moved)
+            sink.staged[key] = known
+        sink.blobs.setdefault(known.sha, known.data)
+        for sha, data in known.pictures.items():
+            sink.blobs.setdefault(sha, data)
+            sink.pictures = True
+        return known
 
     def _model_call_records(self, item: _ModelCall, sink: _Sink) -> None:
         turn = item.turn
         redacted = False
         hashes = []
+        named: set[str] = set()
         for message in item.messages:
-            sha, changed = self._message_blob(message, sink)
-            hashes.append(sha)
-            redacted = redacted or changed
+            stored = self._message_blob(message, sink)
+            hashes.append(stored.sha)
+            named.update(stored.pictures)
+            redacted = redacted or stored.changed
         tools_sha = None
         if item.tools is not None:
             # The turn's calls share one tool list object: it is serialised once, like a message.
-            tools_sha, changed = self._message_blob(item.tools, sink)
-            redacted = redacted or changed
+            stored = self._message_blob(item.tools, sink)
+            tools_sha = stored.sha
+            redacted = redacted or stored.changed
         model_ref = self._model_ref(item.model_ref, item.provider_id)
-        request_sha = sink.blob(_canonical({
+        manifest: dict[str, Any] = {
             "format": REQUEST_FORMAT,
             "version": 1,
             "purpose": item.purpose,
@@ -814,7 +866,11 @@ class Capture:
             "latency_ms": item.latency_ms,
             "error": item.error,
             "reconstructed": False,
-        }))
+        }
+        if named:
+            # The pictures its messages name: the store keeps them with the chat (and under the size cap).
+            manifest["pictures"] = sorted(named)
+        request_sha = sink.blob(_canonical(manifest))
         raw_sha = kept_sha = None
         if item.raw is not None:
             raw_sha, changed = sink.json_blob(_message_dict(item.raw))
@@ -1029,9 +1085,11 @@ def _json_blob(store: LearningStore, sha: Any) -> Any:
 
 def read_request(store: LearningStore, decision: Decision) -> dict[str, Any] | None:
     """A captured model call's request: ``messages`` (LangChain message dicts, in order, for
-    ``messages_from_dict``), ``tools`` (the schemas, or None), ``model_ref``, ``purpose``,
-    ``latency_ms``, ``error`` and ``reconstructed`` (a past chat's conversation as stored, not
-    the exact request). None when a blob it needs is gone (purged) or damaged."""
+    ``messages_from_dict``, each picture put back as it was sent), ``tools`` (the schemas, or None),
+    ``model_ref``, ``purpose``, ``latency_ms``, ``error``, ``reconstructed`` (a past chat's
+    conversation as stored, not the exact request) and ``pictures_dropped`` (pictures dropped under
+    the size cap: they stay references, so the request is no longer exact). None when a blob it needs
+    is gone (purged) or damaged."""
 
     manifest = _json_blob(store, decision.request_blob)
     if not isinstance(manifest, dict) or manifest.get("format") != REQUEST_FORMAT:
@@ -1044,10 +1102,17 @@ def read_request(store: LearningStore, decision: Decision) -> dict[str, Any] | N
     else:
         hashes = list(manifest.get("messages") or [])
     messages = []
+    dropped = 0
     for sha in hashes:
         value = _json_blob(store, sha)
         if value is None:
             return None
+        if manifest.get("pictures"):
+            try:
+                value, lost = pictures.join(value, store.read_blob, store.picture_dropped)
+            except pictures.Missing:
+                return None
+            dropped += lost
         messages.append(value)
     tools = _json_blob(store, manifest["tools"]) if manifest.get("tools") else None
     return {
@@ -1058,6 +1123,7 @@ def read_request(store: LearningStore, decision: Decision) -> dict[str, Any] | N
         "latency_ms": manifest.get("latency_ms"),
         "error": manifest.get("error"),
         "reconstructed": bool(manifest.get("reconstructed")),
+        "pictures_dropped": dropped,
     }
 
 

@@ -45,6 +45,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 import sys
 import time
 from collections import Counter
@@ -54,12 +55,19 @@ from typing import Any, Literal, Protocol
 
 from row_bot import learning as gate
 from row_bot.learning import audit
+from row_bot.learning.calls import (
+    LedgerModelClient,
+    ModelClient,
+    ModelReply,
+    estimate_tokens,
+    text_of,
+)
 from row_bot.learning.contracts import Cost, Decision, TaskFixture, TestRun, new_id
 from row_bot.learning.packs import PackTask, visible_tasks
 from row_bot.learning.packs.fake_apps import FakeApps
 from row_bot.learning.packs.verify import Outcome, normalize, solve, verify
 from row_bot.learning.sandbox import Sandbox, SandboxError
-from row_bot.learning.spending import TokenMeter, is_local_provider
+from row_bot.learning.spending import TokenMeter
 from row_bot.learning.store import MARK_HELD_OUT
 
 logger = logging.getLogger(__name__)
@@ -89,11 +97,11 @@ JUDGE_MIN_AGREEMENT = 0.85
 SHORT_TEXT = 160
 RESULTS_FORMAT = "row_bot.learning.test_results"
 PURPOSE = "learning_test"
-_CHARS_PER_TOKEN = 3.5
-_OUTPUT_ALLOWANCE = 4_096
 
 Status = Literal["passed", "failed", "budget", "error", "unverified", "skipped", "not_run"]
-Check = Literal["exact_action", "tool_choice"]
+# ``stated_answer`` (L3b): a held-out Teach whose person said what the answer should have been, with no redo
+# to take a corrected action from; the re-asked reply passes when it states that answer (``compare_action``).
+Check = Literal["exact_action", "tool_choice", "stated_answer"]
 
 
 class EvaluationError(RuntimeError):
@@ -146,6 +154,15 @@ class Arm:
     # small-context prompt and tools, deferred tools behind ``tool_search`` / ``tool_invoke``. None:
     # asked as captured (a cloud main model is served as it was captured).
     serve_context: int | None = None
+    # What the real runtime (the evaluation worker, O56) runs this arm with (L3b): lessons as the
+    # memories recall finds, (title, text); ways of working as the turn's overlay, (slot, text). The
+    # in-process tool loop and replay use ``guidance`` instead.
+    lessons: tuple[tuple[str, str], ...] = ()
+    ways: tuple[tuple[str, str], ...] = ()
+    # Whether the arm is served the page's picture after a browser or computer action (A8). A text-only
+    # arm (the personal model and its starting model) is asked without it, as training leaves it out; the
+    # main model, asked as captured, gets it as it was sent.
+    sees_images: bool = False
 
 
 @dataclass(frozen=True)
@@ -331,97 +348,8 @@ def sign_test(better: int, worse: int) -> float:
 # ── The model ───────────────────────────────────────────────────────────────
 
 
-@dataclass(frozen=True)
-class ModelReply:
-    message: Any
-    input_tokens: int
-    output_tokens: int
-    local: bool
-    model_ref: str
-
-    @property
-    def tokens(self) -> int:
-        return self.input_tokens + self.output_tokens
-
-
-class ModelClient(Protocol):
-    """How evaluation asks a model; tests pass a fake."""
-
-    def invoke(self, messages: Sequence[Any], *, tools: Sequence[Mapping[str, Any]] | None, model_ref: str | None,
-               purpose: str) -> ModelReply: ...
-
-    def is_local(self, model_ref: str | None) -> bool: ...
-
-
-def estimate_tokens(messages: Sequence[Any], tools: Sequence[Mapping[str, Any]] | None = None) -> int:
-    """An upper-leaning token estimate of one call: what is sent plus room for the answer."""
-
-    chars = 0
-    for message in messages:
-        content = getattr(message, "content", message.get("content") if isinstance(message, Mapping) else "")
-        chars += len(content if isinstance(content, str) else json.dumps(content, default=str)) + 16
-        calls = getattr(message, "tool_calls", None)
-        if calls:
-            chars += len(json.dumps(calls, default=str))
-    if tools:
-        chars += len(json.dumps(list(tools), default=str))
-    return math.ceil(chars / _CHARS_PER_TOKEN) + _OUTPUT_ALLOWANCE
-
-
-class LedgerModelClient:
-    """Learning's own model calls (E13): the default chat model at the lowest effort unless the
-    arm names its model (D1), tagged ``learning_*`` in the usage ledger."""
-
-    def __init__(self) -> None:
-        self._models: dict[tuple[str, str], tuple[Any, str, str]] = {}
-
-    def _resolve(self, model_ref: str | None, purpose: str) -> tuple[Any, str, str]:
-        key = (str(model_ref or ""), purpose)
-        cached = self._models.get(key)
-        if cached is not None:
-            return cached
-        from row_bot import models
-        from row_bot.providers import background
-        from row_bot.providers.reasoning import canonical_reasoning_model_ref
-        from row_bot.providers.resolution import resolve_provider_config
-
-        ref = background.background_model_ref(purpose, task_model=model_ref)
-        if not ref:
-            raise EvaluationError("no_model", "choose a default model first")
-        resolved = resolve_provider_config(ref, allow_legacy_local=True)
-        canonical = canonical_reasoning_model_ref(resolved.provider_id, resolved.runtime_model)
-        reasoning = background.background_reasoning(canonical)
-        llm = models.get_llm_for(resolved.selection_ref, reasoning_plan=reasoning.plan)
-        found = (llm, resolved.selection_ref, resolved.provider_id)
-        self._models[key] = found
-        return found
-
-    def is_local(self, model_ref: str | None) -> bool:
-        try:
-            return is_local_provider(self._resolve(model_ref, PURPOSE)[2])
-        except Exception:
-            return False
-
-    def invoke(self, messages: Sequence[Any], *, tools: Sequence[Mapping[str, Any]] | None, model_ref: str | None,
-               purpose: str = PURPOSE) -> ModelReply:
-        from row_bot.providers.usage_ledger import with_usage_purpose
-
-        llm, selection_ref, provider = self._resolve(model_ref, purpose)
-        runnable: Any = llm.bind_tools(list(tools)) if tools else llm
-        if provider == "ollama" and getattr(llm, "reasoning", None) is True:
-            runnable = runnable.bind(reasoning=False)
-        message = with_usage_purpose(runnable, purpose).invoke(list(messages))
-        usage = getattr(message, "usage_metadata", None) or {}
-        estimate = estimate_tokens(messages, tools) - _OUTPUT_ALLOWANCE
-        input_tokens = int(usage.get("input_tokens") or estimate)
-        output_tokens = int(usage.get("output_tokens") or math.ceil(len(_text_of(message)) / _CHARS_PER_TOKEN))
-        return ModelReply(message, input_tokens, output_tokens, is_local_provider(provider), selection_ref)
-
-
 def _text_of(message: Any) -> str:
-    from row_bot.providers.background import reply_text
-
-    return reply_text(message)
+    return text_of(message)
 
 
 def _ask(client: ModelClient, messages: Sequence[Any], tools: Sequence[Mapping[str, Any]] | None, arm: Arm,
@@ -689,6 +617,25 @@ def _same_value(expected: Any, actual: Any) -> bool:
     return expected == actual
 
 
+_KEY_TOKEN = re.compile(r"\b(?=[\w.,:/-]*\d)[\w.,:/-]+\b|\b[A-Z]{2,}[\w-]*\b")
+
+
+def _states(answer: str, reply: str) -> tuple[bool | None, str]:
+    """Whether ``reply`` states the person's ``answer`` without a judge (``stated_answer``)."""
+
+    wanted, said = normalize(answer), normalize(reply)
+    if not wanted:
+        return None, "no answer to compare with"
+    if wanted in said:
+        return True, ""
+    keys = {normalize(token).strip(".,:") for token in _KEY_TOKEN.findall(str(answer or ""))}
+    keys.discard("")
+    if not keys:
+        return None, "an answer in words and no calibrated judge"
+    missing = sorted(key for key in keys if key not in said)
+    return (True, "") if not missing else (False, "a different answer")
+
+
 def compare_action(candidate: Action, reference: Action, *, check: Check = "exact_action",
                    judge: Judge | None = None, task_text: str = "") -> tuple[bool | None, str]:
     """Whether a new action matches the reference. None: nothing executable could decide.
@@ -697,7 +644,20 @@ def compare_action(candidate: Action, reference: Action, *, check: Check = "exac
     by every argument the reference gave (extra arguments are allowed). An answer
     matches a short reference answer by its normalized text; a long one needs a
     calibrated judge.
+
+    ``stated_answer`` (a Teach's own answer as the reference): the reply passes when it states it. A
+    calibrated judge decides when there is one; otherwise the reply must hold the answer's words, or
+    every number and identifier the answer gives. A reply that calls a tool first can't be followed by
+    replay, so no check decides it.
     """
+
+    if check == "stated_answer":
+        if candidate.tool_calls:
+            return None, "called a tool first, which replay can't follow"
+        if judge is not None:
+            verdict = judge.judge(task_text, reference.text, candidate.text)
+            return verdict, "" if verdict else ("the judge could not tell" if verdict is None else "the judge failed it")
+        return _states(reference.text, candidate.text)
 
     if reference.tool_calls:
         if not candidate.tool_calls:
@@ -764,10 +724,18 @@ class ReplayCase:
                 "reference_source": self.reference_source, "check": self.check, "text": self.text,
                 "fidelity": self.fidelity, "untrusted": self.untrusted}
 
+    @property
+    def has_picture(self) -> bool:
+        """Whether its prefix carries the page's picture after a browser or computer action (A8)."""
+
+        from row_bot.learning.pictures import is_page_picture
+
+        return any(is_page_picture(item) for item in self.messages)
+
     @classmethod
     def from_content(cls, data: Mapping[str, Any]) -> ReplayCase:
         tools = data.get("tools")
-        return cls(
+        case = cls(
             decision_id=str(data["id"]), thread_id=str(data.get("thread_id") or ""),
             conversation_id=str(data.get("conversation_id") or ""), created_at=float(data.get("created_at") or 0),
             kind_of_work=str(data.get("kind_of_work") or ""), fidelity=str(data.get("fidelity") or "exact"),
@@ -777,6 +745,9 @@ class ReplayCase:
             reference_source=data.get("reference_source") or "captured", check=data.get("check") or "exact_action",
             text=str(data.get("text") or ""),
         )
+        # A8: a task held before this rule whose prefix carries a page picture took the picture's JSON as its
+        # text; it is read with the person's words.
+        return replace(case, text=_last_person_text(case.messages)[:4_000]) if case.has_picture else case
 
 
 @dataclass
@@ -786,16 +757,37 @@ class ReplaySet:
 
 
 def _last_person_text(messages: Sequence[Mapping[str, Any]]) -> str:
+    """The text of the person's last message: its text parts, never image data, and never the page's
+    picture after a browser or computer action (A8)."""
+
+    from row_bot.learning.pictures import is_page_picture
+
     for item in reversed(messages):
-        if item.get("type") == "human":
-            content = (item.get("data") or {}).get("content")
-            return content if isinstance(content, str) else json.dumps(content, default=str)
+        if item.get("type") != "human" or is_page_picture(item):
+            continue
+        content = (item.get("data") or {}).get("content")
+        if isinstance(content, str):
+            return content
+        parts: list[str] = []
+        for part in content if isinstance(content, list) else ():
+            if isinstance(part, str):
+                parts.append(part)
+            elif isinstance(part, Mapping) and part.get("type") == "text":
+                parts.append(str(part.get("text") or ""))
+        return "\n".join(part for part in parts if part)
     return ""
 
 
 def _signalled(store: Any) -> set[str]:
-    return {str(item.decision_id) for item in store.find("signal", limit=100_000)
-            if getattr(item, "decision_id", None) and getattr(item, "withdrawn_at", None) is None}
+    """Decisions the person pushed back on, and every decision of a turn they did (a corrected, stopped
+    or retried turn's steps aren't uncorrected work: none is a captured reference)."""
+
+    signals = [item for item in store.find("signal", limit=100_000) if getattr(item, "withdrawn_at", None) is None]
+    found = {str(item.decision_id) for item in signals if getattr(item, "decision_id", None)}
+    episodes = {str(item.episode_id) for item in signals if getattr(item, "episode_id", None)}
+    if episodes:
+        found |= {item.id for item in store.find("decision", limit=100_000) if item.episode_id in episodes}
+    return found
 
 
 def collect_replay(store: Any | None = None, *, corrections: Mapping[str, CorrectedAction] | None = None,
@@ -807,9 +799,6 @@ def collect_replay(store: Any | None = None, *, corrections: Mapping[str, Correc
     its share of new decisions first, so a decision is never tested here and then hidden.
     """
 
-    from langchain_core.messages import messages_from_dict
-
-    from row_bot.learning import capture
     from row_bot.learning.store import LearningStore
 
     saved = store if store is not None else LearningStore()
@@ -828,59 +817,68 @@ def collect_replay(store: Any | None = None, *, corrections: Mapping[str, Correc
             break
         if not isinstance(decision, Decision) or decision.kind != "model_call":
             continue
-        if decision.status != "ok":
-            skipped["not_ok"] += 1
-            continue
-        if decision.id in held:
+        if decision.id in held and decision.status == "ok":
             skipped["held_out"] += 1
             continue
-        if decision.untrusted and not include_untrusted:
-            skipped["untrusted"] += 1
-            continue
-        correction = corrections.get(decision.id)
-        check: Check = "exact_action"
-        if decision.fidelity == "partial":
-            if correction is None:
-                skipped["partial_without_correction"] += 1
-                continue
-            if not correction.tool_calls:
-                skipped["partial_needs_exact_prefix"] += 1
-                continue
-            check = "tool_choice"
-        if correction is not None:
-            reference, source = correction.action(), "corrected"
+        found = _case_for(saved, decision, corrections.get(decision.id), include_untrusted=include_untrusted,
+                          bad=bad, episodes=episodes)
+        if isinstance(found, str):
+            skipped[found] += 1
         else:
-            if decision.id in bad:
-                skipped["known_bad"] += 1
-                continue
-            raw = saved.read_blob(decision.model_generated_blob or "")
-            if raw is None:
-                skipped["no_reference"] += 1
-                continue
-            try:
-                reference = Action.from_message(messages_from_dict([json.loads(raw.decode("utf-8"))])[0])
-            except Exception:  # noqa: BLE001 - an unreadable output is not a reference
-                skipped["no_reference"] += 1
-                continue
-            source = "captured"
-        request = capture.read_request(saved, decision)
-        if request is None:
-            skipped["purged"] += 1
-            continue
-        if request.get("reconstructed") and check == "exact_action":
-            skipped["partial_needs_exact_prefix"] += 1
-            continue
-        if decision.episode_id not in episodes:
-            episode = saved.get("episode", decision.episode_id)
-            episodes[decision.episode_id] = str(getattr(episode, "kind_of_work", None) or "Your work")
-        messages = tuple(request["messages"])
-        cases.append(ReplayCase(
-            decision.id, decision.thread_id, decision.conversation_id, decision.created_at,
-            episodes[decision.episode_id], decision.fidelity, decision.untrusted, messages,
-            None if request.get("tools") is None else tuple(request["tools"]), request.get("model_ref"),
-            reference, source, check, _last_person_text(messages)[:4_000],
-        ))
+            cases.append(found)
     return ReplaySet(cases, skipped)
+
+
+def _case_for(saved: Any, decision: Decision, correction: CorrectedAction | None, *, include_untrusted: bool,
+              bad: set[str], episodes: dict[str, str], case_id: str | None = None) -> ReplayCase | str:
+    """One decision as a replay case, or why it can't be one (a skip reason)."""
+
+    from langchain_core.messages import messages_from_dict
+
+    from row_bot.learning import capture
+
+    if decision.status != "ok":
+        return "not_ok"
+    if decision.untrusted and not include_untrusted:
+        return "untrusted"
+    check: Check = "exact_action"
+    if decision.fidelity == "partial":
+        if correction is None:
+            return "partial_without_correction"
+        if not correction.tool_calls:
+            return "partial_needs_exact_prefix"
+        check = "tool_choice"
+    if correction is not None:
+        reference, source = correction.action(), "corrected"
+    else:
+        if decision.id in bad:
+            return "known_bad"
+        raw = saved.read_blob(decision.model_generated_blob or "")
+        if raw is None:
+            return "no_reference"
+        try:
+            reference = Action.from_message(messages_from_dict([json.loads(raw.decode("utf-8"))])[0])
+        except Exception:  # noqa: BLE001 - an unreadable output is not a reference
+            return "no_reference"
+        source = "captured"
+    request = capture.read_request(saved, decision)
+    if request is None:
+        return "purged"
+    if request.get("reconstructed") and check == "exact_action":
+        return "partial_needs_exact_prefix"
+    if request.get("pictures_dropped"):
+        # A picture it was sent went under the size cap: its starting point can't be rebuilt (§8.6).
+        return "picture_dropped"
+    if decision.episode_id not in episodes:
+        episode = saved.get("episode", decision.episode_id)
+        episodes[decision.episode_id] = str(getattr(episode, "kind_of_work", None) or "Your work")
+    messages = tuple(request["messages"])
+    return ReplayCase(
+        case_id or decision.id, decision.thread_id, decision.conversation_id, decision.created_at,
+        episodes[decision.episode_id], decision.fidelity, decision.untrusted, messages,
+        None if request.get("tools") is None else tuple(request["tools"]), request.get("model_ref"),
+        reference, source, check, _last_person_text(messages)[:4_000],
+    )
 
 
 def _with_guidance(messages: list[Any], arm: Arm) -> list[Any]:
@@ -944,6 +942,17 @@ def _langchain(system: Sequence[str], messages: Sequence[Mapping[str, Any]]) -> 
     return out
 
 
+def _as_seen(case: ReplayCase, arm: Arm) -> tuple[Mapping[str, Any], ...]:
+    """The case's prefix as ``arm`` is served it (A8): a text-only arm without the page's picture after a
+    browser or computer action, as training leaves it out (the action's result gives it in words)."""
+
+    from row_bot.learning.pictures import is_page_picture
+
+    if arm.sees_images:
+        return case.messages
+    return tuple(item for item in case.messages if not is_page_picture(item))
+
+
 def _served(case: ReplayCase, arm: Arm) -> tuple[list[Any], list[dict[str, Any]] | None, Any] | None:
     """The case as ``arm`` is served (its prefix rendered for ``arm.serve_context``, O71 and §4):
     (messages, tools, the rendered problem), or None when the arm is asked as captured. Raises
@@ -959,7 +968,7 @@ def _served(case: ReplayCase, arm: Arm) -> tuple[list[Any], list[dict[str, Any]]
         return None
     system: list[str] = []
     messages: list[dict[str, Any]] = []
-    for item in case.messages:
+    for item in _as_seen(case, arm):
         converted = dataset_module.openai_message(item)  # raises ValueError on content it can't send
         if converted is None:
             continue
@@ -992,7 +1001,7 @@ def run_replay_case(case: ReplayCase, arm: Arm, *, client: ModelClient, budget: 
         return CaseResult(case.decision_id, "replay", case.kind_of_work, "unverified", case.check,
                           detail=UNSERVABLE_DETAIL)
     if served is None:
-        messages, tools, problem = list(messages_from_dict([dict(item) for item in case.messages])), case.tools, None
+        messages, tools, problem = list(messages_from_dict([dict(item) for item in _as_seen(case, arm)])), case.tools, None
     else:
         messages, tools, problem = served
     messages = _with_guidance(messages, arm)
@@ -1077,6 +1086,9 @@ class ArmCache:
                             METRIC_VERSION, budget.to_dict(), signature]
         if repeat:
             parts.append(int(repeat))
+        if arm.lessons or arm.ways:
+            # The main model with the lessons and ways of working in use is its own entry (L3b).
+            parts.append({"lessons": [list(item) for item in arm.lessons], "ways": [list(item) for item in arm.ways]})
         material = json.dumps(parts, sort_keys=True)
         return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
@@ -1242,6 +1254,23 @@ def paired_analysis(differences: Sequence[tuple[str, float]], *, resamples: int 
             "high": round(_percentile(boots, 0.975), 6), "p_value": round(p_value, 6), "exact": exact}
 
 
+def holm(p_values: Mapping[str, float | None], *, family: Sequence[str] | None = None) -> dict[str, float]:
+    """Holm-adjusted p-values across a confirmatory family (§7). The family is the pre-registered one
+    (``family``, else the given names); a member with no p-value (not tested) enters as 1, so it is never
+    rejected and still counts in the family's size."""
+
+    members = list(dict.fromkeys(family if family is not None else p_values))
+    raw = {name: 1.0 if p_values.get(name) is None else min(1.0, max(0.0, float(p_values[name])))
+           for name in members}
+    order = sorted(members, key=lambda name: (raw[name], members.index(name)))
+    adjusted: dict[str, float] = {}
+    running = 0.0
+    for rank, name in enumerate(order):
+        running = max(running, min(1.0, (len(order) - rank) * raw[name]))
+        adjusted[name] = round(running, 6)
+    return {name: adjusted[name] for name in members}
+
+
 def interval_verdict(analysis: Mapping[str, Any]) -> str:
     """What the interval says: ``better`` (it lies above 0), ``worse`` (below 0) or ``unclear``; the
     product's own verdict rule is unchanged (a promotion rule, E4) and reported beside it."""
@@ -1273,17 +1302,23 @@ def _analysis(first: Sequence[CaseResult], second: Sequence[CaseResult], cluster
             means.setdefault(key, []).append((fraction, other[task][1]))
 
     def summary(key: str) -> dict[str, Any]:
-        found = paired_analysis(rows.get(key, []), resamples=RESAMPLES, permutations=PERMUTATIONS, seed=seed)
-        pairs = means.get(key, [])
-        found["baseline"] = round(sum(item[0] for item in pairs) / len(pairs), 6) if pairs else None
-        found["arm"] = round(sum(item[1] for item in pairs) / len(pairs), 6) if pairs else None
-        found["enough"] = found["problems"] >= MIN_PROBLEMS
-        found["interval_verdict"] = interval_verdict(found)
-        found["not_worse"] = found["low"] is not None and found["low"] > -MARGIN
-        return found
+        return _summarized(paired_analysis(rows.get(key, []), resamples=RESAMPLES, permutations=PERMUTATIONS,
+                                           seed=seed), means.get(key, []))
 
     return {"overall": summary("overall"),
             "by_kind": {kind: summary(kind) for kind in sorted(key for key in rows if key != "overall")}}
+
+
+def _summarized(found: dict[str, Any], pairs: Sequence[tuple[float, float]]) -> dict[str, Any]:
+    """A paired analysis with each arm's mean over the paired problems, the minimum-size flag (§7), what
+    the interval says and the non-inferiority flag (lower bound above -10 points)."""
+
+    found["baseline"] = round(sum(item[0] for item in pairs) / len(pairs), 6) if pairs else None
+    found["arm"] = round(sum(item[1] for item in pairs) / len(pairs), 6) if pairs else None
+    found["enough"] = found["problems"] >= MIN_PROBLEMS
+    found["interval_verdict"] = interval_verdict(found)
+    found["not_worse"] = found["low"] is not None and found["low"] > -MARGIN
+    return found
 
 
 def _replay_shape(arm: Arm) -> str:
@@ -1391,7 +1426,11 @@ def _compare(arms: Sequence[Arm], tasks: list[PackTask], replay: list[ReplayCase
              on_case: Callable[[str, CaseResult], None] | None = None, repeats: int = 1,
              seed: int = ANALYSIS_SEED, combine_with: Comparison | None = None,
              kind_key: Callable[[str], str] | None = None,
-             pairs: Sequence[tuple[str, str]] = ()) -> Comparison:
+             pairs: Sequence[tuple[str, str]] = (),
+             inspect: Callable[[Mapping[str, list[CaseResult]]], None] | None = None) -> Comparison:
+    """``inspect`` sees every arm's per-problem results before they are dropped: only this module's own
+    analyses pass it (the freeze evaluation), so no per-problem result leaves an audit run (E10)."""
+
     if not arms:
         raise EvaluationError("no_arms")
     repeats = max(1, int(repeats))
@@ -1561,6 +1600,8 @@ def _compare(arms: Sequence[Arm], tasks: list[PackTask], replay: list[ReplayCase
                 f"{other} vs {base}": _analysis([*visible[base], *results[base]], [*visible[other], *results[other]],
                                                 joined, seed=seed, kind_key=kind_key)
                 for base, other in both}
+    if inspect is not None:
+        inspect(results)
     return Comparison(comparison_set, suite, arm_results, budget, stopped, calibration, paired, judge_used,
                       repeats=repeats, repeated={arm.name: _repeat_record(results[arm.name]) for arm in arms},
                       analysis=analysis, clusters={} if aggregate_only else clusters)
@@ -1574,10 +1615,39 @@ def _vault(store: Any | None = None) -> Any:
     return audit.AuditVault(root)
 
 
-def _eligible_for_audit(store: Any, horizon: float) -> list[audit.ReplayCandidate]:
+#: When this build first applied the vault's rules (A4: pushed-back turns aren't uncorrected work; A5: references
+#: are the main model's), kept in ``learning.db``'s meta (``holdout.record_rules``).
+AUDIT_RULES_KEY = "audit.rules"
+AUDIT_RULES = ("A4", "A5")
+
+
+def _personal_model_decisions(store: Any) -> set[str]:
+    """Model calls the personal model made, and every later call of a turn it took part in (amendment A5): its
+    actions are in their prefix, so none of them is the main model's own work."""
+
+    from row_bot.learning import holdout
+
+    calls = store.find("decision", subkind="model_call", limit=100_000)
+    first: dict[str, float] = {}
+    for decision in calls:
+        if holdout.personal(decision):
+            at = first.get(decision.episode_id)
+            first[decision.episode_id] = decision.created_at if at is None else min(at, decision.created_at)
+    return {decision.id for decision in calls
+            if decision.episode_id in first and decision.created_at >= first[decision.episode_id]}
+
+
+def _eligible_for_audit(store: Any, horizon: float, personal: set[str] | None = None) -> list[audit.ReplayCandidate]:
+    # Amendment A5: a decision the personal model answered is never a reference (it would make the personal model's
+    # own action the answer H1 scores it against); only the main model's work is offered.
+    personal = _personal_model_decisions(store) if personal is None else personal
     newer = [decision for decision in store.find("decision", subkind="model_call", newest_first=True, limit=100_000)
-             if decision.created_at > horizon]
-    found = collect_replay(store, refresh=False, decisions=newer, limit=100_000)
+             if decision.created_at > horizon and decision.id not in personal]
+    # Amendment A7: untrusted input doesn't make a decision ineligible for the vault. Replay runs no tools, and each
+    # task keeps its untrusted mark for the trusted-only sensitivity analysis. Visible tests still leave them out (E9).
+    # Amendment A8: a decision whose picture went under the size cap can't be rebuilt (``picture_dropped``), so it
+    # isn't offered; one with its picture is held with it and asked as each arm is served.
+    found = collect_replay(store, refresh=False, decisions=newer, limit=100_000, include_untrusted=True)
     return [audit.ReplayCandidate(case.decision_id, case.created_at, case.thread_id,
                                   case.conversation_id or case.thread_id, case.kind_of_work, case.to_content())
             for case in found.cases if case.reference_source == "captured" and case.check == "exact_action"]
@@ -1596,15 +1666,135 @@ def refresh_audit(*, store: Any | None = None, asked_by: str = "") -> dict[str, 
     from row_bot.learning import holdout
 
     holdout.mark_corrections(saved)
+    if saved.exists():
+        holdout.record_rules(saved, AUDIT_RULES, key=AUDIT_RULES_KEY)
     vault = _vault(saved)
-    report = vault.refresh(_eligible_for_audit(saved, vault.horizon()), asked_by=f"{_caller()}: {asked_by}".strip(": "))
+    who = f"{_caller()}: {asked_by}".strip(": ")
+    personal_calls = _personal_model_decisions(saved)
+    report = vault.refresh(_eligible_for_audit(saved, vault.horizon(), personal_calls), asked_by=who)
     if report.added:
         by_id = {decision.id: decision for decision in saved.find("decision", subkind="model_call", limit=100_000)
                  if decision.id in set(report.added)}
         saved.add_marks([("decision", item, by_id[item].conversation_id if item in by_id else "")
                          for item in report.added], MARK_HELD_OUT)
-    return {"considered": report.considered, "added": len(report.added), "retired": report.retired,
-            "held": report.held}
+    waiting = holdout.waiting_for_vault(saved)
+    # A task held as uncorrected that the person corrected, stopped or retried later has no reference
+    # any more (O19: no signal); one held out as a correction becomes a correction task below.
+    retired = vault.retire_corrected(_signalled(saved) - waiting, asked_by=who)
+    # A5: a task already held whose reference is the personal model's (held before this rule, of any origin) is
+    # retired and counted; it stays held out of training and drafting.
+    personal = vault.retire_personal(personal_calls | _personal_corrections(saved, waiting, personal_calls),
+                                     asked_by=who)
+    stored = vault.correction_ids()
+    candidates, missing = _correction_candidates(saved, waiting - stored, personal_calls)
+    added = vault.hold_corrections(candidates, asked_by=who) if candidates else ()
+    if report.added or report.retired or retired or personal or added:
+        gate.changed()
+    return {"considered": report.considered, "added": len(report.added),
+            "retired": report.retired + retired + personal, "retired_personal": personal, "held": report.held,
+            "corrections_added": len(added), "corrections_held": len(stored) + len(added),
+            "corrections_waiting": missing}
+
+
+def _personal_corrections(saved: Any, waiting: set[str], personal: set[str]) -> set[str]:
+    """Held-out corrections that would rest on the personal model's work (A5): the call they correct was the
+    personal model's (``personal``), or the redo the person accepted started with its move."""
+
+    if not waiting:
+        return set()
+    from row_bot.learning import corrections, holdout
+
+    book = corrections.Book(saved)
+    found: set[str] = set()
+    for decision_id in waiting:
+        decision = book.decisions.get(decision_id)
+        if decision is None:
+            continue
+        problem = corrections.problem_call(book, decision)
+        redo = corrections.accepted_redo(saved, decision, book=book)
+        first = corrections.first_call(book, redo) if redo is not None else None
+        if (problem is not None and problem.id in personal) or (first is not None and holdout.personal(first)):
+            found.add(decision_id)
+    return found
+
+
+def _correction_candidates(saved: Any, waiting: set[str],
+                          personal: set[str] | None = None) -> tuple[list[audit.ReplayCandidate], int]:
+    """Held-out corrections (O87) ready for the vault, each with its corrected action: the first move of
+    the redo the person accepted (``corrections.accepted_redo``), or, when they didn't redo a reply they
+    taught about, the answer they said it should have given (Teach's "What should it have done?", L3b,
+    checked as ``stated_answer``). Returns them and how many wait for one."""
+
+    if not waiting:
+        return [], 0
+    from row_bot.learning import corrections, holdout
+
+    book = corrections.Book(saved)
+    bad = _signalled(saved)
+    answers = _taught_answers(saved)
+    personal = _personal_model_decisions(saved) if personal is None else personal
+    episodes: dict[str, str] = {}
+    found: list[audit.ReplayCandidate] = []
+    missing = 0
+    for decision_id in sorted(waiting):
+        decision = book.decisions.get(decision_id)
+        problem = corrections.problem_call(book, decision) if decision is not None else None
+        if problem is not None and problem.id in personal:
+            continue  # A5: the personal model's reply is never a hidden problem (it stays held out)
+        redo = corrections.accepted_redo(saved, decision, book=book) if decision is not None else None
+        first = corrections.first_call(book, redo) if redo is not None else None
+        if first is not None and holdout.personal(first):
+            continue  # A5: a redo the personal model gave is never the reference
+        action = _action_of(saved, first) if first is not None else None
+        check: Check = "exact_action"
+        if action is None and problem is not None and decision is not None and decision.kind == "model_call":
+            said = answers.get(decision_id)
+            if said:
+                action, check = Action((), said), "stated_answer"
+        if problem is None or action is None:
+            missing += 1
+            continue
+        case = _case_for(saved, problem, CorrectedAction(action.tool_calls, action.text), include_untrusted=True,
+                         bad=bad, episodes=episodes, case_id=decision_id)
+        if isinstance(case, str) or case.check != "exact_action":
+            missing += 1
+            continue
+        if check != case.check:
+            case = replace(case, check=check)
+        found.append(audit.ReplayCandidate(decision_id, case.created_at, case.thread_id,
+                                           case.conversation_id or case.thread_id, case.kind_of_work,
+                                           case.to_content()))
+    return found, missing
+
+
+def _taught_answers(saved: Any) -> dict[str, str]:
+    """The answer each Teach on a reply said it should have given (the newest per decision), by decision."""
+
+    found: dict[str, tuple[float, str]] = {}
+    for item in saved.find("signal", limit=100_000):
+        answer = str(getattr(item, "answer", None) or "").strip()
+        if getattr(item, "kind", "") != "teach" or not answer or getattr(item, "withdrawn_at", None) is not None:
+            continue
+        decision_id = str(getattr(item, "decision_id", None) or "")
+        if decision_id and (decision_id not in found or item.created_at >= found[decision_id][0]):
+            found[decision_id] = (float(item.created_at), answer)
+    return {key: value for key, (_at, value) in found.items()}
+
+
+def _action_of(saved: Any, decision: Decision) -> Action | None:
+    """What a model call did (its own output), the bridge's calls written as the calls they carry."""
+
+    from langchain_core.messages import messages_from_dict
+
+    raw = saved.read_blob(decision.model_generated_blob or "")
+    if raw is None:
+        return None
+    try:
+        action = Action.from_message(messages_from_dict([json.loads(raw.decode("utf-8"))])[0])
+    except Exception:  # noqa: BLE001 - an unreadable output is no action
+        return None
+    found = _unbridged(action)
+    return found if found.tool_calls or found.text else None
 
 
 def audit_check(arms: Sequence[Arm], *, asked_by: str, client: ModelClient | None = None,
@@ -1615,15 +1805,24 @@ def audit_check(arms: Sequence[Arm], *, asked_by: str, client: ModelClient | Non
                 verifiers: Iterable[str] | None = None,
                 on_progress: Callable[[int, int], None] | None = None, repeats: int = 3,
                 seed: int = ANALYSIS_SEED, combine_with: Comparison | None = None,
-                kind_key: Callable[[str], str] | None = None, pairs: Sequence[tuple[str, str]] = ()) -> Comparison:
+                kind_key: Callable[[str], str] | None = None, pairs: Sequence[tuple[str, str]] = (),
+                corrected: bool | None = None, focus: Focus | None = None) -> Comparison:
     """Run the arms on the vault's hidden tasks. Only aggregates come back: counts per kind of
     work and tokens per arm, and the paired analysis; no task, id or text (E10).
+
+    ``corrected``: True runs only the held-out corrections (O87, H2's hidden corrected problems),
+    False only the uncorrected decisions, None both.
 
     Every hidden problem runs ``repeats`` times per arm (3, O84/O88). ``combine_with`` (a visible
     comparison of the same arms) adds the analysis of visible and hidden problems together, and
     ``pairs`` the analysis of more (baseline, arm) pairs.
     ``verifiers`` leaves out hidden tasks checked any other way (``code_tests`` need a container
-    for automatic runs, O21); ``on_progress(done, total)`` counts tasks, nothing more."""
+    for automatic runs, O21); ``on_progress(done, total)`` counts tasks, nothing more.
+
+    ``focus`` (a change's test, L3b) runs only some of the person's hidden work, chosen here: up to
+    ``own`` problems of its kind of work (held-out corrections first, then the newest) and up to
+    ``other`` of other kinds, each labelled with its kind of work (a problem whose episode had none is
+    classified from the person's own request, ``kinds``)."""
 
     from row_bot.learning.store import LearningStore
 
@@ -1635,7 +1834,11 @@ def audit_check(arms: Sequence[Arm], *, asked_by: str, client: ModelClient | Non
     allowed = None if verifiers is None else set(verifiers)
     tasks = [task for task in vault.hidden_tasks(asked_by=who, packs=packs)
              if allowed is None or task.verifier.kind in allowed]
-    replay = [ReplayCase.from_content(item) for item in vault.replay_tasks(asked_by=who)] if include_replay else []
+    replay = ([ReplayCase.from_content(item) for item in vault.replay_tasks(asked_by=who, origin=_origin(corrected))]
+              if include_replay else [])
+    if focus is not None:
+        replay = _focused(replay, focus)
+        tasks = _per_pack(tasks, focus.packs)
     total = (len(tasks) + len(replay)) * len(arms) * max(1, int(repeats))
     done = [0]
 
@@ -1651,15 +1854,281 @@ def audit_check(arms: Sequence[Arm], *, asked_by: str, client: ModelClient | Non
 
 
 def audit_size(*, asked_by: str, store: Any | None = None, packs: Iterable[str] | None = None,
-               verifiers: Iterable[str] | None = None, include_replay: bool = True) -> int:
+               verifiers: Iterable[str] | None = None, include_replay: bool = True,
+               corrected: bool | None = None, focus: Focus | None = None) -> int:
     """How many hidden problems an :func:`audit_check` with the same choices would run (a count only)."""
 
     allowed = None if verifiers is None else set(verifiers)
     vault = _vault(store)
     who = f"{_caller()}: {asked_by}".strip(": ")
-    count = sum(1 for task in vault.hidden_tasks(asked_by=who, packs=packs)
-                if allowed is None or task.verifier.kind in allowed)
-    return count + (len(vault.replay_tasks(asked_by=who)) if include_replay else 0)
+    hidden = [task for task in vault.hidden_tasks(asked_by=who, packs=packs)
+              if allowed is None or task.verifier.kind in allowed]
+    count = len(_per_pack(hidden, focus.packs) if focus is not None else hidden)
+    if not include_replay:
+        return count
+    replay = vault.replay_tasks(asked_by=who, origin=_origin(corrected))
+    if focus is not None:
+        return count + len(_focused([ReplayCase.from_content(item) for item in replay], focus))
+    return count + len(replay)
+
+
+@dataclass(frozen=True)
+class Focus:
+    """Which of the person's hidden problems a change's test runs (chosen inside this module, E10)."""
+
+    kind: str
+    own: int = 8
+    other: int = 4
+    # The packs' hidden tasks: at most this many of each pack asked for (None: all of them).
+    packs: int | None = None
+
+
+def kind_label_of(case: ReplayCase) -> str:
+    """A replayed decision's kind of work: its episode's, else what the person asked (``kinds``, no call)."""
+
+    from row_bot.learning import kinds
+
+    kind = kinds.from_label(case.kind_of_work)
+    if kind == kinds.OTHER and case.text:
+        kind = kinds.classify(kinds.Request(case.text)).kind
+    return kinds.label(kind)
+
+
+def _per_pack(tasks: Sequence[PackTask], limit: int | None) -> list[PackTask]:
+    if limit is None:
+        return list(tasks)
+    seen: Counter[str] = Counter()
+    kept = []
+    for task in tasks:
+        seen[task.pack] += 1
+        if seen[task.pack] <= max(0, int(limit)):
+            kept.append(task)
+    return kept
+
+
+def _focused(replay: Sequence[ReplayCase], focus: Focus) -> list[ReplayCase]:
+    from row_bot.learning import kinds
+
+    labelled = [replace(case, kind_of_work=kind_label_of(case)) for case in replay]
+    mine = kinds.label(focus.kind)
+    own = sorted((case for case in labelled if case.kind_of_work == mine),
+                 key=lambda case: (case.reference_source != "corrected", -case.created_at, case.decision_id))
+    others = sorted((case for case in labelled if case.kind_of_work != mine),
+                    key=lambda case: (-case.created_at, case.decision_id))
+    chosen = own[: max(0, int(focus.own))] + others[: max(0, int(focus.other))]
+    return sorted(chosen, key=lambda case: (case.created_at, case.decision_id))
+
+
+def _origin(corrected: bool | None) -> str | None:
+    return None if corrected is None else ("correction" if corrected else "replay")
+
+
+# ── The paper's freeze evaluation (pre-registration §7): only aggregates leave ──
+
+#: The hidden problems' splits (§3.3, §5): real work nobody corrected (the captured action is the
+#: reference), real work with a held-out correction (the corrected action, O87) and the packs' hidden tasks.
+SPLITS: tuple[str, ...] = ("real_uncorrected", "real_corrected", "packs")
+
+
+def _scores(cases: Sequence[CaseResult], *, majority: bool = False) -> dict[str, float]:
+    """Each problem's score over its counted runs: the pass fraction ``s(i, a)`` (§6.1), or with
+    ``majority`` 1 when more than half of its counted runs passed, else 0 (§7's sensitivity analysis)."""
+
+    runs: dict[str, list[int]] = {}
+    for case in cases:
+        if case.counted:
+            runs.setdefault(case.task_id, []).append(int(case.passed))
+    if majority:
+        return {task: 1.0 if 2 * sum(found) > len(found) else 0.0 for task, found in runs.items()}
+    return {task: sum(found) / len(found) for task, found in runs.items()}
+
+
+def _pair_summary(base: Mapping[str, float], other: Mapping[str, float], problems: Sequence[str],
+                  clusters: Mapping[str, str], *, seed: int) -> dict[str, Any]:
+    """``other`` against ``base`` on the ``problems`` both counted (a problem with no counted run in an
+    arm leaves the pair, §8.3)."""
+
+    paired = [task for task in problems if task in base and task in other]
+    rows = [(clusters.get(task, task), other[task] - base[task]) for task in paired]
+    return _summarized(paired_analysis(rows, seed=seed), [(base[task], other[task]) for task in paired])
+
+
+def _freeze_analysis(arms: Sequence[Arm], results: Mapping[str, Sequence[CaseResult]], tasks: Sequence[PackTask],
+                     replay: Sequence[ReplayCase], contrasts: Sequence[tuple[str, str]], *,
+                     seed: int) -> dict[str, Any]:
+    """Per arm and split: problems, counted problems, the mean score, run statuses and causes. Per contrast
+    and split: the primary analysis and §7's sensitivity analyses (exact fidelity only, a majority vote,
+    without clustering, per main model), per kind of work, and how many problems left the pair."""
+
+    from row_bot.learning import kinds
+
+    split = {task.id: "packs" for task in tasks}
+    clusters = {task.id: task.id for task in tasks}
+    kind = {task.id: kinds.from_label(task.kind_of_work) for task in tasks}
+    exact: set[str] = set()
+    trusted: set[str] = set()
+    pictured: set[str] = set()
+    model: dict[str, str] = {}
+    ordinals: dict[str, str] = {}
+    for case in sorted(replay, key=lambda item: (item.created_at, item.decision_id)):
+        split[case.decision_id] = "real_corrected" if case.reference_source == "corrected" else "real_uncorrected"
+        clusters[case.decision_id] = case.conversation_id or case.thread_id or case.decision_id
+        kind[case.decision_id] = kinds.from_label(case.kind_of_work)
+        if case.fidelity == "exact":
+            exact.add(case.decision_id)
+        if not case.untrusted:
+            trusted.add(case.decision_id)
+        if case.has_picture:
+            pictured.add(case.decision_id)
+        # The captured main model, named only by its order of first use (no model name leaves).
+        model[case.decision_id] = ordinals.setdefault(str(case.model_ref or ""), f"model_{len(ordinals) + 1}")
+    by_split = {name: [task for task, found in split.items() if found == name] for name in SPLITS}
+    fractions = {arm.name: _scores(results[arm.name]) for arm in arms}
+    majority = {arm.name: _scores(results[arm.name], majority=True) for arm in arms}
+
+    per_arm: dict[str, Any] = {}
+    for arm in arms:
+        rows: dict[str, Any] = {}
+        for name, problems in by_split.items():
+            wanted = set(problems)
+            cases = [case for case in results[arm.name] if case.task_id in wanted]
+            scored = [fractions[arm.name][task] for task in problems if task in fractions[arm.name]]
+            rows[name] = {
+                "problems": len(problems), "counted": len(scored),
+                "mean": round(sum(scored) / len(scored), 6) if scored else None,
+                "runs": dict(sorted(Counter(case.status for case in cases).items())),
+                "causes": dict(sorted(Counter(case.cause for case in cases if case.cause).items())),
+            }
+        per_arm[arm.name] = {"splits": rows}
+
+    def summary(scores: Mapping[str, Mapping[str, float]], base: str, other: str, problems: Sequence[str],
+                grouping: Mapping[str, str]) -> dict[str, Any]:
+        return _pair_summary(scores[base], scores[other], problems, grouping, seed=seed)
+
+    unclustered = {task: task for task in split}
+    found: dict[str, Any] = {}
+    for base, other in contrasts:
+        entry: dict[str, Any] = {}
+        for name, problems in by_split.items():
+            part: dict[str, Any] = {
+                "primary": summary(fractions, base, other, problems, clusters),
+                "majority_vote": summary(majority, base, other, problems, clusters),
+                "unclustered": summary(fractions, base, other, problems, unclustered),
+                "left_pair": sum(1 for task in problems
+                                 if task not in fractions[base] or task not in fractions[other]),
+                "by_kind": {key: summary(fractions, base, other, [task for task in problems if kind[task] == key],
+                                         clusters)
+                            for key in kinds.KINDS if any(kind[task] == key for task in problems)},
+            }
+            if name != "packs":
+                part["exact_only"] = summary(fractions, base, other, [task for task in problems if task in exact],
+                                             clusters)
+                # A7: trusted input only. A8: without the problems whose prefix carries a page picture.
+                part["trusted_only"] = summary(fractions, base, other,
+                                               [task for task in problems if task in trusted], clusters)
+                part["without_pictures"] = summary(fractions, base, other,
+                                                   [task for task in problems if task not in pictured], clusters)
+                part["per_main_model"] = {
+                    label: summary(fractions, base, other, [task for task in problems if model[task] == label],
+                                   clusters)
+                    for label in sorted({model[task] for task in problems})}
+            entry[name] = part
+        found[f"{other} vs {base}"] = entry
+    return {"arms": per_arm, "contrasts": found, "main_models": len(ordinals)}
+
+
+def freeze_check(arms: Sequence[Arm], *, as_of: float, asked_by: str, contrasts: Sequence[tuple[str, str]],
+                 client: ModelClient | None = None, budget: Budget = Budget(), meter: TokenMeter | None = None,
+                 store: Any | None = None, runner: PackRunner | None = None, cache: ArmCache | None = None,
+                 packs: Iterable[str] | None = None, verifiers: Iterable[str] | None = None, repeats: int = 3,
+                 seed: int = ANALYSIS_SEED, on_progress: Callable[[int, int], None] | None = None,
+                 clock: Callable[[], float] = time.time) -> dict[str, Any]:
+    """The pre-registered freeze evaluation (§7): the arms on every hidden problem the vault holds from
+    before ``as_of`` (real work, by its captured time) and the packs' hidden tasks, ``repeats`` runs per arm,
+    one budget, this module's checker. Returns aggregates only: per arm and split, counts, mean scores, run
+    statuses and causes; per contrast ((baseline, arm) names) and split, the primary paired analysis and §7's
+    sensitivity analyses. No problem, id, text or per-problem result leaves (E10)."""
+
+    from row_bot.learning.store import LearningStore
+
+    saved = store if store is not None else LearningStore()
+    if not gate.is_enabled(saved.root) and not audit.vault_exists(saved.root):
+        raise EvaluationError("learning_off")
+    names = {arm.name for arm in arms}
+    if not contrasts or {name for pair in contrasts for name in pair} - names:
+        raise EvaluationError("unknown_arm")
+    who = f"{_caller()}: {asked_by}".strip(": ")
+    vault = _vault(saved)
+    allowed = None if verifiers is None else set(verifiers)
+    tasks = [task for task in vault.hidden_tasks(asked_by=who, packs=packs)
+             if allowed is None or task.verifier.kind in allowed]
+    everything = [ReplayCase.from_content(item) for item in vault.replay_tasks(asked_by=who)]
+    replay = [case for case in everything if case.created_at <= float(as_of)]
+    total = (len(tasks) + len(replay)) * len(arms) * max(1, int(repeats))
+    done = [0]
+
+    def counted(_arm: str, _case: CaseResult) -> None:
+        done[0] += 1
+        if on_progress is not None:
+            on_progress(done[0], total)
+
+    found: dict[str, Any] = {}
+
+    def inspect(results: Mapping[str, list[CaseResult]]) -> None:
+        found.update(_freeze_analysis(arms, results, tasks, replay, contrasts, seed=seed))
+
+    comparison = _compare(arms, tasks, replay, client=client, judge=None, calibration=None, budget=budget,
+                          meter=meter, store=saved, save=False, clock=clock, backend="auto", suite="audit",
+                          aggregate_only=True, runner=runner, cache=cache, on_case=counted, repeats=repeats,
+                          seed=seed, inspect=inspect)
+    for item in comparison.arms:
+        found["arms"][item.arm.name].update({
+            "tokens": int(item.measured_tokens), "cloud_tokens": int(item.measured_cloud_tokens),
+            "seconds": round(float(item.seconds), 1), "ran": int(item.ran), "cached": int(item.cached),
+            "identical": dict(comparison.repeated.get(item.arm.name, {})),
+        })
+    splits = {name: sum(1 for case in replay if (case.reference_source == "corrected") == (name == "real_corrected"))
+              for name in SPLITS[:2]}
+    return {"metric_version": METRIC_VERSION, "repeats": comparison.repeats, "seed": int(seed),
+            "resamples": RESAMPLES, "permutations": PERMUTATIONS, "stopped": bool(comparison.stopped),
+            "budget": budget.to_dict(),
+            "problems": {**splits, "packs": len(tasks), "after_as_of": len(everything) - len(replay),
+                         "untrusted": sum(1 for case in replay if case.untrusted),
+                         "with_picture": sum(1 for case in replay if case.has_picture)}, **found}
+
+
+def audit_counts(*, asked_by: str, store: Any | None = None) -> dict[str, int]:
+    """How many hidden problems the vault holds (packs, real work uncorrected and corrected, by fidelity,
+    retired) and how many held-out corrections wait for it: counts only. Never creates a vault."""
+
+    from row_bot.learning import holdout
+    from row_bot.learning.store import LearningStore
+
+    saved = store if store is not None else LearningStore()
+    waiting = holdout.waiting_for_vault(saved) if saved.exists() else set()
+    counts = {"vault": 0, "pack_tasks": 0, "uncorrected": 0, "corrected": 0, "exact": 0, "redacted": 0,
+              "retired": 0, "corrections_waiting": len(waiting), "trusted": 0, "untrusted": 0, "with_picture": 0,
+              "without_picture": 0}
+    if not audit.vault_exists(saved.root):
+        return counts
+    who = f"{_caller()}: {asked_by}".strip(": ")
+    vault = _vault(saved)
+    summary = vault.summary(asked_by=who)
+    held = [ReplayCase.from_content(item) for item in vault.replay_tasks(asked_by=who)]
+    corrected = sum(1 for case in held if case.reference_source == "corrected")
+    counts.update({
+        "vault": 1, "pack_tasks": int(summary.get("pack_tasks", 0)), "uncorrected": len(held) - corrected,
+        "corrected": corrected, "exact": sum(1 for case in held if case.fidelity == "exact"),
+        "redacted": sum(1 for case in held if case.fidelity == "redacted"),
+        "retired": int(summary.get("retired_replay_tasks", 0)),
+        "corrections_waiting": len(waiting - {case.decision_id for case in held}),
+        # A7's and A8's splits of the real hidden problems: trusted or not, with a page picture or not.
+        "untrusted": sum(1 for case in held if case.untrusted),
+        "trusted": sum(1 for case in held if not case.untrusted),
+        "with_picture": sum(1 for case in held if case.has_picture),
+        "without_picture": sum(1 for case in held if not case.has_picture),
+    })
+    return counts
 
 
 def is_novel(candidate: PackTask | str, *, asked_by: str, store: Any | None = None) -> bool:
@@ -1716,7 +2185,13 @@ __all__ = [
     "CACHE_DAYS",
     "LimitReached",
     "PackRunner",
+    "SPLITS",
+    "audit_counts",
     "audit_size",
+    "Focus",
+    "kind_label_of",
+    "freeze_check",
+    "holm",
     "CalibrationCase",
     "Calibration",
     "CaseResult",

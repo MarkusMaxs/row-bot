@@ -447,7 +447,8 @@ def run_import(
             if sink.records:
                 store.put_blobs(list(sink.blobs.values()))
             # The conversation's records and the progress, in one transaction.
-            store.put_many([*sink.records, job])
+            if store.put_many([*sink.records, job]) < len(sink.records) + 1:
+                store.gc_blobs(sink.blobs)  # switched off meanwhile: what it would have held goes too
         job = replace(job, state="ready", spec_blob=None, updated_at=max(float(clock()), job.updated_at))
         store.put(job)
     except LearningStoreError as error:

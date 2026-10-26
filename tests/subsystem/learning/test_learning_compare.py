@@ -78,7 +78,7 @@ def _comparer(root, *, container=False, limit=10_000_000, plan=None, recorded=No
         root, plan=plan or model_compare.Plan(visible_per_pack=2, hidden_repeats=1), worker_factory=FakeWorker,
         gather=lambda arms: ([], {"custom_endpoints": [], "local_model_settings": {}}, []),
         tools=lambda: ["filesystem", "calculator", "shell"], container=lambda: container,
-        baseline_model=lambda: (BASE, None), main_ref=lambda: MAIN, model_name=lambda ref: "GPT-6.1 Sol",
+        baseline_model=lambda runtime: (BASE, None), main_ref=lambda: MAIN, model_name=lambda ref: "GPT-6.1 Sol",
         meter=lambda: TokenMeter(limit), record_usage=(recorded.extend if recorded is not None else lambda rows: None),
     )
 
@@ -345,3 +345,66 @@ def test_comparisons_wait_while_learning_is_paused(ready):
                                         start_threads=False)
 
     assert not service.tick() and FakeWorker.instances == []
+
+
+def test_a_version_running_in_row_bot_is_compared_there_with_its_starting_model_held_running(learning_on):
+    """Both arms serve through Row-Bot's own server (L2x): the starting model is asked for in the
+    version's runtime, and the server is held running (so its key stays valid) for the whole run."""
+
+    import contextlib
+
+    LearningStore(learning_on).create()
+    personal = "model:custom_openai_row-bot-personal-row-bot:row-bot-personal-v1"
+    releases.write_state(releases.version_dir(1, learning_on), releases.VersionState(
+        version=1, phase=releases.READY, job_id="job_1", model_ref=personal, runtime="row_bot"))
+    FakeWorker.instances.clear()
+    held: list[str] = []
+    asked_runtimes: list[str] = []
+
+    @contextlib.contextmanager
+    def hold(runtime):
+        held.append(f"enter {runtime}")
+        yield
+        held.append("exit")
+
+    def starting(runtime):
+        asked_runtimes.append(runtime)
+        assert held == ["enter row_bot"]  # the server runs before the starting model is asked for
+        return "model:custom_openai_row-bot-personal-row-bot:row-bot-personal-base", None
+
+    comparer = _comparer(learning_on)
+    comparer._server_hold = hold  # noqa: SLF001 - the comparer's own collaborator
+    comparer._baseline_model = starting  # noqa: SLF001
+
+    result = comparer.run(1)
+
+    assert asked_runtimes == ["row_bot"] and held == ["enter row_bot", "exit"]
+    arms = {arm["key"]: arm["model_ref"] for arm in result["arms"]}
+    assert arms["v1"] == personal and arms["base"].endswith(":row-bot-personal-base")
+
+
+def test_a_version_is_compared_with_its_own_starting_model_after_the_person_changed_it(learning_on, monkeypatch):
+    """O124: the person moved from the 2B to the 9B after v1 trained; v1 is still compared with the 2B."""
+
+    from pathlib import Path
+
+    from row_bot.learning.training import base_model, weights
+
+    LearningStore(learning_on).create()
+    save_learning_settings(learning_on, enabled=True, starting_model="qwen3.5-9b")
+    folder = releases.version_dir(1, learning_on)
+    releases.write_state(folder, releases.VersionState(version=1, phase=releases.READY, job_id="job_1",
+                                                       model_ref=PERSONAL, runtime="ollama"))
+    (folder / releases.MANIFEST_FILE).write_text(json.dumps({"identity": {"base": {"name": "Qwen/Qwen3.5-2B"}}}),
+                                                 encoding="utf-8")
+    monkeypatch.setattr(weights, "status", lambda model, root=None: weights.WeightsStatus("downloaded", 1, Path(".")))
+    served: list[str] = []
+    monkeypatch.setattr(base_model, "ensure",
+                        lambda **kwargs: served.append(kwargs["model"].id) or (BASE, None))
+    comparer = _comparer(learning_on)
+    comparer._baseline_model = None  # noqa: SLF001 - the product's own starting model this time
+
+    result = comparer.run(1)
+
+    assert served == ["qwen3.5-2b"]
+    assert next(arm for arm in result["arms"] if arm["key"] == "base")["model_ref"] == BASE

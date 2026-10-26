@@ -252,7 +252,7 @@ it('on: its settings, and turning Learning off asks with what stays', async () =
   const io = fakeIO(
     learningSnapshot({
       state: 'on',
-      data: { exists: true, bytes: 12_000_000 },
+      data: { ...learningSnapshot().data, exists: true, bytes: 12_000_000 },
       spending: {
         ...learningSnapshot().spending,
         used_tokens: 240_000,
@@ -279,9 +279,23 @@ it('on: its settings, and turning Learning off asks with what stays', async () =
     screen.getByRole('button', { name: 'Delete learning data…' }),
   ).toBeVisible();
   expect(screen.getAllByText('Not downloaded')).toHaveLength(2);
+  const limit = screen.getByRole('combobox', { name: 'Monthly limit' });
+  expect(limit).toHaveDisplayValue('2M tokens');
+  // A large subscription can give Learning up to 50M tokens a month.
   expect(
-    screen.getByRole('combobox', { name: 'Monthly limit' }),
-  ).toHaveDisplayValue('2M tokens');
+    within(limit)
+      .getAllByRole('option')
+      .map((option) => option.textContent),
+  ).toEqual([
+    '500K tokens',
+    '1M tokens',
+    '2M tokens',
+    '5M tokens',
+    '10M tokens',
+    '20M tokens',
+    '50M tokens',
+    'No model calls',
+  ]);
 
   fireEvent.click(screen.getByRole('switch', { name: 'Learning' }));
   const confirm = await screen.findByRole('dialog', {
@@ -395,5 +409,201 @@ it('an NVIDIA driver older than 570 says to update it, in the setup sheet', asyn
   ).toBeVisible();
   expect(
     within(sheet).getByRole('button', { name: 'Check again' }),
+  ).toBeVisible();
+});
+
+it('a 32 GB card offers its own tier’s model first, the smaller tiers’ as choices (L2x)', async () => {
+  const GPU_32GB = {
+    ...GPU_8GB,
+    gpu: {
+      name: 'NVIDIA GeForce RTX 5090',
+      memory_gb: 32,
+      label: 'NVIDIA GeForce RTX 5090 (32 GB)',
+    },
+    tier: {
+      id: '32gb',
+      label: '32 GB',
+      certified: true,
+      summary: 'Can train models up to about 9B on your tasks.',
+    },
+    starting_models: [
+      {
+        id: 'qwen3.5-9b',
+        name: 'Qwen3.5 9B',
+        licence: 'Apache 2.0',
+        download_bytes: 19_331_993_000,
+      },
+      ...GPU_8GB.starting_models,
+    ],
+  } satisfies typeof GPU_8GB;
+  const io = fakeIO(learningSnapshot(), {
+    hardware: GPU_32GB,
+    after: (action) => (action === 'turn_on' ? { state: 'on' } : {}),
+  });
+  show(io);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Turn on Learning' }));
+  const sheet = await screen.findByRole('dialog', { name: 'Turn on Learning' });
+  expect(
+    await within(sheet).findByText(
+      'Can train models up to about 9B on your tasks.',
+    ),
+  ).toBeVisible();
+  const starting = within(sheet).getByRole('combobox', {
+    name: 'Starting model',
+  });
+  expect(starting).toHaveDisplayValue(
+    /^Qwen3\.5 9B · Apache 2\.0 · 19\.3\sGB download$/,
+  );
+  expect(
+    within(starting).getByRole('option', {
+      name: /^Qwen3\.5 2B · Apache 2\.0 · 4\.6\sGB download$/,
+    }),
+  ).toBeInTheDocument();
+  fireEvent.change(starting, { target: { value: 'qwen3.5-2b' } });
+  fireEvent.click(
+    within(sheet).getByRole('button', { name: 'Turn on Learning' }),
+  );
+  await act(async () => undefined);
+  expect(io.run).toHaveBeenCalledWith(
+    'turn_on',
+    expect.objectContaining({
+      setup: expect.objectContaining({ starting_model: 'qwen3.5-2b' }),
+    }),
+  );
+});
+
+it('the setup sheet says what training needs of the computer’s memory, and what to do when it can’t hold a tier (O105)', async () => {
+  const GPU_32GB = {
+    ...GPU_8GB,
+    gpu: {
+      name: 'NVIDIA GeForce RTX 5090',
+      memory_gb: 32,
+      label: 'NVIDIA GeForce RTX 5090 (32 GB)',
+    },
+    tier: {
+      id: '16gb',
+      label: '16 GB',
+      certified: true,
+      summary: 'Can train models up to about 9B on your tasks.',
+      system_memory_gb: 30,
+    },
+    memory_short: [
+      {
+        id: '24gb',
+        label: '24 GB',
+        certified: true,
+        summary: 'Can train models up to about 9B on your tasks.',
+        system_memory_gb: 41,
+      },
+    ],
+    memory: { limit_gb: 36, free_gb: 20, system: 'windows' as const },
+  } satisfies typeof GPU_8GB;
+  const io = fakeIO(learningSnapshot(), { hardware: GPU_32GB });
+  show(io);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Turn on Learning' }));
+  const sheet = await screen.findByRole('dialog', { name: 'Turn on Learning' });
+  expect(
+    await within(sheet).findByText(
+      'Training needs about 30 GB of this computer’s memory free (RAM and virtual memory).',
+    ),
+  ).toBeVisible();
+  expect(
+    within(sheet).getByText(
+      /^Larger models need about 41 GB of RAM and virtual memory to train, and this computer has 36 GB\. Raise Windows’ virtual memory/,
+    ),
+  ).toBeVisible();
+  fireEvent.click(within(sheet).getByRole('button', { name: 'Check again' }));
+  await act(async () => undefined);
+  expect(io.hardware).toHaveBeenLastCalledWith(true);
+});
+
+it('a computer whose memory can’t hold training says so up front, with what to do (O105)', async () => {
+  const io = fakeIO(learningSnapshot(), {
+    hardware: {
+      ...GPU_8GB,
+      state: 'low_memory',
+      tier: { ...GPU_8GB.tier!, system_memory_gb: 15 },
+      starting_models: [],
+      memory: { limit_gb: 12, free_gb: 5, system: 'linux' },
+    },
+  });
+  show(io);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Turn on Learning' }));
+  const sheet = await screen.findByRole('dialog', { name: 'Turn on Learning' });
+  expect(
+    await within(sheet).findByText(
+      'This computer’s memory can’t hold training yet: it needs about 15 GB of RAM and virtual memory, and this computer has 12 GB.',
+    ),
+  ).toBeVisible();
+  expect(
+    within(sheet).getByText('Add swap space or RAM, then check again.'),
+  ).toBeVisible();
+  expect(
+    within(sheet).queryByRole('combobox', { name: 'Starting model' }),
+  ).toBeNull();
+  expect(
+    within(sheet).getByRole('button', { name: 'Check again' }),
+  ).toBeVisible();
+});
+
+it('setup says why it recommends a smaller model when the graphics card has little free (O112)', async () => {
+  const io = fakeIO(learningSnapshot(), {
+    hardware: {
+      ...GPU_8GB,
+      gpu: {
+        name: 'NVIDIA GeForce RTX 4080',
+        memory_gb: 16,
+        label: 'NVIDIA GeForce RTX 4080 (16 GB)',
+      },
+      tier: {
+        id: '16gb',
+        label: '16 GB',
+        certified: true,
+        summary: 'Can train models up to about 9B on your tasks.',
+        card_need_gb: 15.3,
+      },
+      recommended: { ...GPU_8GB.tier!, card_need_gb: 8 },
+      card_free_gb: 9.6,
+      starting_models: [
+        GPU_8GB.starting_models[0],
+        {
+          id: 'qwen3.5-9b',
+          name: 'Qwen3.5 9B',
+          licence: 'Apache 2.0',
+          download_bytes: 19_300_000_000,
+        },
+      ],
+    },
+  });
+  show(io);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Turn on Learning' }));
+  const sheet = await screen.findByRole('dialog', { name: 'Turn on Learning' });
+  expect(
+    await within(sheet).findByText(
+      'Your graphics card has about 9 GB free now (your display and other apps use the rest), so Row-Bot recommends Qwen3.5 2B. Larger models need about 16 GB free on it.',
+    ),
+  ).toBeVisible();
+  expect(
+    within(sheet).getByRole('combobox', { name: 'Starting model' }),
+  ).toHaveDisplayValue(/^Qwen3\.5 2B/);
+});
+
+it('the learning data line says how much of it is browser and computer pictures', () => {
+  const data = {
+    ...learningSnapshot().data,
+    exists: true,
+    bytes: 1_240_000_000,
+    picture_bytes: 830_000_000,
+  };
+  show(fakeIO(learningSnapshot({ state: 'on', data })));
+
+  expect(
+    screen.getByText(
+      '1.2 GB, including 830 MB of browser and computer pictures (up to 10 GB; the oldest go first). Turning Learning off keeps it.',
+    ),
   ).toBeVisible();
 });

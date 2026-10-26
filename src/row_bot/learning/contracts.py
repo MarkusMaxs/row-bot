@@ -554,6 +554,9 @@ class Signal(Record):
     """
 
     KIND: ClassVar[str] = "signal"
+    # v2 (L3b): a Teach may say what the answer should have been (``answer``); v1 reads as none.
+    SCHEMA_VERSION: ClassVar[int] = 2
+    MIGRATIONS: ClassVar[Mapping[int, Callable[[dict[str, Any]], dict[str, Any]]]] = {1: lambda data: data}
     FORM: ClassVar[Literal["jsonl", "manifest"]] = "jsonl"
 
     id: str = _field(pattern="id")
@@ -565,6 +568,9 @@ class Signal(Record):
     decision_id: str | None = _field(None, pattern="id")
     category: TeachCategory | None = None
     note: str | None = _field(None, text=2000)
+    # Teach's optional "What should it have done?": the reference of a held-out correction the person
+    # didn't redo (L3b, O125), in their words (redacted like the note).
+    answer: str | None = _field(None, text=2000)
     # Undo on "Thanks. Row-Bot will learn from this."
     withdrawn_at: float | None = _field(None, minimum=0)
 
@@ -580,8 +586,8 @@ class Signal(Record):
     def _validate(self) -> None:
         if not valid_thread_id(self.conversation_id):
             raise ContractError("invalid_field", "Signal.conversation_id")
-        if self.kind != "teach" and (self.category is not None or self.note is not None):
-            raise ContractError("invalid_record", "only Teach carries a category or note")
+        if self.kind != "teach" and (self.category is not None or self.note is not None or self.answer is not None):
+            raise ContractError("invalid_record", "only Teach carries a category, note or answer")
 
 
 LessonStatus = Literal["draft", "testing", "ready", "in_use", "off", "not_used", "deleted"]
@@ -709,9 +715,15 @@ class Attempt(Record):
     Every attempt is recorded with its lineage (``parent_ids``), hypothesis,
     evidence, outcome, cost and the reason it was or wasn't kept. Only an
     attempt that improved can be kept.
+
+    ``issue`` (v2, L3a) names the issue it answers (its kind of work and what went
+    wrong, ``document_lookups:corrected``), so a later night knows what was tried.
     """
 
     KIND: ClassVar[str] = "attempt"
+    SCHEMA_VERSION: ClassVar[int] = 2
+    # v1 had no issue: it reads as None.
+    MIGRATIONS: ClassVar[Mapping[int, Callable[[dict[str, Any]], dict[str, Any]]]] = {1: lambda data: data}
     FORM: ClassVar[Literal["jsonl", "manifest"]] = "jsonl"
 
     id: str = _field(pattern="id")
@@ -730,6 +742,7 @@ class Attempt(Record):
     release_id: str | None = _field(None, pattern="id")
     finished_at: float | None = _field(None, minimum=0)
     source_thread_ids: tuple[str, ...] = _field((), pattern="thread", items=50_000)
+    issue: str | None = _field(None, text=128)
 
     def _validate(self) -> None:
         if self.kept and self.outcome != "improved":

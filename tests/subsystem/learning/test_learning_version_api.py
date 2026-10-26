@@ -107,9 +107,33 @@ def test_the_snapshot_says_where_versions_run_and_has_no_version_yet(on):
 
     model = _snapshot(client, headers)["personal_model"]
 
+    # No NVIDIA card here: Row-Bot's own server is listed but can't run, so versions run in Ollama.
     assert model["runtime"] == "ollama" and model["version"] is None
-    assert [item["id"] for item in model["runtimes"]] == ["ollama", "lmstudio", "llama_cpp"]  # vLLM: Linux only
-    assert model["runtimes"][0] == {"id": "ollama", "name": "Ollama", "automated": True, "installed": False}
+    assert [item["id"] for item in model["runtimes"]] == ["row_bot", "ollama", "lmstudio", "llama_cpp"]  # vLLM: Linux
+    assert model["runtimes"][0] == {"id": "row_bot", "name": "Row-Bot", "automated": True, "installed": None,
+                                    "available": False}
+    assert model["runtimes"][1] == {"id": "ollama", "name": "Ollama", "automated": True, "installed": False,
+                                    "available": True}
+
+
+def test_with_an_nvidia_card_personal_models_run_in_row_bots_own_server_by_default(on, monkeypatch):
+    from row_bot.learning.training import hardware, lockfile
+
+    client, headers, data, _maker = on
+    card = hardware.classify([hardware.Gpu("NVIDIA GeForce RTX 5090", 32_607, "610.60")])
+    monkeypatch.setattr(lockfile, "tools_platform", lambda platforms=None: "windows-x64")  # any CI computer
+    monkeypatch.setattr(hardware, "peek", lambda: card)
+    monkeypatch.setattr(hardware, "check", lambda **_kwargs: card)
+
+    model = _snapshot(client, headers)["personal_model"]
+
+    assert model["runtime"] == "row_bot"
+    assert model["runtimes"][0] == {"id": "row_bot", "name": "Row-Bot", "automated": True, "installed": False,
+                                    "available": True}
+    moved = _ok(_command(client, headers, "choose_runtime", runtime="ollama"))
+    assert moved["summary"] == "Personal models run in Ollama."
+    assert _snapshot(client, headers)["personal_model"]["runtime"] == "ollama"
+    assert learning.read_settings(data).serve_runtime == "ollama"
 
 
 def test_the_newest_version_is_shown_as_it_is_made(on):
@@ -174,14 +198,15 @@ def test_runs_in_saves_the_choice_and_moves_a_made_version_there(on):
     assert maker.started == [(job.id, "lmstudio")]
 
 
-@pytest.mark.parametrize("runtime", ["vllm", "koboldcpp", ""])
+@pytest.mark.parametrize("runtime", ["vllm", "koboldcpp", "", "row_bot"])
 def test_a_runtime_this_computer_cant_offer_is_refused(on, runtime):
     client, headers, data, _maker = on
 
+    before = learning.read_settings(data).serve_runtime
     refused = _command(client, headers, "choose_runtime", runtime=runtime)
 
     assert refused.status_code in (409, 422)
-    assert learning.read_settings(data).serve_runtime == "ollama"
+    assert learning.read_settings(data).serve_runtime == before
 
 
 def test_personal_models_stay_out_of_model_lists_until_offered():

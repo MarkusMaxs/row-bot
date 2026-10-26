@@ -197,3 +197,160 @@ it('marks the runtime a version passed its check in, and says its size without i
   // O54: main screens say "v1 · 2 GB"; file names belong to Export… and Experiment details.
   expect(versionFileWords(versionState())).toBe('v1 · 2\u00a0GB');
 });
+
+// ── Row-Bot's own runner (L2x, O75) ────────────────────────────────────────
+
+const WITH_ROW_BOT: LearningPersonalModel['runtimes'] = [
+  {
+    id: 'row_bot',
+    name: 'Row-Bot',
+    automated: true,
+    installed: true,
+    available: true,
+  },
+  ...(RUNTIMES ?? []),
+];
+
+function runsIn(model: LearningPersonalModel) {
+  const io = fakeIO(learningSnapshot({ state: 'on', personal_model: model }));
+  render(
+    <OverlayProvider>
+      <RunsInSheet open onOpenChange={() => undefined} io={io} model={model} />
+    </OverlayProvider>,
+  );
+  return {
+    io,
+    sheet: screen.getByRole('dialog', {
+      name: 'Where your personal model runs',
+    }),
+  };
+}
+
+it('recommends Row-Bot’s own runner where it can run, with Ollama still a choice', async () => {
+  const { io, sheet } = runsIn(
+    installedModel({ runtime: 'ollama', runtimes: WITH_ROW_BOT }),
+  );
+  expect(
+    within(sheet).getByRole('radio', { name: /Row-Bot · recommended/ }),
+  ).toBeEnabled();
+  expect(
+    within(sheet).getByText(
+      'Row-Bot runs it for you with llama.cpp, and stops it when it isn’t needed.',
+    ),
+  ).toBeInTheDocument();
+  expect(
+    within(sheet).getByRole('radio', { name: /^Ollama/ }),
+  ).not.toHaveAccessibleName(/recommended/);
+  await userEvent.click(within(sheet).getByRole('radio', { name: /^Row-Bot/ }));
+  await userEvent.click(
+    within(sheet).getByRole('button', { name: 'Use Row-Bot' }),
+  );
+  expect(io.run).toHaveBeenCalledWith('choose_runtime', { runtime: 'row_bot' });
+});
+
+it('says Row-Bot’s runner isn’t on a computer without an NVIDIA card, and recommends Ollama there', () => {
+  const runtimes = WITH_ROW_BOT!.map((item) =>
+    item.id === 'row_bot'
+      ? { ...item, installed: null, available: false }
+      : item,
+  );
+  const { sheet } = runsIn(installedModel({ runtime: 'ollama', runtimes }));
+  expect(
+    within(sheet).getByRole('radio', {
+      name: /Row-Bot · not on this computer/,
+    }),
+  ).toBeDisabled();
+  expect(
+    within(sheet).getByText(
+      'It needs an NVIDIA graphics card. Your personal model can run in Ollama instead.',
+    ),
+  ).toBeInTheDocument();
+  expect(
+    within(sheet).getByRole('radio', { name: /Ollama · recommended/ }),
+  ).toBeChecked();
+});
+
+it('says Row-Bot’s runner comes with the training engine before it is downloaded', () => {
+  const runtimes = WITH_ROW_BOT!.map((item) =>
+    item.id === 'row_bot' ? { ...item, installed: false } : item,
+  );
+  const { sheet } = runsIn(installedModel({ runtime: 'row_bot', runtimes }));
+  expect(
+    within(sheet).getByText(
+      'Row-Bot runs it for you with llama.cpp, and stops it when it isn’t needed. It downloads with the training engine.',
+    ),
+  ).toBeInTheDocument();
+});
+
+it('words a version in Row-Bot’s runner: starting, ready, and each way out when it can’t start', () => {
+  expect(
+    versionView(versionState({ phase: 'making_ready', runtime: 'row_bot' }))
+      .title,
+  ).toBe('Starting v1…');
+  expect(versionView(versionState({ runtime: 'row_bot' })).detail).toBe(
+    'Trained on 154 examples of your work · runs in Row-Bot.',
+  );
+  const missing = versionView(
+    versionState({
+      phase: 'runtime_failed',
+      runtime: 'row_bot',
+      failure: 'server_missing',
+    }),
+  );
+  expect(missing.title).toBe(
+    'v1 couldn’t start in Row-Bot. Your main model is still in use.',
+  );
+  expect(missing.detail).toBe(
+    'Row-Bot needs one more part of the training engine to run it.',
+  );
+  expect(missing.actions).toEqual([
+    { label: 'Download', kind: 'download', primary: true },
+    { label: 'Try Ollama', kind: 'try_ollama' },
+  ]);
+  expect(
+    versionView(
+      versionState({
+        phase: 'runtime_failed',
+        runtime: 'row_bot',
+        failure: 'server_unavailable',
+      }),
+    ).actions,
+  ).toEqual([{ label: 'Try Ollama', kind: 'try_ollama', primary: true }]);
+  const memory = versionView(
+    versionState({
+      phase: 'runtime_failed',
+      runtime: 'row_bot',
+      failure: 'load_failed',
+    }),
+  );
+  expect(memory.detail).toBe(
+    'It didn’t load. The graphics card may not have enough free memory.',
+  );
+  expect(memory.actions.map((item) => item.label)).toEqual([
+    'Try again',
+    'Try Ollama',
+  ]);
+  expect(
+    runsInWords(
+      installedModel({
+        runtime: 'row_bot',
+        version: versionState({ runtime: 'row_bot' }),
+      }),
+    ),
+  ).toBe('Row-Bot ✓');
+});
+
+it('downloads what Row-Bot’s runner needs from the version card', async () => {
+  const { io } = card(
+    installedModel({
+      runtime: 'row_bot',
+      version: versionState({
+        phase: 'runtime_failed',
+        runtime: 'row_bot',
+        failure: 'server_missing',
+      }),
+    }),
+  );
+  await userEvent.click(screen.getByRole('button', { name: 'Download' }));
+  expect(io.run).toHaveBeenCalledWith('start_download');
+});

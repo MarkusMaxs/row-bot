@@ -21,8 +21,11 @@ import {
 
 type VersionAction = {
   label: string;
-  /** make_ready: Try again / Check again; runs_in: open the "Runs in" choice; try_ollama; compare: Compare now. */
-  kind: 'make_ready' | 'runs_in' | 'try_ollama' | 'compare';
+  /**
+   * make_ready: Try again / Check again; runs_in: open the "Runs in" choice; try_ollama; compare:
+   * Compare now; download: what Row-Bot's own runner still needs.
+   */
+  kind: 'make_ready' | 'runs_in' | 'try_ollama' | 'compare' | 'download';
   primary?: boolean;
 };
 
@@ -78,7 +81,10 @@ export function versionView(version: LearningVersion): VersionView {
     }
     case 'making_ready':
       return {
-        title: `Making ${name} ready in ${where}…`,
+        title:
+          version.runtime === 'row_bot'
+            ? `Starting ${name}…`
+            : `Making ${name} ready in ${where}…`,
         detail:
           'Loading it and checking it can answer and finish a task that uses a tool.',
         actions: [],
@@ -108,6 +114,24 @@ export function versionView(version: LearningVersion): VersionView {
       };
     case 'runtime_failed':
     default:
+      if (version.runtime === 'row_bot')
+        return {
+          title: `${name} couldn’t start in ${where}. Your main model is still in use.`,
+          detail: failure || undefined,
+          actions:
+            version.failure === 'server_missing'
+              ? [
+                  { label: 'Download', kind: 'download', primary: true },
+                  ...tryOllama,
+                ]
+              : version.failure === 'server_unavailable'
+                ? [{ label: 'Try Ollama', kind: 'try_ollama', primary: true }]
+                : [
+                    { label: 'Try again', kind: 'make_ready', primary: true },
+                    ...tryOllama,
+                  ],
+          announce: `${name} couldn’t start in ${where}.`,
+        };
       return {
         title: `${name} couldn’t start in ${where}. Your main model is still in use.`,
         detail: failure || undefined,
@@ -198,7 +222,9 @@ export function VersionCard({
           ? await io.run('choose_runtime', { runtime: 'ollama' })
           : action.kind === 'compare'
             ? await io.run('compare_version', { version: version!.version })
-            : await io.run('make_ready');
+            : action.kind === 'download'
+              ? await io.run('start_download')
+              : await io.run('make_ready');
       notify(receipt.summary);
     } catch (cause) {
       notify(clientError(cause).message, 'danger');
@@ -248,6 +274,8 @@ export function VersionCard({
 }
 
 const RUNTIME_NOTES: Record<string, string> = {
+  row_bot:
+    'Row-Bot runs it for you with llama.cpp, and stops it when it isn’t needed.',
   ollama: 'Row-Bot sets it up there for you and checks it.',
   lmstudio:
     'You load it with one command Row-Bot shows; Row-Bot then checks it.',
@@ -279,6 +307,10 @@ export function RunsInSheet({
   const runtimes: LearningRuntime[] = model.runtimes?.length
     ? model.runtimes
     : [{ id: 'ollama', name: 'Ollama', automated: true }];
+  // Row-Bot's own runner where it can run here (O75); Ollama where it can't.
+  const recommended =
+    runtimes.find((item) => item.id === 'row_bot' && item.available !== false)
+      ?.id ?? 'ollama';
 
   async function save() {
     setBusy(true);
@@ -310,18 +342,21 @@ export function RunsInSheet({
               name={name}
               value={runtime.id}
               checked={choice === runtime.id}
+              disabled={runtime.available === false}
               onChange={() => setChoice(runtime.id)}
             />
             <span>
               <span>
                 {runtime.name}
-                {runtime.id === 'ollama'
-                  ? runtime.installed === false
+                {runtime.available === false
+                  ? ' · not on this computer'
+                  : runtime.id === 'ollama' && runtime.installed === false
                     ? ' · not installed'
-                    : ' · recommended'
-                  : ''}
+                    : runtime.id === recommended
+                      ? ' · recommended'
+                      : ''}
               </span>
-              <small>{RUNTIME_NOTES[runtime.id] ?? ''}</small>
+              <small>{runtimeNote(runtime, model)}</small>
             </span>
           </label>
         ))}
@@ -339,6 +374,18 @@ export function RunsInSheet({
       </div>
     </ModalTask>
   );
+}
+
+/** A runtime's line in "Runs in": how it works here, or why it can't (designs/learning-ux.md §5). */
+function runtimeNote(runtime: LearningRuntime, model: LearningPersonalModel) {
+  if (runtime.id !== 'row_bot') return RUNTIME_NOTES[runtime.id] ?? '';
+  if (runtime.available === false)
+    return 'It needs an NVIDIA graphics card. Your personal model can run in Ollama instead.';
+  if (runtime.installed === false)
+    return model.download_state.state === 'downloading'
+      ? 'Downloading with the training engine…'
+      : `${RUNTIME_NOTES.row_bot} It downloads with the training engine.`;
+  return RUNTIME_NOTES.row_bot;
 }
 
 /** "Ollama ✓" once the newest version passed its check there. */

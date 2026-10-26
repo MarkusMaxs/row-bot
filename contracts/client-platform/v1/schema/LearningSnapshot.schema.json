@@ -79,18 +79,9 @@
           "maxItems": 8,
           "title": "Rank",
           "type": "array"
-        },
-        "starting_model": {
-          "items": {
-            "$ref": "#/$defs/LearningAdvancedModelChoice"
-          },
-          "maxItems": 8,
-          "title": "Starting Model",
-          "type": "array"
         }
       },
       "required": [
-        "starting_model",
         "rank",
         "learning_rate",
         "epochs",
@@ -98,27 +89,6 @@
         "method"
       ],
       "title": "LearningAdvancedChoices",
-      "type": "object"
-    },
-    "LearningAdvancedModelChoice": {
-      "additionalProperties": false,
-      "properties": {
-        "id": {
-          "maxLength": 64,
-          "title": "Id",
-          "type": "string"
-        },
-        "name": {
-          "maxLength": 128,
-          "title": "Name",
-          "type": "string"
-        }
-      },
-      "required": [
-        "id",
-        "name"
-      ],
-      "title": "LearningAdvancedModelChoice",
       "type": "object"
     },
     "LearningAdvancedValues": {
@@ -153,21 +123,355 @@
           "minimum": 1,
           "title": "Rank",
           "type": "integer"
-        },
-        "starting_model": {
-          "maxLength": 64,
-          "title": "Starting Model",
-          "type": "string"
         }
       },
       "required": [
-        "starting_model",
         "rank",
         "learning_rate",
         "epochs",
         "context"
       ],
       "title": "LearningAdvancedValues",
+      "type": "object"
+    },
+    "LearningCardRoom": {
+      "additionalProperties": false,
+      "properties": {
+        "free_gb": {
+          "maximum": 4096,
+          "minimum": 0,
+          "title": "Free Gb",
+          "type": "number"
+        },
+        "need_gb": {
+          "maximum": 4096,
+          "minimum": 0,
+          "title": "Need Gb",
+          "type": "number"
+        },
+        "nights": {
+          "maximum": 7,
+          "minimum": 0,
+          "title": "Nights",
+          "type": "integer"
+        },
+        "smaller": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LearningStartingModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "nights",
+        "need_gb",
+        "free_gb"
+      ],
+      "title": "LearningCardRoom",
+      "type": "object"
+    },
+    "LearningChangeTest": {
+      "additionalProperties": false,
+      "description": "A change's test result, in counts (aggregates only, E10).",
+      "properties": {
+        "difference": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Difference"
+        },
+        "high": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "High"
+        },
+        "low": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Low"
+        },
+        "note": {
+          "maxLength": 300,
+          "title": "Note",
+          "type": "string"
+        },
+        "rows": {
+          "items": {
+            "$ref": "#/$defs/LearningTestRow"
+          },
+          "maxItems": 4,
+          "title": "Rows",
+          "type": "array"
+        },
+        "small": {
+          "title": "Small",
+          "type": "boolean"
+        },
+        "tested_at": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tested At"
+        },
+        "verdict": {
+          "enum": [
+            "better",
+            "no_difference",
+            "worse",
+            "worse_elsewhere"
+          ],
+          "title": "Verdict",
+          "type": "string"
+        }
+      },
+      "required": [
+        "verdict",
+        "rows",
+        "note",
+        "small"
+      ],
+      "title": "LearningChangeTest",
+      "type": "object"
+    },
+    "LearningChangeView": {
+      "additionalProperties": false,
+      "description": "A change Learning drafted (UX \u00a74, \u00a77): waiting to be tested, testing, ready, edited (test again before\nusing), in use (with Undo) or not used.",
+      "properties": {
+        "agent_saved": {
+          "default": false,
+          "title": "Agent Saved",
+          "type": "boolean"
+        },
+        "change": {
+          "enum": [
+            "lesson",
+            "way_of_working",
+            "skill"
+          ],
+          "title": "Change",
+          "type": "string"
+        },
+        "created_at": {
+          "maxLength": 64,
+          "title": "Created At",
+          "type": "string"
+        },
+        "diff": {
+          "default": "",
+          "maxLength": 6000,
+          "title": "Diff",
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "document_lookups",
+            "structured_transforms",
+            "small_coding",
+            "tool_workflows",
+            "other"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "never_automatic": {
+          "title": "Never Automatic",
+          "type": "boolean"
+        },
+        "not_used": {
+          "anyOf": [
+            {
+              "enum": [
+                "not_better",
+                "turned_down",
+                "undone"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Not Used"
+        },
+        "setting": {
+          "default": "",
+          "maxLength": 120,
+          "title": "Setting",
+          "type": "string"
+        },
+        "snoozed": {
+          "default": false,
+          "title": "Snoozed",
+          "type": "boolean"
+        },
+        "state": {
+          "enum": [
+            "waiting_to_test",
+            "testing",
+            "ready",
+            "edited",
+            "in_use",
+            "not_used"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "test": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LearningChangeTest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "text": {
+          "maxLength": 1200,
+          "title": "Text",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 200,
+          "title": "Title",
+          "type": "string"
+        },
+        "used_at": {
+          "anyOf": [
+            {
+              "maxLength": 64,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Used At"
+        },
+        "used_by": {
+          "anyOf": [
+            {
+              "enum": [
+                "person",
+                "automatic"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Used By"
+        },
+        "why": {
+          "$ref": "#/$defs/LearningChangeWhy"
+        }
+      },
+      "required": [
+        "id",
+        "change",
+        "title",
+        "kind",
+        "state",
+        "created_at",
+        "text",
+        "why",
+        "never_automatic"
+      ],
+      "title": "LearningChangeView",
+      "type": "object"
+    },
+    "LearningChangeWhy": {
+      "additionalProperties": false,
+      "description": "Why a change was drafted, in counts only (never anyone's words, UX \u00a74).",
+      "properties": {
+        "chats": {
+          "minimum": 0,
+          "title": "Chats",
+          "type": "integer"
+        },
+        "corrections": {
+          "minimum": 0,
+          "title": "Corrections",
+          "type": "integer"
+        },
+        "denials": {
+          "minimum": 0,
+          "title": "Denials",
+          "type": "integer"
+        },
+        "failures": {
+          "minimum": 0,
+          "title": "Failures",
+          "type": "integer"
+        },
+        "imported": {
+          "minimum": 0,
+          "title": "Imported",
+          "type": "integer"
+        },
+        "retries": {
+          "minimum": 0,
+          "title": "Retries",
+          "type": "integer"
+        },
+        "stops": {
+          "minimum": 0,
+          "title": "Stops",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "chats",
+        "corrections",
+        "stops",
+        "retries",
+        "denials",
+        "failures",
+        "imported"
+      ],
+      "title": "LearningChangeWhy",
       "type": "object"
     },
     "LearningChannelNote": {
@@ -511,11 +815,23 @@
         "exists": {
           "title": "Exists",
           "type": "boolean"
+        },
+        "picture_bytes": {
+          "minimum": 0,
+          "title": "Picture Bytes",
+          "type": "integer"
+        },
+        "picture_cap_bytes": {
+          "minimum": 0,
+          "title": "Picture Cap Bytes",
+          "type": "integer"
         }
       },
       "required": [
         "exists",
-        "bytes"
+        "bytes",
+        "picture_bytes",
+        "picture_cap_bytes"
       ],
       "title": "LearningData",
       "type": "object"
@@ -691,6 +1007,39 @@
       "title": "LearningExamples",
       "type": "object"
     },
+    "LearningKindState": {
+      "additionalProperties": false,
+      "description": "Where Learning stands on a kind of work (UX \u00a73 \"What Row-Bot is learning\"), besides models in use.",
+      "properties": {
+        "kind": {
+          "enum": [
+            "document_lookups",
+            "structured_transforms",
+            "small_coding",
+            "tool_workflows",
+            "other"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "testing_change",
+            "needs_examples",
+            "change_ready",
+            "change_in_use"
+          ],
+          "title": "State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "state"
+      ],
+      "title": "LearningKindState",
+      "type": "object"
+    },
     "LearningNeedsYou": {
       "additionalProperties": false,
       "description": "One line of Overview's Needs you about the personal model (UX \u00a73, \u00a75).",
@@ -745,6 +1094,109 @@
         "title"
       ],
       "title": "LearningNeedsYou",
+      "type": "object"
+    },
+    "LearningOvernight": {
+      "additionalProperties": false,
+      "description": "Last night's look for things to improve (L3a; UX \u00a73 Overnight), in counts the client words.",
+      "properties": {
+        "drafted": {
+          "minimum": 0,
+          "title": "Drafted",
+          "type": "integer"
+        },
+        "found": {
+          "minimum": 0,
+          "title": "Found",
+          "type": "integer"
+        },
+        "left_out": {
+          "minimum": 0,
+          "title": "Left Out",
+          "type": "integer"
+        },
+        "looks_like_bug": {
+          "minimum": 0,
+          "title": "Looks Like Bug",
+          "type": "integer"
+        },
+        "needs_examples": {
+          "minimum": 0,
+          "title": "Needs Examples",
+          "type": "integer"
+        },
+        "night": {
+          "maxLength": 16,
+          "title": "Night",
+          "type": "string"
+        },
+        "not_better": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Not Better",
+          "type": "integer"
+        },
+        "ready": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Ready",
+          "type": "integer"
+        },
+        "state": {
+          "enum": [
+            "done",
+            "nothing",
+            "stopped",
+            "claude_plan",
+            "no_model",
+            "limit",
+            "unavailable",
+            "failed"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "tested": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Tested",
+          "type": "integer"
+        },
+        "tests_state": {
+          "anyOf": [
+            {
+              "enum": [
+                "stopped",
+                "limit",
+                "claude_plan",
+                "failed"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tests State"
+        },
+        "used": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Used",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "night",
+        "state",
+        "found",
+        "drafted",
+        "left_out",
+        "needs_examples",
+        "looks_like_bug"
+      ],
+      "title": "LearningOvernight",
       "type": "object"
     },
     "LearningPastChats": {
@@ -855,9 +1307,21 @@
           "title": "Export Folder",
           "type": "string"
         },
+        "room": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LearningCardRoom"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "runtime": {
-          "default": "ollama",
+          "default": "row_bot",
           "enum": [
+            "row_bot",
             "ollama",
             "lmstudio",
             "llama_cpp",
@@ -890,6 +1354,17 @@
           ],
           "title": "Starting Model State",
           "type": "string"
+        },
+        "stronger_model": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LearningStartingModel"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "train_in_quiet_hours": {
           "title": "Train In Quiet Hours",
@@ -1016,6 +1491,7 @@
                 "planning",
                 "up_to_date",
                 "gpu_busy",
+                "memory_busy",
                 "comparing"
               ],
               "type": "string"
@@ -1051,14 +1527,20 @@
     },
     "LearningRuntime": {
       "additionalProperties": false,
-      "description": "Where a personal model can run (\"Runs in\", D10).",
+      "description": "Where a personal model can run (\"Runs in\", D10; Row-Bot's own server, O75).",
       "properties": {
         "automated": {
           "title": "Automated",
           "type": "boolean"
         },
+        "available": {
+          "default": true,
+          "title": "Available",
+          "type": "boolean"
+        },
         "id": {
           "enum": [
+            "row_bot",
             "ollama",
             "lmstudio",
             "llama_cpp",
@@ -1187,6 +1669,74 @@
         "download_bytes"
       ],
       "title": "LearningStartingModel",
+      "type": "object"
+    },
+    "LearningTestRow": {
+      "additionalProperties": false,
+      "description": "One row of a change's test (UX \u00a74): tasks of a kind, passed without and with the change.",
+      "properties": {
+        "label": {
+          "maxLength": 120,
+          "title": "Label",
+          "type": "string"
+        },
+        "total": {
+          "minimum": 0,
+          "title": "Total",
+          "type": "integer"
+        },
+        "with_change": {
+          "minimum": 0,
+          "title": "With Change",
+          "type": "integer"
+        },
+        "without": {
+          "minimum": 0,
+          "title": "Without",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "label",
+        "total",
+        "without",
+        "with_change"
+      ],
+      "title": "LearningTestRow",
+      "type": "object"
+    },
+    "LearningTestingNow": {
+      "additionalProperties": false,
+      "description": "The change being tested now (\"Testing 'Pick documents by ID' on 24 tasks \u00b7 9 done\").",
+      "properties": {
+        "change_id": {
+          "maxLength": 128,
+          "title": "Change Id",
+          "type": "string"
+        },
+        "done": {
+          "minimum": 0,
+          "title": "Done",
+          "type": "integer"
+        },
+        "title": {
+          "maxLength": 200,
+          "title": "Title",
+          "type": "string"
+        },
+        "total": {
+          "minimum": 0,
+          "title": "Total",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "change_id",
+        "title",
+        "done",
+        "total"
+      ],
+      "title": "LearningTestingNow",
       "type": "object"
     },
     "LearningTraining": {
@@ -1542,7 +2092,11 @@
                 "create_failed",
                 "not_loaded",
                 "probe_failed",
-                "tool_turn_failed"
+                "tool_turn_failed",
+                "server_missing",
+                "server_unavailable",
+                "server_failed",
+                "load_failed"
               ],
               "type": "string"
             },
@@ -1624,6 +2178,7 @@
         },
         "runtime": {
           "enum": [
+            "row_bot",
             "ollama",
             "lmstudio",
             "llama_cpp",
@@ -1773,8 +2328,24 @@
       "title": "Apply Mode",
       "type": "string"
     },
+    "changes": {
+      "items": {
+        "$ref": "#/$defs/LearningChangeView"
+      },
+      "maxItems": 50,
+      "title": "Changes",
+      "type": "array"
+    },
     "data": {
       "$ref": "#/$defs/LearningData"
+    },
+    "kinds_learning": {
+      "items": {
+        "$ref": "#/$defs/LearningKindState"
+      },
+      "maxItems": 5,
+      "title": "Kinds Learning",
+      "type": "array"
     },
     "needs_you": {
       "items": {
@@ -1792,6 +2363,17 @@
       "maxItems": 2000,
       "title": "Opted Out Conversations",
       "type": "array"
+    },
+    "overnight": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LearningOvernight"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "owner_unset_channels": {
       "items": {
@@ -1838,6 +2420,17 @@
       ],
       "title": "State",
       "type": "string"
+    },
+    "testing_now": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LearningTestingNow"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "training": {
       "$ref": "#/$defs/LearningTraining"

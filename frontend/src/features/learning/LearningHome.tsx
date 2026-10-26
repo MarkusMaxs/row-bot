@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   BookOpen,
-  GraduationCap,
   Inbox,
   MoreHorizontal,
   Moon,
@@ -12,6 +11,7 @@ import { clientError } from '../../api/errors';
 import type {
   LearningHardware,
   LearningLessonPage,
+  LearningLessonView,
   LearningSnapshot,
 } from '../../api/types';
 import {
@@ -52,12 +52,28 @@ import {
   VersionReview,
   VersionsSection,
 } from './PersonalModelUse';
+import { CardRoomNotice } from './CardRoomNotice';
+import {
+  ChangeNeeds,
+  ChangeReview,
+  ChangesView,
+  UsedByItself,
+} from './ChangesView';
+import { StrongerModelNotice } from './StrongerModelNotice';
 import { TrainingProgress } from './TrainingProgress';
 import {
   dayWords,
+  KIND_STATE_WORDS,
+  kindLabel,
+  LESSON_STATUS,
+  memoryAdvice,
+  memoryNeedWords,
+  nextLookWords,
+  overnightLines,
   plural,
   quietHoursWords,
   sizeWords,
+  timesWords,
   tokenWords,
 } from './words';
 import './learning.css';
@@ -81,11 +97,11 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-/** "Quiet hours 1:00 AM–5:00 AM · 240K of 2M tokens this month". */
+/** "Next look tonight at 1:00 AM · 240K of 2M tokens this month" (designs §3). */
 function headerLine(snapshot: LearningSnapshot) {
   const { quiet_hours: hours, spending } = snapshot;
   const when = hours.next_look_at
-    ? `Next look ${new Intl.DateTimeFormat(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' }).format(new Date(hours.next_look_at))}`
+    ? nextLookWords(hours.next_look_at)
     : `Quiet hours ${quietHoursWords(hours.window_start, hours.window_end)}`;
   return `${when} · ${tokenWords(spending.used_tokens)} of ${tokenWords(spending.limit_tokens)} tokens this month`;
 }
@@ -150,17 +166,51 @@ function Banners({
 function Overview({
   io,
   onReview,
+  onReviewChange,
 }: {
   io: LearningIO;
   onReview: (version: number) => void;
+  onReviewChange: (id: string) => void;
 }) {
   const needs = io.snapshot?.needs_you ?? [];
+  const changes = io.snapshot?.changes ?? [];
+  const changeNeeds = changes.some(
+    (item) => item.state === 'ready' && !item.snoozed,
+  );
+  const testing = io.snapshot?.testing_now;
   const uses = io.snapshot?.personal_model.uses ?? [];
+  const night = io.snapshot?.overnight;
+  const lines = night ? overnightLines(night) : [];
+  const learning = io.snapshot?.kinds_learning ?? [];
+  const kinds = [
+    ...uses.map((item) => item.kind),
+    ...learning
+      .map((item) => item.kind)
+      .filter((kind) => !uses.some((item) => item.kind === kind)),
+  ];
   return (
     <div className="learning-section-list">
+      {testing && (
+        <div className="learning-progress" role="status">
+          <p className="home-caption">
+            Testing “{testing.title}” on {plural(testing.total, 'task')} ·{' '}
+            {testing.done.toLocaleString()} done
+          </p>
+          <progress
+            max={Math.max(1, testing.total)}
+            value={testing.done}
+            aria-label={`Testing “${testing.title}”`}
+          />
+        </div>
+      )}
       <Section title="Needs you">
-        {needs.length ? (
-          <PersonalModelNeeds io={io} onReview={onReview} />
+        {needs.length || changeNeeds ? (
+          <>
+            <ChangeNeeds changes={changes} onReview={onReviewChange} />
+            {needs.length > 0 && (
+              <PersonalModelNeeds io={io} onReview={onReview} />
+            )}
+          </>
         ) : (
           <InlineEmpty icon={<Inbox size={15} />}>
             Nothing needs you. Changes that are ready to review show here.
@@ -168,13 +218,26 @@ function Overview({
         )}
       </Section>
       <Section title="Overnight">
-        <InlineEmpty icon={<Moon size={15} />}>
-          Nothing has run yet. What Learning does in quiet hours shows here the
-          next morning.
-        </InlineEmpty>
+        {lines.length ? (
+          <>
+            <ul className="learning-overnight">
+              {lines.map((line) => (
+                <li key={line.text} data-tone={line.tone}>
+                  {line.text}
+                </li>
+              ))}
+            </ul>
+            <UsedByItself io={io} changes={changes} />
+          </>
+        ) : (
+          <InlineEmpty icon={<Moon size={15} />}>
+            Nothing has run yet. What Learning does in quiet hours shows here
+            the next morning.
+          </InlineEmpty>
+        )}
       </Section>
       <Section title="What Row-Bot is learning">
-        {uses.length ? (
+        {kinds.length ? (
           <table className="learning-results learning-kinds">
             <caption className="visually-hidden">
               Kinds of work and where they stand
@@ -186,16 +249,23 @@ function Overview({
               </tr>
             </thead>
             <tbody>
-              {uses.map((item) => (
-                <tr key={item.kind}>
-                  <th scope="row">{item.label}</th>
-                  <td>
-                    {item.state === 'trial'
-                      ? `Trying personal model v${item.version}`
-                      : `Personal model v${item.version} in use`}
-                  </td>
-                </tr>
-              ))}
+              {kinds.map((kind) => {
+                const use = uses.find((item) => item.kind === kind);
+                const state = learning.find((item) => item.kind === kind);
+                const words = [
+                  use &&
+                    (use.state === 'trial'
+                      ? `Trying personal model v${use.version}`
+                      : `Personal model v${use.version} in use`),
+                  state && KIND_STATE_WORDS[state.state],
+                ].filter(Boolean);
+                return (
+                  <tr key={kind}>
+                    <th scope="row">{use?.label ?? kindLabel(kind)}</th>
+                    <td>{words.join(' · ')}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         ) : (
@@ -218,44 +288,25 @@ function Overview({
   );
 }
 
-type ChangeFilter = 'ready' | 'testing' | 'in_use' | 'not_used';
-const CHANGE_EMPTY: Record<ChangeFilter, string> = {
-  ready: 'No changes are ready to review.',
-  testing: 'Nothing is being tested.',
-  in_use: 'No changes are in use. Changes you use show here, with Undo.',
-  not_used: 'No changes were turned down or tested worse.',
-};
-
-function Changes() {
-  const [filter, setFilter] = useState<ChangeFilter>('ready');
-  return (
-    <div className="learning-section-list">
-      <div className="learning-filters">
-        <Segmented
-          label="Show changes"
-          size="sm"
-          value={filter}
-          onChange={setFilter}
-          options={[
-            { value: 'ready', label: 'Ready' },
-            { value: 'testing', label: 'Testing' },
-            { value: 'in_use', label: 'In use' },
-            { value: 'not_used', label: 'Not used' },
-          ]}
-        />
-      </div>
-      <InlineEmpty icon={<GraduationCap size={15} />}>
-        {CHANGE_EMPTY[filter]} Row-Bot proposes a change only after testing it
-        during quiet hours.
-      </InlineEmpty>
-    </div>
-  );
+function lessonMeta(item: LearningLessonView): string {
+  if (item.origin === 'agent_saved')
+    return `Saved by Row-Bot during a chat${item.updated_at ? ` · ${relativeTime(item.updated_at)}` : ''}`;
+  const kind =
+    item.kind && item.kind !== 'other' ? kindLabel(item.kind) : 'Your work';
+  return item.status === 'in_use'
+    ? `${kind} · ${item.used ? `used ${timesWords(item.used)} this month` : 'not used yet this month'}`
+    : kind;
 }
 
 function Lessons({ io }: { io: LearningIO }) {
   const [page, setPage] = useState<LearningLessonPage | null>(null);
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
+  const notify = useNotify();
+  const revision = io.snapshot?.revision ?? '';
+  const changeStates = (io.snapshot?.changes ?? [])
+    .map((item) => item.state)
+    .join();
   useEffect(() => {
     let live = true;
     io.lessons().then(
@@ -265,9 +316,23 @@ function Lessons({ io }: { io: LearningIO }) {
     return () => {
       live = false;
     };
-    // Read once when the view opens.
+    // Read when the view opens, and again when a change moves (a lesson used, undone or tested).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [revision, changeStates]);
+  async function act(
+    action: 'undo_change' | 'delete_lesson' | 'test_lesson',
+    item: LearningLessonView,
+  ) {
+    try {
+      const receipt = await io.run(action, {
+        change_id: action === 'undo_change' ? item.change_id : item.id,
+      });
+      notify(receipt.summary);
+      setPage(await io.lessons());
+    } catch (cause) {
+      notify(clientError(cause).message, 'danger');
+    }
+  }
   const shown = useMemo(() => {
     const words = query.trim().toLowerCase();
     return (page?.items ?? []).filter(
@@ -295,8 +360,8 @@ function Lessons({ io }: { io: LearningIO }) {
       )}
       {page && page.items.length === 0 && (
         <InlineEmpty icon={<BookOpen size={15} />}>
-          No lessons yet. Lessons Row-Bot saves for itself while it works show
-          here, marked Not tested.
+          No lessons yet. Lessons Row-Bot learns from your work show here once
+          they pass their tests and you use them.
         </InlineEmpty>
       )}
       {page && page.items.length > 0 && shown.length === 0 && (
@@ -306,16 +371,57 @@ function Lessons({ io }: { io: LearningIO }) {
       )}
       {shown.length > 0 && (
         <EntityList label="Lessons">
-          {shown.map((item) => (
-            <EntityRow
-              key={item.id}
-              title={item.title}
-              icon={<BookOpen size={16} />}
-              status={{ tone: 'neutral', label: 'Not tested' }}
-              meta={`Saved by Row-Bot during a chat${item.updated_at ? ` · ${relativeTime(item.updated_at)}` : ''}`}
-              details={item.text ? <p>{item.text}</p> : undefined}
-            />
-          ))}
+          {shown.map((item) => {
+            const status = LESSON_STATUS[item.status];
+            const menu = [
+              ...(item.status === 'in_use'
+                ? [
+                    {
+                      label: 'Turn off',
+                      onSelect: () => void act('undo_change', item),
+                    },
+                  ]
+                : []),
+              ...(item.origin === 'agent_saved' &&
+              ['not_tested', 'tested_not_better'].includes(item.status)
+                ? [
+                    {
+                      label: 'Test it',
+                      onSelect: () => void act('test_lesson', item),
+                    },
+                  ]
+                : []),
+              {
+                label: 'Delete',
+                danger: true,
+                onSelect: () => void act('delete_lesson', item),
+              },
+            ];
+            return (
+              <EntityRow
+                key={item.id}
+                title={item.title}
+                icon={<BookOpen size={16} />}
+                status={status}
+                meta={lessonMeta(item)}
+                action={
+                  item.origin === 'agent_saved' &&
+                  item.status === 'not_tested' ? (
+                    <Button
+                      className="small"
+                      aria-label={`Test ${item.title}`}
+                      onClick={() => void act('test_lesson', item)}
+                    >
+                      Test it
+                    </Button>
+                  ) : undefined
+                }
+                menu={menu}
+                menuLabel={`More for ${item.title}`}
+                details={item.text ? <p>{item.text}</p> : undefined}
+              />
+            );
+          })}
         </EntityList>
       )}
     </div>
@@ -422,6 +528,19 @@ function PersonalModel({
         {`${hardware.gpu?.label ?? 'This graphics card'} can train a personal model, but its driver is too old. Training needs NVIDIA driver 570 or newer.`}
       </EmptyState>
     );
+  else if (hardware?.state === 'low_memory')
+    state = (
+      <EmptyState
+        title="This computer’s memory can’t hold training yet"
+        action={
+          <Button className="small" onClick={() => check(true)}>
+            Check again
+          </Button>
+        }
+      >
+        {`Training needs about ${hardware.tier?.system_memory_gb ?? ''} GB of RAM and virtual memory, and this computer has ${hardware.memory?.limit_gb ?? ''} GB. ${memoryAdvice(hardware.memory?.system)}`}
+      </EmptyState>
+    );
   else if (hardware?.state === 'container')
     state = (
       <EmptyState title="Training isn’t available here" action={settings}>
@@ -462,6 +581,12 @@ function PersonalModel({
       comparison.state === 'waiting');
   return (
     <div className="learning-section-list">
+      {model.room && (
+        <CardRoomNotice io={io} room={model.room} model={starting.name} />
+      )}
+      {model.stronger_model && !model.room && (
+        <StrongerModelNotice io={io} model={model.stronger_model} />
+      )}
       {download && <DownloadProgress io={io} snapshot={snapshot} />}
       {preparing && (
         <VersionCard
@@ -528,6 +653,19 @@ function PersonalModel({
                 : hardware.state === 'unknown'
                   ? 'Couldn’t check the graphics card'
                   : 'No NVIDIA graphics card'}
+            {hardware?.state === 'gpu' && hardware.tier && (
+              <span className="learning-muted learning-fact-note">
+                {hardware.tier.summary}
+                {(hardware.recommended ?? hardware.tier).system_memory_gb
+                  ? ` ${memoryNeedWords((hardware.recommended ?? hardware.tier).system_memory_gb)}`
+                  : ''}
+              </span>
+            )}
+            {hardware?.state === 'low_memory' && hardware.tier && (
+              <span className="learning-muted learning-fact-note">
+                Its memory can’t hold training yet.
+              </span>
+            )}
           </dd>
         </div>
       </dl>
@@ -569,6 +707,7 @@ export default function LearningHome({
   const notify = useNotify();
   const [busy, setBusy] = useState(false);
   const [reviewing, setReviewing] = useState(false);
+  const [changeOpen, setChangeOpen] = useState<string | null>(null);
   const deleteData = useDeleteLearningData(io);
   const snapshot = io.snapshot;
   const comparison = snapshot?.personal_model.comparison;
@@ -595,6 +734,8 @@ export default function LearningHome({
       </section>
     );
   const paused = snapshot.state === 'paused';
+  const reviewingChange =
+    (snapshot.changes ?? []).find((item) => item.id === changeOpen) ?? null;
   return (
     <section className="home-page learning-home" aria-label="Learning">
       <header className="home-page-header">
@@ -641,9 +782,15 @@ export default function LearningHome({
         onRaiseLimit={() => onOpenSettings('monthly_token_limit')}
       />
       {view === 'overview' && (
-        <Overview io={io} onReview={() => setReviewing(true)} />
+        <Overview
+          io={io}
+          onReview={() => setReviewing(true)}
+          onReviewChange={setChangeOpen}
+        />
       )}
-      {view === 'changes' && <Changes />}
+      {view === 'changes' && (
+        <ChangesView io={io} snapshot={snapshot} onOpen={setChangeOpen} />
+      )}
       {view === 'lessons' && <Lessons io={io} />}
       {view === 'model' && (
         <PersonalModel
@@ -651,6 +798,14 @@ export default function LearningHome({
           snapshot={snapshot}
           onOpenSettings={onOpenSettings}
           onReview={() => setReviewing(true)}
+        />
+      )}
+      {reviewingChange && (
+        <ChangeReview
+          io={io}
+          change={reviewingChange}
+          open
+          onOpenChange={(next) => !next && setChangeOpen(null)}
         />
       )}
       {comparison?.state === 'done' && (

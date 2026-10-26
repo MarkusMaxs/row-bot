@@ -25,22 +25,35 @@ The rules (fixed, reviewed; a change is a code change with its tests):
 ======================  ============================================================  =====
 Family                  Signals                                                       Score
 ======================  ============================================================  =====
-Document lookups        "according to", "in the document/policy/contract/report…",    3
-                        "what does … say", "look up", "find … in"; a document
-                        attached (.pdf .docx .md .txt .rtf .odt)
+Document lookups        "according to", "in/from/under the (current) policy,           3
+                        agreement, log, export, records, docs…", "what does … say",
+                        "look up", "find … in"; a question asking for a value from a
+                        named file ("How much …? It's in records/donations.csv")
+                        with no transform asked; a document attached (.pdf .docx
+                        .md .txt .rtf .odt)
                         document words alone (policy, contract, handbook, notes)      1 each
 Structured transforms   "convert", "transform", "reformat", "turn … into", "as        3
-                        JSON/CSV/a table"; a data file attached or named
-                        (.csv .json .tsv .xlsx .yaml .ini .xml)
-                        data words (columns, rows, fields, JSON, CSV)                 1 each
+                        JSON/CSV/a table", "read X and write Y", a data file to
+                        write ("put … into totals.json", "make a CSV"); a data
+                        file attached
+                        a data file named; data words (columns, rows, fields, JSON,   1 each
+                        CSV), counted outside file names
 Small coding tasks      a code fence, a function or class definition, a code file     3
                         named (.py .js .ts …), a code folder bound to the chat
                         code words (function, bug, unit test, refactor, script…)      1 each
-Tool workflows          an app the turn may use is named, or a calendar, mail or      3
-                        issue action ("schedule a meeting", "reply to", "close
-                        issue 12", "archive the newsletter")
+Tool workflows          an app the turn may use is named; an email address; a         3
+                        calendar, mail or issue action ("schedule a meeting",
+                        "book a review with Ash", "put … in the kitchen calendar",
+                        "cancel my 1:1", "email Hartwell …", "send a quick email",
+                        "reply to", "close #12", "label issue 7", "assign it to
+                        sam", "archive the newsletter")
                         app words (calendar, inbox, email, ticket, invite)            1 each
 ======================  ============================================================  =====
+
+L3a measured these rules on S1's seeded 30-day streams and the visible packs (before: document lookups
+6 of 55, tool workflows 4 of 56) and widened the document, transform and tool signals above; a
+request about the person's own world with no such signal ("Which days does Coldharbour Dairy
+deliver?") still reads as other, since nothing in its words says where the answer lives.
 
 Floor 3, margin 2. Scores are capped per family so one long message can't win on repetition.
 """
@@ -127,11 +140,22 @@ def _words(*items: str) -> re.Pattern[str]:
 
 
 _DOC_STRONG = _words(
-    r"according to", r"(?:in|from) (?:the|my|our|this|that) (?:document|doc|policy|contract|report|handbook|"
-    r"manual|memo|notes|minutes|spec|specification|file|pdf|agreement|guide|faq)s?",
+    r"according to", r"(?:in|from|under|per) (?:the|my|our|their|his|her|this|that) (?:[\w&'.-]+ ){0,4}"
+    r"(?:document|doc|docs|policy|policies|contract|report|handbook|manual|memo|notes|minutes|spec|specification|"
+    r"file|pdf|agreement|guide|faq|rota|log|ledger|records|export|statement|terms|checklist)s?",
+    r"(?:check|see|read|look in|look at|use) (?:the|my|our|their) (?:[\w&'.-]+ ){0,3}(?:document|doc|docs|policy|"
+    r"policies|contract|report|handbook|manual|notes|minutes|spec|agreement|guide|faq|rota|log|ledger|records|"
+    r"export|terms|checklist)s?",
+    r"(?:check|see|look in|according to) [\w./-]+\.(?:md|txt|pdf|docx|doc|rtf|odt|html)",
     r"what does (?:the|my|our|this|that) \w+(?: \w+)? say", r"look up", r"find (?:the|out|where|which|what|in)",
-    r"which (?:document|file|policy|version)", r"(?:current|latest|approved|superseded) (?:version|policy|draft)",
+    r"which (?:document|file|policy|version)",
+    r"(?:current|latest|approved|superseded) (?:[\w-]+ )?(?:version|policy|draft|agreement|contract|handbook|rota|"
+    r"guide|docs|terms)",
 )
+# A question asking for a value ("How much …?", "What's the total …?") about a named file.
+_VALUE_QUESTION = _words(r"how (?:much|many|long|often)", r"what(?:'s| is| was| are) the (?:total|sum|number|"
+                         r"amount|count|average|latest|current)", r"which", r"when (?:is|was|does|did)",
+                         r"who (?:is|was|owns|has)", r"total", r"sum")
 _DOC_WEAK = _words(r"documents?", r"docs?", r"polic(?:y|ies)", r"contracts?", r"handbook", r"manual", r"memo",
                    r"notes", r"minutes", r"reports?", r"pdf", r"invoices?", r"agreement", r"clause", r"section")
 _TRANSFORM_STRONG = _words(
@@ -139,7 +163,18 @@ _TRANSFORM_STRONG = _words(
     r"(?:as|into|to) (?:a )?(?:json|csv|tsv|yaml|table|markdown table|list|spreadsheet)",
     r"extract (?:the )?\w+(?: \w+)? into", r"group (?:them|these|the \w+) by", r"sort (?:them|these|the \w+) by",
     r"merge (?:the|these) (?:files|lists|tables)", r"dedupe|deduplicate", r"pivot", r"transpose",
+    r"(?:make|create|write|build) (?:a |an )?(?:csv|json|tsv|yaml|xml)(?: file| array| object)?",
 )
+# Reading one file and writing another ("Read orders.csv and write paid.json"), or putting data into a data
+# file or format ("put the totals into donations.json", "save it as JSON").
+_TRANSFORM_WRITES = re.compile(
+    r"\bread \S+ and (?:write|make|create|produce|save)\b"
+    r"|\b(?:write|create|make|save|produce)\s+[\w./-]+\.(?:csv|json|tsv|xlsx|yaml|yml|xml|toml|jsonl)\b"
+    r"|\b(?:put|write|save|store|make|export|turn|convert)\b(?:[^.?!\n]|\.(?=\S)){0,100}?\b(?:into|in|to|at|as)\s+"
+    r"(?:[\w./-]+\.(?:csv|json|tsv|xlsx|yaml|yml|xml|toml|jsonl)\b|(?:a |an )?(?:csv|json|tsv|yaml|xml)\b)",
+    re.IGNORECASE,
+)
+_FILE_NAME = re.compile(r"[\w-]*(?:/[\w.-]+)+/?|[\w-]+\.[a-z0-9]{1,5}\b", re.IGNORECASE)
 _TRANSFORM_WEAK = _words(r"json", r"csv", r"tsv", r"yaml", r"columns?", r"rows?", r"fields?", r"keys?",
                          r"table", r"spreadsheet", r"format")
 _CODE_STRONG = re.compile(
@@ -151,12 +186,24 @@ _CODE_STRONG = re.compile(
 _CODE_WEAK = _words(r"function", r"method", r"bug", r"code", r"script", r"python", r"javascript",
                     r"typescript", r"regex", r"compile", r"refactor", r"exception", r"variable", r"api")
 _TOOL_STRONG = _words(
-    r"schedule (?:a|the|an) \w+", r"(?:add|create|put|book|move|cancel) (?:a |an |the )?(?:\w+ )?"
-    r"(?:event|meeting|appointment|invite|call)", r"(?:reply|respond) to", r"send (?:a |an |the )?(?:email|mail|"
-    r"message|reply|note)", r"forward (?:the|this|that)", r"archive (?:the|this|that|my)",
-    r"(?:open|close|reopen|label|assign|comment on) (?:the |an |a )?(?:issue|ticket|bug report)s?",
-    r"(?:my|the) (?:calendar|inbox|mailbox)", r"mark (?:it|them|the \w+) as (?:read|done|closed)",
+    r"schedule (?:a|the|an) \w+", r"(?:add|create|put|book|move|cancel|delete|reschedule) (?:a |an |the |my |all my "
+    r"|every )?(?:[\w:'-]+ ){0,3}(?:event|meeting|appointment|invite|call|calendar entry|1:1|one-to-one)s?",
+    r"(?:reply|respond) to", r"send (?:\S+ )?(?:a |an |the )?(?:quick |short |brief )?"
+    r"(?:e-?mail|mail|message|reply|note)", r"send (?:them|it|this|that|these) to", r"forward (?:the|this|that)",
+    r"archive (?:the|this|that|my|all|every)", r"(?:e-?mail|message|ping) (?:\w+ ){0,3}\(?[\w.+-]+@",
+    r"(?:book|schedule|arrange) (?:a |an |the )?(?:[\w-]+ ){0,3}with \w+",
+    r"(?:add|apply|remove) (?:the |a )?labels? \w+",
+    r"(?:open|close|reopen|label|tag|assign|comment on) (?:the |an |a |every |all )?(?:open )?(?:[\w-]+ ){0,2}"
+    r"(?:issue|ticket|bug report)s?", r"(?:issue|ticket) #?\d+", r"(?:close|label|tag|reopen) #\d+",
+    r"assign(?:ed)? (?:it |them )?to \w+", r"assignee \w+",
+    r"(?:my|the) (?:calendar|inbox|mailbox)", r"(?:in|on|to) (?:my|the|our) (?:[\w-]+ ){0,2}calendar",
+    r"calendar (?:entry|event|invite)", r"mark (?:it|them|the \w+) as (?:read|done|closed)",
 )
+_EMAIL_ADDRESS = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+# A note to the app itself: "Calendar: playtest with Dee, 2026-10-22."
+_TOOL_LEAD = re.compile(r"^\s*(?:calendar|diary|inbox|e-?mail)\s*:", re.IGNORECASE)
+_ISSUE_ACTION = re.compile(r"#\d+\b.*\b(?:close|closing|label|tag|assign|comment|reopen|done)\b"
+                           r"|\b(?:close|label|tag|assign|comment|reopen)\b.*#\d+\b", re.IGNORECASE | re.DOTALL)
 _TOOL_WEAK = _words(r"calendar", r"inbox", r"e-?mails?", r"mail", r"tickets?", r"issues?", r"invites?",
                     r"meetings?", r"appointments?", r"tracker", r"slack", r"telegram", r"github", r"jira",
                     r"linear", r"notion", r"trello", r"todo", r"reminder")
@@ -205,14 +252,21 @@ def scores(request: Request) -> dict[str, int]:
 
     text = str(request.text or "")[:8_000]
     files = " ".join(str(name) for name in request.attachments)
+    # Words that name a kind count in the prose, not inside file names ("donations.csv" is no CSV request).
+    prose = _FILE_NAME.sub(" ", text)
+    transform = _count(_TRANSFORM_STRONG, prose) + _count(_TRANSFORM_WRITES, text)
+    asks_value = bool(_VALUE_QUESTION.search(prose)) and (
+        _named(text, _DATA_EXT) + _named(text, _DOC_EXT) > 0) and not transform
     found = {
-        DOCUMENT_LOOKUPS: 3 * _count(_DOC_STRONG, text) + _count(_DOC_WEAK, text)
-        + 3 * _named(files, _DOC_EXT),
-        STRUCTURED_TRANSFORMS: 3 * _count(_TRANSFORM_STRONG, text) + _count(_TRANSFORM_WEAK, text)
-        + 3 * _named(files, _DATA_EXT) + 2 * _named(text, _DATA_EXT),
-        SMALL_CODING: 3 * _count(_CODE_STRONG, text) + _count(_CODE_WEAK, text)
+        DOCUMENT_LOOKUPS: 3 * _count(_DOC_STRONG, text) + _count(_DOC_WEAK, prose)
+        + 3 * _named(files, _DOC_EXT) + (3 if asks_value else 0),
+        STRUCTURED_TRANSFORMS: 3 * transform + _count(_TRANSFORM_WEAK, prose)
+        + 3 * _named(files, _DATA_EXT) + _named(text, _DATA_EXT),
+        SMALL_CODING: 3 * _count(_CODE_STRONG, text) + _count(_CODE_WEAK, prose)
         + 3 * _named(files + " " + text, _CODE_EXT) + (3 if request.code_folder else 0),
-        TOOL_WORKFLOWS: 3 * _count(_TOOL_STRONG, text) + _count(_TOOL_WEAK, text)
+        TOOL_WORKFLOWS: 3 * (_count(_TOOL_STRONG, text) + bool(_EMAIL_ADDRESS.search(text))
+                             + bool(_ISSUE_ACTION.search(text)) + bool(_TOOL_LEAD.match(text)))
+        + _count(_TOOL_WEAK, prose)
         + (3 if request.apps else 0),
     }
     return {kind: min(CAP, value) for kind, value in found.items()}

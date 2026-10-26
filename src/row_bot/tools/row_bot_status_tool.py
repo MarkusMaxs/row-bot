@@ -805,13 +805,15 @@ def _query_insights() -> str:
         else:
             lines.append("- No active insights")
         try:
-            from row_bot.evolution import TERMINAL_PROPOSAL_STATUSES, list_action_runs, list_proposals
+            from row_bot.evolution import TERMINAL_PROPOSAL_STATUSES, learning_draft, list_action_runs, list_proposals
 
             proposals = list_proposals()
+            # Learning's drafts wait to be tested in Learning (L3b): their text doesn't reach the agent before.
             active_proposals = [
                 proposal
                 for proposal in proposals
                 if proposal.get("status") not in TERMINAL_PROPOSAL_STATUSES
+                and not learning_draft(proposal)
             ]
             lines.append(f"- Active proposals: {len(active_proposals)}")
             for proposal in active_proposals[:6]:
@@ -2486,7 +2488,10 @@ def _send_feedback(
 
 
 def _apply_controlled_proposal(proposal_id: str) -> str:
-    """Apply a proposal through the controlled action-run path."""
+    """Apply a proposal through the controlled action-run path. The approval card pausing the run and Stop are
+    not failures: they go on up."""
+
+    from langgraph.errors import GraphBubbleUp
 
     try:
         from row_bot.evolution import apply_proposal
@@ -2501,6 +2506,8 @@ def _apply_controlled_proposal(proposal_id: str) -> str:
         if rollback:
             details.append(f"Rollback ref: {rollback}")
         return "\n".join(details)
+    except (GraphBubbleUp, InterruptedError):
+        raise
     except Exception as exc:
         return f"Failed to apply proposal: {exc}"
 

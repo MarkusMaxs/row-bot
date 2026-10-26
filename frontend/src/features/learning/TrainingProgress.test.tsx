@@ -290,6 +290,34 @@ it('waits for the graphics card while another app holds its memory', () => {
   ).toBeInTheDocument();
 });
 
+it('waits for the computer’s memory while other apps hold it (O105)', () => {
+  withModel(
+    trainingRun({
+      state: 'planned',
+      job_id: 'job_1',
+      version: 1,
+      steps_total: 39,
+      can_train_now: true,
+      runner: { state: 'waiting', reason: 'memory_busy' },
+    }),
+    {
+      examples: { examples: 154, needed: 100, new_examples: 154, left_out: 11 },
+    },
+  );
+  expect(
+    screen.getByText(
+      'Training v1 starts when this computer has the memory free · uses 154 examples.',
+      SHOWN,
+    ),
+  ).toBeInTheDocument();
+  expect(
+    screen.getByText(
+      'Other apps are using this computer’s memory (RAM and virtual memory). Closing some frees it. It pauses when you use Row-Bot.',
+      SHOWN,
+    ),
+  ).toBeInTheDocument();
+});
+
 it('leaves a finished run to its version’s card', () => {
   withModel(
     trainingRun({

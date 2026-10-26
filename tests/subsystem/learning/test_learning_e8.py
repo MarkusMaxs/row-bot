@@ -71,3 +71,36 @@ def test_the_reviewer_is_sent_the_same_thing_with_learning_data_as_without(write
     for canary in (CANARY_TOOL, CANARY_REPLY, CANARY_NOTE, CANARY_LESSON):
         assert canary not in text
     assert "Please tidy my Downloads folder" in text  # the person's own words are what it judges by
+
+
+def test_the_reviewer_never_sees_a_lesson_in_use_or_a_way_of_working_even_when_the_turn_had_them(learning_on,
+                                                                                               monkeypatch):
+    # L3b: a lesson in use reaches the model through the turn's recall (the turn context), a way of working
+    # through the system prompt. Neither reaches the approval reviewer: it judges by the person's own words.
+    from datetime import datetime, timezone
+
+    from row_bot import learning, turn_context
+    from row_bot.learning import behaviour
+
+    canary_way = "CANARY-way-of-working-3e7d"
+    monkeypatch.setattr(learning, "_PREVIEW", True)
+    behaviour.use("proposal_e8", "tool_guidance", f"{canary_way}: check the calendar first.")
+    assert canary_way in learning.ways_of_working_text()
+    thread_id = f"e8-{uuid.uuid4().hex[:10]}"
+    threads.create_thread("Book a review", thread_id=thread_id, seed_default_skills=False)
+    values = turn_context.TurnContextValues(
+        now=datetime(2026, 10, 23, 9, 0, tzinfo=timezone.utc),
+        memories=({"id": "mem_lesson", "subject": "Lesson", "content": CANARY_LESSON},),
+        recall_block=lambda memories: "Relevant memories:\n" + "\n".join(item["content"] for item in memories))
+    context = turn_context.build_message(turn_id="t1", values=values, baseline=turn_context.Baseline(),
+                                         summary_marker="")
+    assert CANARY_LESSON in str(context.content)
+    assert threads.append_checkpoint_messages(thread_id, [
+        HumanMessage(content="Please book the design review", id=f"{thread_id}-h"), context,
+        AIMessage(content="Booking it.", id=f"{thread_id}-a"),
+    ])
+
+    text = json.dumps(_reviewed(thread_id))
+
+    assert CANARY_LESSON not in text and canary_way not in text
+    assert "Please book the design review" in text

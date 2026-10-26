@@ -7,10 +7,12 @@ import LearningHome, { type LearningView } from './LearningHome';
 import type { LearningIO } from './learning-state';
 import {
   downloadState,
+  draftedChange,
   fakeIO,
   installedModel,
   learningSnapshot,
   NO_GPU,
+  overnight,
   personalModel,
   runningRun,
 } from './test-data';
@@ -114,7 +116,11 @@ it('Overview while reading past chats counts them with a real denominator', () =
 });
 
 it('the … menu pauses, opens settings and deletes learning data after a confirm', async () => {
-  const io = fakeIO(on({ data: { exists: true, bytes: 3_400_000 } }));
+  const io = fakeIO(
+    on({
+      data: { ...learningSnapshot().data, exists: true, bytes: 3_400_000 },
+    }),
+  );
   const { onOpenSettings } = show(io);
   const user = userEvent.setup();
   const more = () => screen.getByRole('button', { name: 'More for Learning' });
@@ -163,6 +169,158 @@ it('Changes has its four filters, each with a real empty state', () => {
   expect(screen.getByText(/No changes are in use\./)).toBeVisible();
 });
 
+it('the header says when Learning next looks for things to improve', () => {
+  const tonight = new Date(Date.now() + 3 * 3_600_000);
+  tonight.setMinutes(0, 0, 0);
+  show(
+    fakeIO(
+      on({
+        quiet_hours: {
+          window_start: 1,
+          window_end: 5,
+          next_look_at: tonight.toISOString(),
+        },
+      }),
+    ),
+  );
+
+  expect(
+    screen.getByText(/^Next look tonight at .+ · 0 of 2M tokens this month$/),
+  ).toBeVisible();
+});
+
+it('Overnight says what last night found and drafted, in counts', () => {
+  show(
+    fakeIO(
+      on({
+        overnight: overnight({
+          needs_examples: 1,
+          left_out: 1,
+          looks_like_bug: 1,
+        }),
+        kinds_learning: [
+          { kind: 'document_lookups', state: 'testing_change' },
+          { kind: 'tool_workflows', state: 'needs_examples' },
+        ],
+      }),
+    ),
+  );
+
+  const night = screen.getByRole('region', { name: 'Overnight' });
+  expect(
+    within(night).getByText('Found 3 things to improve · drafted 2'),
+  ).toBeVisible();
+  expect(
+    within(night).getByText('1 kind of work needs more examples'),
+  ).toBeVisible();
+  expect(
+    within(night).getByText('1 of them looks like a bug in Row-Bot itself'),
+  ).toBeVisible();
+  expect(
+    within(night).getByText(
+      /^Left out 1 idea: Learning needs your feedback first/,
+    ),
+  ).toBeVisible();
+  const kinds = screen.getByRole('table', {
+    name: 'Kinds of work and where they stand',
+  });
+  expect(
+    within(kinds).getByRole('rowheader', { name: 'Document lookups' }),
+  ).toBeVisible();
+  expect(within(kinds).getByText('A change waits to be tested')).toBeVisible();
+  expect(within(kinds).getByText('Needs more examples')).toBeVisible();
+  expect(screen.queryByText('Nothing learned yet.')).toBeNull();
+});
+
+it('Overnight on the Claude plan says Learning needs another model and makes no promise', () => {
+  show(
+    fakeIO(
+      on({
+        overnight: overnight({ state: 'claude_plan', found: 2, drafted: 0 }),
+      }),
+    ),
+  );
+
+  expect(
+    screen.getByText(
+      /^Learning’s improvement work needs a model other than your Claude plan\./,
+    ),
+  ).toBeVisible();
+  expect(screen.queryByText(/Found 2 things/)).toBeNull();
+});
+
+it('Overnight when the person came back says it carries on later', () => {
+  show(
+    fakeIO(
+      on({ overnight: overnight({ state: 'stopped', found: 2, drafted: 1 }) }),
+    ),
+  );
+
+  expect(
+    screen.getByText('Found 2 things to improve · drafted 1'),
+  ).toBeVisible();
+  expect(
+    screen.getByText(/^Stopped when you came back to Row-Bot/),
+  ).toBeVisible();
+});
+
+it('Changes lists drafts as Waiting to be tested, with why in counts, never as Ready', () => {
+  show(
+    fakeIO(
+      on({
+        changes: [
+          draftedChange(),
+          draftedChange({
+            id: 'proposal_2',
+            change: 'way_of_working',
+            title: 'Check the calendar first',
+            kind: 'tool_workflows',
+            never_automatic: true,
+            why: {
+              chats: 1,
+              corrections: 0,
+              stops: 2,
+              retries: 0,
+              denials: 0,
+              failures: 0,
+              imported: 1,
+            },
+          }),
+        ],
+      }),
+    ),
+    'changes',
+  );
+
+  const filters = screen.getByRole('radiogroup', { name: 'Show changes' });
+  expect(within(filters).getByRole('radio', { name: 'Testing' })).toBeChecked();
+  const list = screen.getByRole('list', { name: 'Changes being tested' });
+  expect(within(list).getAllByText('Waiting to be tested')).toHaveLength(2);
+  expect(within(list).getByText(/^Lesson · Document lookups/)).toBeVisible();
+  expect(within(list).queryByText('Ready')).toBeNull();
+  fireEvent.click(
+    within(list).getByRole('button', {
+      name: 'Review Check the calendar first',
+    }),
+  );
+  const sheet = screen.getByRole('dialog', {
+    name: 'Check the calendar first',
+  });
+  expect(
+    within(sheet).getByText(
+      /you stopped it twice \(1 from past chats Learning read\)\. It rests only on what tools or web pages said, so it’s never used by itself\./,
+    ),
+  ).toBeVisible();
+  expect(within(sheet).getByText(/^Not tested yet\./)).toBeVisible();
+  expect(within(sheet).getByRole('button', { name: 'Test now' })).toBeVisible();
+  expect(
+    within(sheet).queryByRole('button', { name: 'Use this change' }),
+  ).toBeNull();
+  fireEvent.click(within(sheet).getByRole('button', { name: 'Close' }));
+  fireEvent.click(within(filters).getByRole('radio', { name: 'Ready' }));
+  expect(screen.getByText(/No changes are ready to review\./)).toBeVisible();
+});
+
 it('Lessons lists what Row-Bot saved for itself as Not tested, with search', async () => {
   const io = fakeIO(on());
   io.lessons = vi.fn(async () => ({
@@ -204,7 +362,7 @@ it('Lessons lists what Row-Bot saved for itself as Not tested, with search', asy
 it('Lessons with none says what will appear there', async () => {
   show(fakeIO(on()), 'lessons');
   expect(
-    await screen.findByText(/^No lessons yet\. Lessons Row-Bot saves/),
+    await screen.findByText(/^No lessons yet\. Lessons Row-Bot learns/),
   ).toBeVisible();
 });
 
@@ -290,4 +448,53 @@ it('Personal model: a training run replaces the setup states, and keeps itself f
   expect(io.watchTraining).toHaveBeenCalledTimes(1);
   unmount();
   expect(stop).toHaveBeenCalledTimes(1);
+});
+
+it('Personal model: after two nights without room on the graphics card it says so and offers a smaller model (O112)', async () => {
+  const snapshot = on();
+  const io = fakeIO({
+    ...snapshot,
+    personal_model: {
+      ...snapshot.personal_model,
+      starting_model: {
+        id: 'qwen3.5-9b',
+        name: 'Qwen3.5 9B',
+        licence: 'Apache 2.0',
+        download_bytes: 19_300_000_000,
+      },
+      room: {
+        nights: 2,
+        need_gb: 15.3,
+        free_gb: 9.2,
+        smaller: {
+          id: 'qwen3.5-2b',
+          name: 'Qwen3.5 2B',
+          licence: 'Apache 2.0',
+          download_bytes: 4_570_000_000,
+        },
+      },
+    },
+  });
+  show(io, 'model');
+
+  const notice = await screen.findByRole('status', {
+    name: 'No room on the graphics card',
+  });
+  expect(notice).toHaveTextContent(
+    'No room on the graphics card for 2 nights. Training Qwen3.5 9B needs about 16 GB free on it; it had about 9 GB (your display and other apps use the rest).',
+  );
+  fireEvent.click(
+    within(notice).getByRole('button', { name: 'Use Qwen3.5 2B instead…' }),
+  );
+  const ask = await screen.findByRole('alertdialog', {
+    name: 'Use Qwen3.5 2B instead?',
+  });
+  expect(ask).toHaveTextContent(
+    'Row-Bot downloads Qwen3.5 2B (4.6 GB) and trains it in quiet hours instead of Qwen3.5 9B.',
+  );
+  fireEvent.click(within(ask).getByRole('button', { name: 'Use Qwen3.5 2B' }));
+  await act(async () => undefined);
+  expect(io.run).toHaveBeenCalledWith('use_smaller_model', {
+    model: 'qwen3.5-2b',
+  });
 });

@@ -625,7 +625,8 @@ class PersonRun:
         saved = self.state.data["nights"].setdefault(str(day), {"steps": {}})
         if not saved["steps"]:
             self.clock.set(day + 1, clock_module.NIGHT_HOUR)
-        steps = {"dream": self._dream, "vault": self._vault, "learning": lambda: self._learning(day)}
+        steps = {"dream": self._dream, "vault": self._vault, "look": self._look,
+                 "learning": lambda: self._learning(day)}
         for name in clock_module.NIGHT_STEPS:
             if name in saved["steps"]:
                 if name == "dream":
@@ -665,6 +666,56 @@ class PersonRun:
         summary = evaluation.audit_summary(asked_by="the release check's night (counts)")
         return {"refresh": dict(added), "summary": dict(summary)}
 
+    def night_look(self) -> Any:
+        """The product's night's look (L3a), on the simulated clock: issues, a diagnosis each, drafts."""
+
+        from row_bot.learning.lease import ResourceLease
+        from row_bot.learning.runner import NightLook
+
+        return NightLook(lease=ResourceLease(since_activity=self.clock.idle_seconds), root=self.data,
+                         hours=clock_module.sim_quiet_hours(self.clock, self.data), clock=self.clock.time)
+
+    def _look(self) -> Any:
+        """Tonight's look for things to improve (L3a) and its tests (L3b): counts only (drafts by kind of
+        change, E9 refusals, tokens; drafts tested, ready, not better). The simulated person then uses each
+        change that came out ready and Undoes it again (use → Undo survives, counted)."""
+
+        look = self.night_look()
+        report = look.tick()
+        found = report.to_dict() if report is not None else None
+        result: dict[str, Any] = {"ran": False} if found is None else {
+            key: found[key] for key in ("state", "found", "diagnosed", "drafted", "refused", "needs_examples",
+                                        "train", "waits", "bugs", "unreadable", "tokens", "drafts", "refusals",
+                                        "skipped")}
+        result["tests"] = self._tests(look)
+        return result
+
+    def _tests(self, look: Any) -> dict[str, Any]:
+        """Tonight's tests of drafted changes (L3b), and use → Undo of each that came out ready."""
+
+        from row_bot.learning import changes
+        from row_bot.learning.store import LearningStore
+
+        tested = changes.last_tests(LearningStore(self.data)) or {}
+        if tested.get("night") != look.tonight():
+            return {"ran": False}
+        survived = failed = 0
+        for proposal in changes.learning_changes():
+            if changes.view_state(proposal) != "ready":
+                continue
+            try:
+                used = changes.use(str(proposal["id"]))
+                ok = changes.view_state(used) == "in_use"
+                undone = changes.undo(str(proposal["id"]))
+                ok = ok and changes.view_state(undone) == "not_used"
+            except changes.ChangeError:
+                ok = False
+            survived += ok
+            failed += not ok
+        return {"ran": True, **{key: tested.get(key) for key in ("state", "tested", "ready", "not_better", "unclear",
+                                                                 "used", "tokens")},
+                "use_undo_survived": survived, "use_undo_failed": failed}
+
     # ── Learning's runner at night ──────────────────────────────────────
 
     def runner(self) -> Any:
@@ -693,7 +744,7 @@ class PersonRun:
                                    (maker, "start", "export and serve"), (comparisons, "start", "comparison")):
             setattr(owner, name, self._booked(getattr(owner, name), phase))
         self._runner = LearningRunner(supervisor, root=self.data, hours=clock_module.sim_quiet_hours(self.clock, self.data),
-                                      planner=planner, releases=maker, comparisons=comparisons)
+                                      planner=planner, releases=maker, comparisons=comparisons, look=self.night_look())
         return self._runner
 
     def _booked(self, original: Any, phase: str) -> Any:

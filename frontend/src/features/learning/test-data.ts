@@ -2,9 +2,11 @@
 import { vi } from 'vitest';
 import type {
   LearningAdvanced,
+  LearningChangeView,
   LearningComparison,
   LearningDownload,
   LearningHardware,
+  LearningOvernight,
   LearningPersonalModel,
   LearningReceipt,
   LearningSnapshot,
@@ -37,7 +39,12 @@ export function learningSnapshot(
     past_chats: { state: 'none', total: 0, done: 0 },
     personal_model: personalModel(),
     training: trainingRun(),
-    data: { exists: false, bytes: 0 },
+    data: {
+      exists: false,
+      bytes: 0,
+      picture_bytes: 0,
+      picture_cap_bytes: 10_000_000_000,
+    },
     opted_out_conversations: [],
     owner_unset_channels: [],
     ...overrides,
@@ -187,6 +194,32 @@ export const GPU_8GB: LearningHardware = {
   ],
   engine_download_bytes: 2_170_000_000,
   free_bytes: 512_000_000_000,
+};
+
+/** A 32 GB card certified for the 9B (O124): setup recommends it; the 2B fits too. */
+export const GPU_32GB: LearningHardware = {
+  ...GPU_8GB,
+  gpu: {
+    name: 'NVIDIA GeForce RTX 5090',
+    memory_gb: 32,
+    label: 'NVIDIA GeForce RTX 5090 (32 GB)',
+  },
+  tier: {
+    id: '32gb',
+    label: '32 GB',
+    certified: true,
+    summary: 'Can train medium models (about 9B) on your tasks.',
+  },
+  starting_models: [
+    {
+      id: 'qwen3.5-9b',
+      name: 'Qwen3.5 9B',
+      licence: 'Apache 2.0',
+      download_bytes: 19_300_000_000,
+    },
+    ...GPU_8GB.starting_models,
+  ],
+  free_bytes: 700_000_000_000,
 };
 
 export const NO_GPU: LearningHardware = {
@@ -390,7 +423,6 @@ export function advancedState(
   overrides: Partial<LearningAdvanced> = {},
 ): LearningAdvanced {
   const values = {
-    starting_model: 'qwen3.5-2b',
     rank: 16,
     learning_rate: 0.0002,
     epochs: 1,
@@ -402,7 +434,6 @@ export function advancedState(
     recommended: values,
     changed: false,
     choices: {
-      starting_model: [{ id: 'qwen3.5-2b', name: 'Qwen3.5 2B' }],
       rank: [8, 16, 32, 64],
       learning_rate: [0.00005, 0.0001, 0.0002, 0.0003, 0.0005],
       epochs: [1, 2, 3],
@@ -487,4 +518,76 @@ export function comparedModel(
     export_folder: 'C:\\Users\\me\\Documents',
     ...overrides,
   });
+}
+
+/** A drafted change waiting to be tested (L3a; never real data). */
+export function draftedChange(
+  overrides: Partial<LearningChangeView> = {},
+): LearningChangeView {
+  return {
+    id: 'proposal_1',
+    change: 'lesson',
+    title: 'Use the current policy',
+    kind: 'document_lookups',
+    state: 'waiting_to_test',
+    created_at: new Date(Date.now() - 3_600_000).toISOString(),
+    text: 'When two versions of a policy exist, answer from the newest approved one and say which.',
+    why: {
+      chats: 3,
+      corrections: 2,
+      stops: 1,
+      retries: 0,
+      denials: 0,
+      failures: 0,
+      imported: 0,
+    },
+    never_automatic: false,
+    ...overrides,
+  };
+}
+
+/** A change that passed its test (L3b): Ready, with its table. */
+export function testedChange(
+  overrides: Partial<LearningChangeView> = {},
+): LearningChangeView {
+  return draftedChange({
+    id: 'proposal_ready',
+    title: 'Pick documents by ID, not title',
+    state: 'ready',
+    test: {
+      verdict: 'better',
+      rows: [
+        {
+          label: 'Document lookups it hadn’t seen',
+          total: 12,
+          without: 7,
+          with_change: 10,
+        },
+        { label: 'Other tasks', total: 10, without: 10, with_change: 10 },
+      ],
+      note: 'Testing used 850K tokens · Small test, so expect some variation.',
+      small: true,
+      tested_at: new Date(Date.now() - 7_200_000).toISOString(),
+      difference: 25,
+      low: 8.3,
+      high: 41.7,
+    },
+    ...overrides,
+  });
+}
+
+/** Last night's look (L3a): found 3, drafted 2 by default. */
+export function overnight(
+  overrides: Partial<LearningOvernight> = {},
+): LearningOvernight {
+  return {
+    night: new Date().toISOString().slice(0, 10),
+    state: 'done',
+    found: 3,
+    drafted: 2,
+    left_out: 0,
+    needs_examples: 0,
+    looks_like_bug: 0,
+    ...overrides,
+  };
 }

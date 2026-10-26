@@ -2803,6 +2803,18 @@ const CATALOG: Record<string, Entry> = {
     'Row-Bot couldn’t save the files there. Choose a folder outside Row-Bot’s own data, then try again.',
     'review',
   ],
+  learning_change_changed: [
+    'This change moved on meanwhile. Check Changes and try again.',
+    'review',
+  ],
+  learning_change_refused: [
+    'Row-Bot can’t put this change into use as it is.',
+    'none',
+  ],
+  learning_change_busy: [
+    'Row-Bot is testing a change right now. It says here when it’s done.',
+    'none',
+  ],
   knowledge_changed: [
     'This memory changed. Try again with its current version.',
     'retry',

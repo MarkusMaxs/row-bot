@@ -318,6 +318,25 @@ test('the Learning tab: paused, limit reached, reading past chats, its other vie
   await expect(notice(page, /^Learning data deleted/)).toBeVisible();
 });
 
+test('Learning data says how much of it is browser and computer pictures', async ({
+  page,
+}, info) => {
+  await fixture(page, 'preview');
+  await fixture(page, 'gpu');
+  await turnOn(page, info, false, 'Not now');
+  await fixture(page, 'pictures');
+  await openSettings(page, 'learning');
+
+  const group = page.getByRole('heading', { name: 'Learning data' });
+  await group.scrollIntoViewIfNeeded();
+  await expect(
+    page.getByText(
+      /, including 960\sKB of browser and computer pictures \(up to 10\sGB; the oldest go first\)\. Turning Learning off keeps it\.$/,
+    ),
+  ).toBeVisible();
+  await shoot(page, info, 'settings-learning-data-pictures');
+});
+
 test('without a suitable graphics card the setup sheet offers Hugging Face', async ({
   page,
 }, info) => {

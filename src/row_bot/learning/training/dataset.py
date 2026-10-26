@@ -38,7 +38,9 @@ small-context profile's prompt and tool exposure at 32K, a call to a tool now be
 written as the ``tool_search`` / ``tool_invoke`` steps the served model would take). A row whose
 rendering changed anything is **derived**, never the main model's raw output (E3); the manifest
 names the rendering and counts derived rows. ``shape="captured"`` keeps rows exactly as captured
-(the paper's ablation compares the two).
+(the paper's ablation compares the two). The picture a model that sees images gets after a browser or
+computer action (5.3) is left out of a served row, as the text-only personal model is served without it;
+a captured row can't hold it, so such a turn is left out there (``unsupported_content``).
 
 **Identity**: deterministic and content-addressed: the same records and recipe give the same rows
 and the same ``ds_…`` id. The ``DataSpec`` records which providers' answers it holds (D7) and the
@@ -178,6 +180,15 @@ def openai_message(message: Mapping[str, Any]) -> dict[str, Any] | None:
     if kind == "tool":
         return {"role": "tool", "content": _text(data.get("content")), "tool_call_id": str(data.get("tool_call_id") or "")}
     return None
+
+
+def _page_picture(message: Mapping[str, Any]) -> bool:
+    """The browser's or the computer's picture after an action (``pictures.is_page_picture``): the text-only
+    personal model is served without it, so its served rows leave it out."""
+
+    from row_bot.learning.pictures import is_page_picture
+
+    return is_page_picture(message)
 
 
 def _is_person(message: Mapping[str, Any]) -> bool:
@@ -442,7 +453,9 @@ def _scope_reason(conversation: str, *, historical: bool, goal: bool, store: Any
         reason = "opted_out"
     else:
         facts = scope.describe_thread(conversation, historical=historical, goal=goal, lookup=lookup)
-        decision = scope.decide(facts, replace(settings, enabled=True, paused=False))
+        # A chat that turned incognito keeps what Learning recorded before it did, as memory keeps what it saved
+        # (N11): incognito stops the recording, not the use of what came before.
+        decision = scope.decide(replace(facts, incognito=False), replace(settings, enabled=True, paused=False))
         if not decision.allowed:
             reason = {
                 scope.UNKNOWN_SOURCE: "conversation_gone",
@@ -472,32 +485,65 @@ class PastFrame:
                 or {} for tool in self.tools}
 
 
-def past_frame(episodes: Sequence[Episode], book: _Book) -> PastFrame | None:
-    """The newest finished live turn's Agent request with a system prompt and tools, or None (nothing live
-    yet: imported rows wait for it)."""
+def _agent_request(episode: Episode, book: _Book) -> tuple[str, tuple[Mapping[str, Any], ...]] | None:
+    """A finished live turn's newest Agent request with a system prompt and tools: (its system text, its tools)."""
 
     from row_bot.learning import capture
 
-    for episode in reversed(list(episodes)):
-        if episode.historical or episode.fidelity == "partial" or episode.status != "completed":
+    calls = [item for item in book.decisions.get(episode.id, []) if item.kind == "model_call"]
+    for call in reversed(calls):
+        request = capture.read_request(book.store, call)
+        if not request or request.get("purpose") != "agent" or not request.get("tools"):
             continue
-        calls = [item for item in book.decisions.get(episode.id, []) if item.kind == "model_call"]
-        for call in reversed(calls):
-            request = capture.read_request(book.store, call)
-            if not request or request.get("purpose") != "agent" or not request.get("tools"):
-                continue
-            system: list[str] = []
-            for message in request.get("messages") or ():
-                try:
-                    converted = openai_message(message) if isinstance(message, Mapping) else None
-                except (_Unsupported, ValueError, TypeError, KeyError):
-                    converted = None
-                if converted is not None and converted["role"] == "system":
-                    system.append(str(converted["content"]))
-            tools = tuple(dict(item) for item in request["tools"] if isinstance(item, Mapping))
-            if system and tools:
-                return PastFrame(tuple(system), tools)
+        system: list[str] = []
+        for message in request.get("messages") or ():
+            try:
+                converted = openai_message(message) if isinstance(message, Mapping) else None
+            except (_Unsupported, ValueError, TypeError, KeyError):
+                converted = None
+            if converted is not None and converted["role"] == "system":
+                system.append(str(converted["content"]))
+        tools = tuple(dict(item) for item in request["tools"] if isinstance(item, Mapping))
+        if system and tools:
+            return "\n\n".join(text for text in system if text), tools
     return None
+
+
+def _paragraphs(text: str) -> list[str]:
+    return [part for part in text.split("\n\n") if part.strip()]
+
+
+def past_frame(episodes: Sequence[Episode], book: _Book) -> PastFrame | None:
+    """What imported rows are framed with: the newest finished live turn's Agent request's tools and the
+    static part of its system prompt, or None (nothing live yet: imported rows wait for it).
+
+    A live prompt's sections are stable for a conversation (what changes each turn, recalled memories
+    among it, goes in the turn-context message, never here), but some belong to that conversation alone:
+    an Agent Profile, a Designer guide, the skills it keeps, a workflow's background notes, a compaction
+    summary's guidance. An imported chat had none of them, so it keeps only the parts a live Agent request
+    of another conversation also has; with no other conversation yet, the prompt is taken as it is."""
+
+    live = [item for item in reversed(list(episodes))
+            if not item.historical and item.fidelity != "partial" and item.status == "completed"]
+    newest: tuple[Episode, str, tuple[Mapping[str, Any], ...]] | None = None
+    shared: set[str] | None = None
+    for episode in live:
+        found = _agent_request(episode, book)
+        if found is None:
+            continue
+        if newest is None:
+            newest = (episode, *found)
+            continue
+        if episode.conversation_id != newest[0].conversation_id:
+            shared = set(_paragraphs(found[0]))
+            break
+    if newest is None:
+        return None
+    _episode, text, tools = newest
+    if shared is not None:
+        kept = [part for part in _paragraphs(text) if part in shared]
+        text = "\n\n".join(kept) or text
+    return PastFrame((text,), tools)
 
 
 _JSON_TYPES: dict[str, Any] = {"string": str, "integer": int, "number": (int, float), "boolean": bool, "array": list,
@@ -608,6 +654,11 @@ def _example(episode: Episode, book: _Book, *, roots: Sequence[str],
     try:
         output = json.loads(raw.decode("utf-8"))
         sent = [message for message in request["messages"] if isinstance(message, Mapping)]
+        pictures = 0
+        if envelope is not None and (not episode.historical or frame is not None):
+            # The browser's or the computer's picture: the personal model is served without it (text only).
+            pictures = sum(1 for message in sent if _page_picture(message))
+            sent = [message for message in sent if not _page_picture(message)]
         person = max((index for index, message in enumerate(sent) if _is_person(message)), default=-1)
         messages: list[dict[str, Any]] = []
         starts: list[int] = []  # where each of the person's messages is in ``messages``
@@ -668,9 +719,10 @@ def _example(episode: Episode, book: _Book, *, roots: Sequence[str],
                 system, messages, tools, envelope, agent=agent)
         except shape_module.RenderError:
             return None, "unrenderable", 0
+        rendered.pictures_removed = pictures
         derived = rendered.changed
         if stats is not None and derived:
-            for name in ("tools_deferred", "calls_bridged", "searches_added", "state_removed"):
+            for name in ("tools_deferred", "calls_bridged", "searches_added", "state_removed", "pictures_removed"):
                 setattr(stats, name, getattr(stats, name) + getattr(rendered, name))
             stats.system_changed = stats.system_changed or rendered.system_changed
     if system:
@@ -822,6 +874,7 @@ def compile_dataset(
             "searches_added": sum(item.searches_added for item in rendered),
             "system_rewritten": sum(item.system_changed for item in rendered),
             "state_removed": sum(item.state_removed for item in rendered),
+            "pictures_removed": sum(item.pictures_removed for item in rendered),
             # O113: imported tool steps kept as targets, and those that became context only (and why).
             "past_steps": {key: past_steps[key] for key in ("kept", "tool_not_offered", "arguments_invalid")},
         })

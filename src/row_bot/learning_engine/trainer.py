@@ -675,6 +675,8 @@ def fit_main(writer: Any, options: dict[str, str]) -> int:
         "max_seq_length": int(options.get("max_seq", 16384)),
         "bits": int(options.get("bits", 16)),
         "gradient_accumulation": int(options.get("accum", 2)),
+        # A smaller tier's card, on a larger one: the share of this card that tier may use (L2x, O90).
+        "vram_cap": float(options.get("vram_cap", DEFAULTS["vram_cap"])),
     })
     steps = int(options.get("steps", 4))
     started = time.monotonic()
@@ -763,7 +765,8 @@ QUANTIZATIONS = ("Q8_0", "Q4_K_M")
 
 
 def export_main(writer: Any, options: dict[str, str]) -> int:
-    """Merge the adapter into its 16-bit starting model (on the CPU), convert it to GGUF with
+    """Merge the adapter into its 16-bit starting model (on the CPU, a file at a time:
+    :func:`merge_streaming`), convert it to GGUF with
     llama.cpp's converter and quantize it with ``llama-quantize``: ``--quant`` names the kinds
     (``Q8_0``, ``Q4_K_M``; both when not given, as the GPU check script measures).
 
@@ -805,6 +808,59 @@ class _Progress(dict):
             pass
 
 
+LORA_SUFFIXES = (".lora_A.weight", ".lora_B.weight")
+ADAPTER_PREFIX = "base_model.model."
+
+
+def merge_streaming(model: Path, adapter: Path, merged: Path) -> int:
+    """Merge a LoRA adapter into its 16-bit starting model one weights file at a time, on the CPU:
+    ``W + (alpha / r) * B @ A`` for every adapted layer (what PEFT's ``merge_and_unload`` computes),
+    in float32, stored back in the weight's own type. Only one file of the model is held in memory
+    (a 27B model's 55 GB never is, L2x), every other tensor and file is kept as it is, and an adapted
+    layer the model doesn't have is refused. Returns how many weights were merged."""
+
+    import torch
+    from safetensors import safe_open
+    from safetensors.torch import load_file, save_file
+
+    config = json.loads((adapter / "adapter_config.json").read_text(encoding="utf-8"))
+    if config.get("use_dora") or config.get("fan_in_fan_out") or config.get("modules_to_save"):
+        raise ValueError("unsupported adapter")
+    rank = float(config["r"])
+    scale = float(config["lora_alpha"]) / (math.sqrt(rank) if config.get("use_rslora") else rank)
+    pairs: dict[str, dict[str, Any]] = {}
+    for key, tensor in load_file(str(adapter / "adapter_model.safetensors")).items():
+        suffix = next((item for item in LORA_SUFFIXES if key.endswith(item)), None)
+        if suffix is None or not key.startswith(ADAPTER_PREFIX):
+            raise ValueError("unexpected adapter tensor")
+        weight = key[len(ADAPTER_PREFIX):-len(suffix)] + ".weight"
+        pairs.setdefault(weight, {})["A" if "lora_A" in suffix else "B"] = tensor
+    if any(set(pair) != {"A", "B"} for pair in pairs.values()):
+        raise ValueError("incomplete adapter")
+    merged.mkdir(parents=True, exist_ok=True)
+    done: set[str] = set()
+    for shard in sorted(model.glob("*.safetensors")):
+        tensors: dict[str, Any] = {}
+        with safe_open(str(shard), "pt") as handle:
+            metadata = handle.metadata()
+            for name in handle.keys():
+                tensor = handle.get_tensor(name)
+                pair = pairs.get(name)
+                if pair is not None:
+                    delta = pair["B"].to(torch.float32) @ pair["A"].to(torch.float32)
+                    tensor = (tensor.to(torch.float32) + scale * delta).to(tensor.dtype)
+                    done.add(name)
+                tensors[name] = tensor
+        save_file(tensors, str(merged / shard.name), metadata=metadata or {"format": "pt"})
+        del tensors
+    if done != set(pairs):
+        raise ValueError("the adapter names layers the starting model doesn't have")
+    for source in model.iterdir():  # its configuration, tokenizer, chat template and weights index
+        if source.is_file() and source.suffix != ".safetensors" and not (merged / source.name).exists():
+            (merged / source.name).write_bytes(source.read_bytes())
+    return len(done)
+
+
 def _export(options: dict[str, str], out: Path, report: dict[str, Any], progress: dict[str, str]) -> None:
     import shutil
     import subprocess
@@ -820,24 +876,8 @@ def _export(options: dict[str, str], out: Path, report: dict[str, Any], progress
         merged = Path(options["model"])
         options = {**options, "keep_merged": "1"}
     else:
-        import torch
-        from peft import PeftModel
-        from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText, AutoTokenizer
-
-        config = AutoConfig.from_pretrained(options["model"], local_files_only=True)
-        architecture = (config.architectures or [""])[0]
-        loader = AutoModelForImageTextToText if "ConditionalGeneration" in architecture else AutoModelForCausalLM
-        model = loader.from_pretrained(options["model"], torch_dtype=torch.bfloat16, local_files_only=True,
-                                       device_map="cpu")
-        model = PeftModel.from_pretrained(model, options["adapter"], local_files_only=True).merge_and_unload()
         merged = out / "merged"
-        model.save_pretrained(str(merged), safe_serialization=True)
-        AutoTokenizer.from_pretrained(options["model"], local_files_only=True).save_pretrained(str(merged))
-        for name in ("chat_template.jinja", "preprocessor_config.json", "video_preprocessor_config.json"):
-            source = Path(options["model"]) / name
-            if source.is_file() and not (merged / name).exists():
-                (merged / name).write_bytes(source.read_bytes())
-        del model
+        report["steps"]["merged_tensors"] = merge_streaming(Path(options["model"]), Path(options["adapter"]), merged)
     report["steps"]["merge_seconds"] = round(time.monotonic() - started, 1)
     progress["step"] = "convert"
     llama = Path(options["llama"])

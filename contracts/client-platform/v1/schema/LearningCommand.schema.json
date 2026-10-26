@@ -32,15 +32,9 @@
           "minimum": 1,
           "title": "Rank",
           "type": "integer"
-        },
-        "starting_model": {
-          "maxLength": 64,
-          "title": "Starting Model",
-          "type": "string"
         }
       },
       "required": [
-        "starting_model",
         "rank",
         "learning_rate",
         "epochs",
@@ -70,8 +64,11 @@
           "$ref": "#/$defs/LearningSourcesSnapshot"
         },
         "starting_model": {
-          "const": "qwen3.5-2b",
           "default": "qwen3.5-2b",
+          "enum": [
+            "qwen3.5-2b",
+            "qwen3.5-9b"
+          ],
           "title": "Starting Model",
           "type": "string"
         },
@@ -161,7 +158,17 @@
         "reset_advanced",
         "retrain_without",
         "dismiss",
-        "review_version"
+        "review_version",
+        "use_smaller_model",
+        "change_starting_model",
+        "test_change",
+        "use_change",
+        "undo_change",
+        "not_now_change",
+        "dont_suggest_change",
+        "edit_change",
+        "test_lesson",
+        "delete_lesson"
       ],
       "title": "Action",
       "type": "string"
@@ -176,6 +183,12 @@
         }
       ],
       "default": null
+    },
+    "answer": {
+      "default": "",
+      "maxLength": 2000,
+      "title": "Answer",
+      "type": "string"
     },
     "category": {
       "anyOf": [
@@ -194,6 +207,12 @@
       ],
       "default": null,
       "title": "Category"
+    },
+    "change_id": {
+      "default": "",
+      "maxLength": 128,
+      "title": "Change Id",
+      "type": "string"
     },
     "client_session_id": {
       "format": "uuid",
@@ -269,6 +288,16 @@
       "title": "Message Id",
       "type": "string"
     },
+    "model": {
+      "default": "",
+      "enum": [
+        "",
+        "qwen3.5-2b",
+        "qwen3.5-9b"
+      ],
+      "title": "Model",
+      "type": "string"
+    },
     "note": {
       "default": "",
       "maxLength": 2000,
@@ -284,6 +313,7 @@
       "default": "",
       "enum": [
         "",
+        "row_bot",
         "ollama",
         "lmstudio",
         "llama_cpp",
@@ -307,6 +337,12 @@
       "default": "",
       "maxLength": 128,
       "title": "Signal Id",
+      "type": "string"
+    },
+    "text": {
+      "default": "",
+      "maxLength": 4000,
+      "title": "Text",
       "type": "string"
     },
     "tool_call_id": {
