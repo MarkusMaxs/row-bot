@@ -777,7 +777,8 @@ it('reorders messages from the drag handle with the arrow keys and keeps focus o
   const values = () =>
     [1, 2, 3].map(
       (index) =>
-        (screen.getByLabelText(`Message ${index}`) as HTMLTextAreaElement).value,
+        (screen.getByLabelText(`Message ${index}`) as HTMLTextAreaElement)
+          .value,
     );
   const handle = (index: number) =>
     screen.getByRole('button', { name: `Reorder message ${index}` });
