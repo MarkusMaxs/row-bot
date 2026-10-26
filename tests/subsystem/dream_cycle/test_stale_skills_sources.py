@@ -30,21 +30,27 @@ def world(tmp_path, monkeypatch, reload_for_data_dir):
 
 
 class _Extraction:
-    """The default model as memory extraction sees it: it saves what the conversation says about the deep clean."""
+    """The default model as memory extraction sees it: it saves what the conversation says about the deep clean
+    (only from a conversation with ``only`` in it, when given)."""
+
+    def __init__(self, only: str = "") -> None:
+        self.only = only
 
     def bind(self, **_kwargs):
         return self
 
-    def invoke(self, _messages):
+    def invoke(self, messages):
+        if self.only and self.only not in str(messages[-1].content):
+            return AIMessage(content='{"memories": []}')
         return AIMessage(content=json.dumps({"memories": [
             {"category": "event", "subject": "Deep Clean", "content": BOOKED}]}))
 
 
-def _extract(world, monkeypatch) -> None:
+def _extract(world, monkeypatch, only: str = "") -> None:
     from row_bot import memory_extraction, models
     from row_bot.providers import background
 
-    model = _Extraction()
+    model = _Extraction(only)
     monkeypatch.setattr(models, "get_current_model", lambda: "model:openai:gpt-5")
     monkeypatch.setattr(models, "get_llm_for", lambda _ref, num_ctx=None, *, reasoning_plan=None: model)
     monkeypatch.setattr(background, "resolve_reasoning_capabilities_for_ref", lambda _ref: None)
@@ -158,3 +164,34 @@ def test_a_document_or_the_persons_own_edit_outside_any_conversation_is_trusted(
     world.at(datetime(2026, 11, 6, 1, 0))
     assert arms.reconcile(_Drafts())["candidates"] == 1
     assert [item["origin"] for item in _events("supersede") if item.get("subject") == "Sandgate Bakery"] == [""]
+
+
+def test_a_value_read_back_from_the_world_in_a_later_chat_is_still_the_agents_own(world, monkeypatch):
+    """The agent booked the wrong time in one chat; a later chat reads it back from the calendar and memory keeps it:
+    the calendar only echoes the agent's booking, so neither R nor D acts on it (the user's decision, 26 Oct)."""
+
+    from row_bot.stale_skills import arms
+
+    _conversation(world, "deep-clean-run", AGENTS_BOOKING)
+    _conversation(world, "deep-clean-check", [
+        HumanMessage(id="h1", content="Check the calendar: when is the deep clean on the 4th?"),
+        AIMessage(id="a1", content="", tool_calls=[{"name": "calendar_list_events", "id": "c1",
+                                                     "args": {"date": "2026-11-04"}}]),
+        ToolMessage(id="t1", name="calendar_list_events", tool_call_id="c1", content=json.dumps({"events": [{
+            "id": "evt_38", "title": "Deep Clean", "date": "2026-11-04", "start": "18:00", "end": "20:00"}]})),
+        AIMessage(id="a2", content="The deep clean is on 4 November from 6:00 PM to 8:00 PM."),
+    ])
+    world.at(datetime(2026, 11, 3, 21, 0))
+    _extract(world, monkeypatch, only="Check the calendar")
+    [write] = [item for item in _events("write") if item.get("subject") == "Deep Clean"]
+    assert write["origin"] == "thread:deep-clean-check"
+
+    world.at(datetime(2026, 11, 4, 1, 0))
+    model = _Drafts()
+    result = arms.reconcile(model)
+    world.set_arm("D")
+
+    assert (result["candidates"], model.prompts, arms.date_note("deep_clean_procedure")) == (0, [], "")
+    [untrusted] = _events("untrusted_source")
+    assert (untrusted["origin"], untrusted["fresh"]) == ("thread:deep-clean-check", ["18:00", "20:00"])
+    assert _events("patch_candidate") == []
