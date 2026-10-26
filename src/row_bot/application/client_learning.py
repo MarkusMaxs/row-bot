@@ -1167,9 +1167,18 @@ def read_learning_hardware(*, validate: Callable[[], None], refresh: bool = Fals
         "starting_models": [_model_view(item) for item in found.starting_models],
         "engine_download_bytes": hardware.engine_download_bytes(found.variant),
         "free_bytes": free,
+        # C1 (O131): whether a model trained on Hugging Face could run on this computer afterwards.
+        "hugging_face": bool(_hugging_face_runs_here(found)),
     }
     validate()
     return result
+
+
+def _hugging_face_runs_here(found: Any) -> bool:
+    from row_bot.learning.training import catalog
+
+    gpu = getattr(found, "gpu", None)
+    return found.state != "container" and bool(catalog.for_hugging_face(int(gpu.memory_mib) if gpu else None))
 
 
 def read_learning_conversation(conversation_id: str, *, validate: Callable[[], None]) -> dict[str, Any]:

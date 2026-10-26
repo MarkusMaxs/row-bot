@@ -215,6 +215,26 @@ function HardwareRows({
       </div>
     );
   const hugging = choices.train_where === 'hugging_face';
+  // O131: a model trained on Hugging Face runs here after, so it is offered only where one can run.
+  if (!hardware.hugging_face)
+    return (
+      <div className="learning-stack-tight">
+        <p>
+          {hardware.gpu ? (
+            <>
+              <span className="learning-label">This computer: </span>
+              {hardware.gpu.label}. A personal model runs on an NVIDIA graphics
+              card with 8 GB or more, and trains on one with 16 GB.
+            </>
+          ) : (
+            'A personal model runs on an NVIDIA graphics card with 8 GB or more, and this computer has none.'
+          )}
+        </p>
+        <p className="learning-muted">
+          Learning still improves Row-Bot with lessons and ways of working.
+        </p>
+      </div>
+    );
   return (
     <div className="learning-stack-tight">
       {hardware.gpu && (

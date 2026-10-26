@@ -4671,6 +4671,9 @@ class LearningHardware(WireModel):
     starting_models: list[LearningStartingModel] = Field(max_length=8)
     engine_download_bytes: int = Field(ge=0)
     free_bytes: int | None = Field(default=None, ge=0)
+    # C1 (O131): a model trained on Hugging Face could run on this computer afterwards (an NVIDIA card big
+    # enough for at least one certified model's GGUF), so setup may offer Hugging Face.
+    hugging_face: bool = False
 
 
 class LearningConversation(WireModel):
