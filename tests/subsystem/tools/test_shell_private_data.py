@@ -158,22 +158,73 @@ def test_file_tools_refuse_paths_inside_the_data_folder(shell, reload_for_data_d
     assert "hello" in tools["workspace_read_file"].invoke({"file_path": "notes.txt"})
 
 
-def test_file_tools_refuse_a_sibling_folder_named_like_the_workspace(shell, reload_for_data_dir):
-    """B320: the workspace check compares folders, not string prefixes."""
+def _file_tools(shell, reload_for_data_dir):
     _shell_tool, registry, home = shell
     workspace, sibling = home / "Row-Bot", home / "Row-Bot2"
     workspace.mkdir()
     sibling.mkdir()
     (sibling / "secret.txt").write_text("private", encoding="utf-8")
     (workspace / "notes.txt").write_text("hello", encoding="utf-8")
-    (filesystem_tool,) = reload_for_data_dir(home / ".row-bot", "row_bot.tools.filesystem_tool")
+    filesystem_tool, approval_gate = reload_for_data_dir(
+        home / ".row-bot", "row_bot.tools.filesystem_tool", "row_bot.tools.approval_gate")
     registry.set_tool_config("filesystem", "workspace_root", str(workspace))
     tools = {tool.name: tool for tool in filesystem_tool.FileSystemTool().as_langchain_tools()}
+    return tools, approval_gate, workspace, sibling
+
+
+def test_file_tools_treat_a_sibling_folder_named_like_the_workspace_as_outside(shell, reload_for_data_dir,
+                                                                                monkeypatch):
+    """B320: the workspace check compares folders, not string prefixes; a sibling is outside it."""
+    tools, approval_gate, workspace, sibling = _file_tools(shell, reload_for_data_dir)
+    monkeypatch.setattr(approval_gate, "current_approval_mode", lambda: "block")
 
     for path in (str(sibling / "secret.txt"), "../Row-Bot2/secret.txt"):
         assert "private" not in tools["workspace_read_file"].invoke({"file_path": path})
     assert "outside the workspace" in tools["workspace_list_directory"].invoke({"dir_path": str(sibling)})
     assert "hello" in tools["workspace_read_file"].invoke({"file_path": str(workspace / "notes.txt")})
+
+
+def test_a_file_outside_the_workspace_is_read_only_after_the_persons_approval(shell, reload_for_data_dir,
+                                                                             monkeypatch):
+    """5.3.1 B1: a file elsewhere on this computer asks by the approval level, naming its path."""
+    tools, approval_gate, _workspace, sibling = _file_tools(shell, reload_for_data_dir)
+    asked: list[dict] = []
+    answers = iter([False, True])
+    monkeypatch.setattr(approval_gate, "current_approval_mode", lambda: "approve")
+    monkeypatch.setattr("langgraph.types.interrupt", lambda payload: asked.append(payload) or next(answers))
+    target = str(sibling / "secret.txt")
+
+    denied = tools["workspace_read_file"].invoke({"file_path": target})
+    approved = tools["workspace_read_file"].invoke({"file_path": target})
+
+    assert "private" not in denied and "private" in approved
+    assert asked[0]["label"] == "Read outside the workspace?"
+    assert target in asked[0]["description"]
+
+
+def test_a_file_outside_the_workspace_is_written_after_approval_through_the_same_tool(shell, reload_for_data_dir,
+                                                                                     monkeypatch):
+    tools, approval_gate, _workspace, sibling = _file_tools(shell, reload_for_data_dir)
+    asked: list[dict] = []
+    monkeypatch.setattr(approval_gate, "current_approval_mode", lambda: "approve")
+    monkeypatch.setattr("langgraph.types.interrupt", lambda payload: asked.append(payload) or True)
+
+    tools["workspace_write_file"].invoke({"file_path": str(sibling / "plan.md"), "text": "Ship 5.3.1"})
+
+    assert (sibling / "plan.md").read_text(encoding="utf-8") == "Ship 5.3.1"
+    assert asked[0]["label"] == "Change files outside the workspace?"
+
+
+def test_the_data_folder_stays_out_of_reach_even_under_hands_off(shell, reload_for_data_dir, monkeypatch):
+    tools, approval_gate, _workspace, _sibling = _file_tools(shell, reload_for_data_dir)
+    _shell_tool, _registry, home = shell
+    (home / ".row-bot").mkdir(exist_ok=True)
+    (home / ".row-bot" / "settings.json").write_text("{\"key\": \"secret\"}", encoding="utf-8")
+    monkeypatch.setattr(approval_gate, "current_approval_mode", lambda: "full")
+
+    answer = tools["workspace_read_file"].invoke({"file_path": str(home / ".row-bot" / "settings.json")})
+
+    assert "secret" not in answer and "private data folder" in answer
 
 
 def test_a_self_hosted_installs_secrets_folder_is_private_too(shell, monkeypatch, tmp_path, reload_for_data_dir):
