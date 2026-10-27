@@ -1237,6 +1237,9 @@ class ClientPlatformService:
                 hold_thread_deletion(target)
                 return {"conversation_id": target, "status": "DeleteCompleted"}
             result = delete_thread(target)
+            if result.deleted:
+                from row_bot.application import approval_grants
+                approval_grants.end_chat(target)
             return {
                 "conversation_id": target,
                 "status": "DeleteCompleted" if result.deleted else "DeleteBlocked",
@@ -1988,11 +1991,11 @@ class ClientPlatformService:
             # Buddy stops saying "Needs approval" now, not when the turn ends (B333).
             _buddy(conversation_id, "approval.approved" if approved else "approval.denied",
                    "Approved" if approved else "Denied", approval_id=approval_id)
-            if approved and payload.get("scope") == "turn" and alone is None:
+            if approved and payload.get("scope") in {"turn", "chat"} and alone is None:
                 from row_bot.application import approval_grants
                 kinds = approval_grants.approval_kinds(interrupt)
                 if kinds:
-                    approval_grants.grant(conversation_id, kinds)
+                    approval_grants.grant(conversation_id, kinds, payload["scope"])
             answered = ({"interrupt_ids": [alone_id], "resume_values": {alone_id: approved}} if asks_again
                         else {"interrupt_ids": context["interrupt_ids"]})
             result = self._start(conversation_id, {"model_selection": context["model_selection"]}, resume=True,

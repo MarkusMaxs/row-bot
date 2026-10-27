@@ -379,10 +379,10 @@ it('re-reads the waiting approvals at once after an answer (B302)', async () => 
   expect(pendingApprovals).toHaveBeenCalledTimes(2);
 });
 
-it('offers approving the rest of the reply only for a repeatable action (F21)', async () => {
+it('offers allowing an action in this chat only when it is repeatable (F21, 5.3.1 B2)', async () => {
   await renderCard();
   expect(
-    screen.queryByRole('button', { name: 'Approve the rest' }),
+    screen.queryByRole('button', { name: 'Allow in this chat' }),
   ).not.toBeInTheDocument();
   approval.mockResolvedValue({
     ...view,
@@ -393,14 +393,14 @@ it('offers approving the rest of the reply only for a repeatable action (F21)', 
   const second = render(<ApprovalCard id="approval-b" />);
   fireEvent.click(
     await within(second.container).findByRole('button', {
-      name: 'Approve the rest',
+      name: 'Allow in this chat',
     }),
   );
   await waitFor(() =>
     expect(intent).toHaveBeenCalledWith(
       'approval-b',
       'approval.resolve',
-      { decision: 'approve', nonce: 'nonce-a', scope: 'turn' },
+      { decision: 'approve', nonce: 'nonce-a', scope: 'chat' },
       '3',
     ),
   );
@@ -611,7 +611,7 @@ it('asks to save to memory from an incognito chat with the exact text, Save or D
     within(card).queryByRole('button', { name: 'Use Auto in this chat' }),
   ).toBeNull();
   expect(
-    within(card).queryByRole('button', { name: 'Approve the rest' }),
+    within(card).queryByRole('button', { name: 'Allow in this chat' }),
   ).toBeNull();
 
   await act(async () => fireEvent.click(save));
