@@ -52,6 +52,33 @@ def test_unrelated_paths_are_unaffected(shell, command, expected):
     assert shell_tool.classify_command(command) == expected
 
 
+@pytest.mark.parametrize("command", [
+    "~/.row-bot/ffmpeg/imageio-ffmpeg/ffmpeg.exe -i clip.webm clip.mp4",
+    "ls ~/.row-bot/recordings",
+    r"type %USERPROFILE%\.row-bot\logs\row_bot.log",
+    "cp ~/.row-bot/exports/report.pdf ./report.pdf",
+])
+def test_the_data_folders_shared_parts_follow_the_approval_level(shell, command):
+    """5.3.1 A1: the managed ffmpeg, recordings, exports and logs are tools and results, not private data."""
+    shell_tool, _registry, _home = shell
+    assert shell_tool.classify_command(command) in {"safe", "needs_approval"}
+
+
+@pytest.mark.parametrize("command", [
+    "cat ~/.row-bot/ffmpeg/../threads.db",
+    "ls ~/.row-bot/recordings ~/.row-bot",
+    "cat ~/.row-bot/ffmpegs/settings.json",
+])
+def test_a_shared_part_never_opens_the_rest_of_the_data_folder(shell, command):
+    shell_tool, _registry, _home = shell
+    assert shell_tool.classify_command(command) == "private_data"
+
+
+def test_a_projects_own_row_bot_folder_is_not_the_data_folder(shell):
+    shell_tool, _registry, _home = shell
+    assert shell_tool.classify_command("cat my-app/.row-bot/config.json") == "safe"
+
+
 def test_reading_the_data_folder_is_refused_in_every_mode_without_asking(shell, monkeypatch):
     """The setting is a hard limit: with it off, not even Hands-off reads the folder, nor asks."""
     shell_tool, _registry, _home = shell

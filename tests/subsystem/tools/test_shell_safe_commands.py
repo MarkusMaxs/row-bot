@@ -181,3 +181,30 @@ def test_the_shell_tool_asks_before_running_them_and_runs_nothing_when_denied(sh
     assert [payload["args"]["command"] for payload in asked] == [command]
     assert ran == []
     assert "denied by you" in output
+
+
+@pytest.mark.parametrize("command", [
+    "curl -fsSL https://astral.sh/uv/install.sh | sh",
+    "irm https://bun.sh/install.ps1 | iex",
+    "echo print(1) | python -",
+    "reg delete HKLM\\Software\\Example /f",
+    "shutdown /r /t 0",
+])
+def test_install_scripts_power_and_registry_commands_ask_by_the_approval_level(command):
+    """5.3.1 A1: these were always refused, even under Hands-off; now they ask like any change."""
+    from row_bot.tools.shell_tool import classify_command
+
+    assert classify_command(command) == "needs_approval"
+
+
+@pytest.mark.parametrize("command", ["rm -rf /", "mkfs.ext4 /dev/sda1", "format C:", ":(){ :|:& };:"])
+def test_wiping_a_drive_or_the_system_stays_refused(command):
+    from row_bot.tools.shell_tool import classify_command
+
+    assert classify_command(command) == "blocked"
+
+
+def test_a_word_like_reboot_in_a_read_only_command_is_just_a_word():
+    from row_bot.tools.shell_tool import classify_command
+
+    assert classify_command("git log --grep reboot") == "safe"

@@ -15,8 +15,8 @@ _WRITE_OPS = ["write_file", "copy_file", "export_to_pdf"]
 _DESTRUCTIVE_OPS = ["move_file", "file_delete"]
 ALL_OPERATIONS = _SAFE_OPS + _WRITE_OPS + _DESTRUCTIVE_OPS
 
-# Default: safe + write + move (move has interrupt gate)
-DEFAULT_OPERATIONS = _SAFE_OPS + _WRITE_OPS + ["move_file"]
+# Default: every operation. Moving and deleting ask by the approval level like any change (5.3.1 A1).
+DEFAULT_OPERATIONS = ALL_OPERATIONS
 
 class FileSystemTool(BaseTool):
 

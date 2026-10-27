@@ -699,7 +699,58 @@ def _detect_js_runner(root: pathlib.Path) -> str:
     return "npm"
 
 
+# The most serious action first: a chained command is as serious as its most serious part.
+_ACTION_SEVERITY = ("run_install", "run_network", "git_push", "git_pr", "git_commit", "delete",
+                    "start_server", "run_command", "run_safe_command")
+
+
+def _command_parts(command: str) -> list[str]:
+    """The commands a line chains with ``&&``, ``||``, ``|``, ``;`` or a new line, outside quotes."""
+    parts: list[str] = []
+    current: list[str] = []
+    in_single = in_double = escaped = False
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if escaped:
+            escaped = False
+        elif char == "\\" and in_double:
+            escaped = True
+        elif char == "'" and not in_double:
+            in_single = not in_single
+        elif char == '"' and not in_single:
+            in_double = not in_double
+        elif not in_single and not in_double and char in "&|;\n":
+            if char in "&|" and command[index:index + 2] in ("&&", "||"):
+                index += 1
+            elif char == "&":
+                current.append(char)
+                index += 1
+                continue
+            parts.append("".join(current))
+            current = []
+            index += 1
+            continue
+        current.append(char)
+        index += 1
+    parts.append("".join(current))
+    return [part.strip() for part in parts if part.strip()]
+
+
 def classify_command_action(command: str) -> str:
+    raw_text = str(command or "")
+    if has_shell_control_operator(raw_text):
+        # Each chained command for what it does (5.3.1 A1): "pytest | tee out.txt" is not network use.
+        # A redirect can write, so the chain is at least an ordinary command.
+        parts = _command_parts(raw_text)
+        actions = {_classify_one_action(part) for part in parts} if len(parts) > 1 else {
+            _classify_one_action(raw_text, chained=True)}
+        actions.add("run_command")
+        return next(action for action in _ACTION_SEVERITY if action in actions)
+    return _classify_one_action(raw_text)
+
+
+def _classify_one_action(command: str, *, chained: bool = False) -> str:
     raw_text = str(command or "")
     text = raw_text.lower()
     unquoted = _unquoted_text(raw_text).lower()
@@ -715,8 +766,6 @@ def classify_command_action(command: str) -> str:
         return any(tokens[idx:idx + width] == list(parts) for idx in range(0, max(len(tokens) - width + 1, 0)))
 
     first = tokens[0] if tokens else ""
-    if has_shell_control_operator(raw_text):
-        return "run_network"
     if (
         has_sequence("pip", "install")
         or has_sequence("uv", "pip", "install")
@@ -749,7 +798,7 @@ def classify_command_action(command: str) -> str:
         return "run_network"
     if any(token in unquoted for token in (" run dev", " start", "serve", "uvicorn", "flask run")):
         return "start_server"
-    if _is_read_only_command(raw_text):
+    if not chained and _is_read_only_command(raw_text):
         return "run_safe_command"
     return "run_command"
 

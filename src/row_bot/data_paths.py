@@ -43,6 +43,21 @@ def is_private_data_path(path: str | os.PathLike[str]) -> bool:
     return any(resolved == folder or folder in resolved.parents for folder in folders)
 
 
+# Parts of the data folder that hold tools Row-Bot downloaded and results it made, not conversations,
+# settings, approvals or keys. A command may use them like any other folder, by the approval level
+# (5.3.1 A1): the managed ffmpeg, recordings and exported media, logs.
+SHARED_DATA_FOLDERS = frozenset({
+    "ffmpeg", "runtimes", "node", "media", "recordings", "exports", "downloads", "channel_outputs",
+    "vision-frames", "logs", "font_cache", "published",
+})
+
+
+def shared_data_folder(relative: str) -> bool:
+    """True when *relative* (a path inside the data folder, with / separators) lies in a shared part of it."""
+    first = relative.strip("/").split("/", 1)[0]
+    return first in SHARED_DATA_FOLDERS
+
+
 def get_tasks_db_path(*, create_parent: bool = True) -> Path:
     """Return the task database path."""
     data_dir = get_row_bot_data_dir(create=create_parent)

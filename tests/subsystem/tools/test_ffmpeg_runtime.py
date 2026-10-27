@@ -320,3 +320,21 @@ def test_nothing_asks_when_ffmpeg_is_already_there(index, gate):
     found, line = ffmpeg_runtime.ensure("edit", "edit_video")
 
     assert found is not None and line == "" and gate.asked == []
+
+
+def test_programs_row_bot_starts_find_the_ffmpeg_it_downloaded(monkeypatch, tmp_path):
+    """5.3.1 A1: a shell command can run the managed ffmpeg; the person's own on PATH comes first."""
+    import os
+
+    from row_bot import api_keys, ffmpeg_runtime
+
+    folder = tmp_path / "ffmpeg" / "imageio-ffmpeg"
+    managed = ffmpeg_runtime.Ffmpeg(executable=str(folder / "ffmpeg.exe"), source="row_bot",
+                                    version="7.1", licence="GPL-3.0-or-later")
+    monkeypatch.setattr(ffmpeg_runtime, "installed", lambda: managed)
+
+    env = api_keys.child_environment({"Path": os.pathsep.join(["C:\\Tools", "C:\\Windows"])})
+
+    assert env["Path"].split(os.pathsep) == ["C:\\Tools", "C:\\Windows", str(folder)]
+    monkeypatch.setattr(ffmpeg_runtime, "installed", lambda: None)
+    assert api_keys.child_environment({"PATH": "/usr/bin"}) == {"PATH": "/usr/bin"}

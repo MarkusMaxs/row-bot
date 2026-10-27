@@ -76,7 +76,7 @@ save_memory: 732
 search_conversations: 703
 search_memory: 620
 send_file: 885
-start_process: 1299
+start_process: 1300
 stop_process: 332
 suggest_apps: 861
 task_create: 3877
@@ -95,6 +95,7 @@ wiki_rebuild: 301
 wiki_stats: 239
 wikipedia: 517
 workspace_copy_file: 516
+workspace_file_delete: 375
 workspace_file_search: 545
 workspace_list_directory: 396
 workspace_move_file: 518
@@ -102,4 +103,4 @@ workspace_read_file: 867
 workspace_write_file: 547
 youtube_search: 660
 youtube_transcript: 725
-TOTAL (104 tools): 73102
+TOTAL (105 tools): 73478
