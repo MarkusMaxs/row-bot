@@ -840,6 +840,7 @@ export class ClientController {
         client_session_id: result.client_session_id,
         client_group_id: result.client_group_id,
         authentication_kind: result.authentication_kind,
+        may_act: result.may_act ?? true,
         client_compatibility: result.client_compatibility ?? 'unknown',
         application_capabilities: result.application_capabilities ?? [],
         presentation_capabilities: result.presentation_capabilities ?? [],

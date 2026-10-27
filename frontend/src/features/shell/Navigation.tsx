@@ -37,6 +37,7 @@ import { useClientState, useRuntime } from '../../runtime';
 import { useLive } from '../../live';
 import { fallbackDue } from '../../api/live-updates';
 import AttentionIndicator from './AttentionIndicator';
+import ViewOnlyNotice from './ViewOnlyNotice';
 import { useShellSettled } from '../../shell-settled';
 import { useOverlay } from '../../ui/overlays';
 import {
@@ -893,6 +894,7 @@ export default function Navigation({
       </div>
       {/* What needs the person (an approval, a problem, an update) sits up here: in the footer it grew the
           sticky footer over the last rows of the list. */}
+      <ViewOnlyNotice />
       <AttentionIndicator
         load={controller.attention}
         loadApprovals={controller.pendingApprovals}
@@ -1242,6 +1244,7 @@ export function NavigationRail({
         )}
       </div>
       <div className="navigation-rail-group navigation-rail-footer">
+        <ViewOnlyNotice compact />
         <AttentionIndicator
           load={controller.attention}
           loadApprovals={controller.pendingApprovals}

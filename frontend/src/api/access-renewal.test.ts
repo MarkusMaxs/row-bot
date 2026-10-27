@@ -47,7 +47,23 @@ describe('keepAccessSessionRenewed', () => {
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
   });
 
-  it('never renews for the owner on this computer', async () => {
+  it('renews a window on this computer that the launcher signed in', async () => {
+    const { target } = fakeWindow();
+    const request = vi.fn(async (url: RequestInfo | URL) =>
+      String(url) === '/api/access/session'
+        ? reply({
+            authenticated: true,
+            authentication_kind: 'local_owner',
+            session_id: 'session-1',
+          })
+        : reply({}),
+    );
+    keepAccessSessionRenewed(target, request as typeof fetch, () => 0);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    expect(request.mock.calls[1][0]).toBe('/api/access/session/refresh');
+  });
+
+  it('never renews a connection on this computer without a sign-in', async () => {
     const { target } = fakeWindow();
     const request = vi.fn(async () => session('owner'));
     keepAccessSessionRenewed(target, request as typeof fetch, () => 0);

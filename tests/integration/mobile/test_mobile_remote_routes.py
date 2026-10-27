@@ -12,6 +12,7 @@ from row_bot.access.service import AccessService
 from row_bot.mobile.access_gate import MobileAccessGate
 from row_bot.mobile.routes import register_mobile_routes
 from row_bot.mobile.store import MobileAuthStore
+from tests.helpers.access import sign_in_this_computer
 
 ORIGIN = "http://localhost:8080"
 
@@ -117,6 +118,7 @@ def test_compact_owner_claim_allows_private_routes_and_revoke_blocks_it(
 ) -> None:
     app, service, registration = _app(tmp_path)
     local = _client(app, "127.0.0.1")
+    sign_in_this_computer(local, service, registration, origin=ORIGIN)
     remote = _client(app, "192.168.1.25")
     invitation = _create_compact_invitation(local)
 
@@ -146,6 +148,7 @@ def test_compact_owner_claim_allows_private_routes_and_revoke_blocks_it(
 def test_legacy_confirm_endpoint_never_claims_or_sets_cookie(tmp_path) -> None:
     app, service, registration = _app(tmp_path)
     local = _client(app, "127.0.0.1")
+    sign_in_this_computer(local, service, registration, origin=ORIGIN)
     remote = _client(app, "192.168.1.25")
     invitation = _create_compact_invitation(local)
 

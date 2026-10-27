@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from tests.subsystem.client_protocol.test_protocol_application import service  # noqa: F401
 from tests.subsystem.client_protocol.test_protocol_security import bootstrap
+from tests.helpers.access import person_window
 
 pytestmark = pytest.mark.subsystem
 
@@ -37,7 +38,7 @@ def workspace_api(service, tmp_path, monkeypatch):
     picked = [parent]
     selections = FolderSelections(picker=lambda: picked[0], clock=lambda: clock[0])
     app = create_client_platform_app(service, choices=lambda: {"models": [], "capabilities": []},
-                                    folder_selections=selections)
+                                    folder_selections=selections, session_authenticator=person_window)
     with TestClient(app, base_url="http://localhost", client=("127.0.0.1", 12345)) as client:
         _, headers = bootstrap(client)
         yield service, storage, parent, client, headers, clock, picked

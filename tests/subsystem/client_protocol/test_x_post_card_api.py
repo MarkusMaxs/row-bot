@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 from tests.helpers.fake_x_api import PERSONAL, ROWBOT, FakeXApi, install
 from tests.subsystem.client_protocol.test_protocol_application import service  # noqa: F401
 from tests.subsystem.client_protocol.test_protocol_security import bootstrap
+from tests.helpers.access import person_window
 
 pytestmark = pytest.mark.subsystem
 
@@ -70,7 +71,7 @@ def test_the_approval_view_shows_the_post_and_approving_sends_exactly_it(service
         yield "done", "Posted."
 
     service.stream_factory, service.resume_factory = stream, resume
-    app = create_client_platform_app(service, choices=lambda: {"models": [], "capabilities": []})
+    app = create_client_platform_app(service, choices=lambda: {"models": [], "capabilities": []}, session_authenticator=person_window)
     with TestClient(app, base_url="http://localhost", client=("127.0.0.1", 12345)) as client:
         _, headers = bootstrap(client)
         created = client.post("/api/v1/conversations/commands", headers={**headers, "Idempotency-Key": str(uuid4())},

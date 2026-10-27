@@ -116,7 +116,9 @@ def test_normalize_tools_handles_filters_duplicates_destructive_and_schema_shape
     assert normalized["read_file"].prefixed_name == "mcp_file_server_read_file"
     assert normalized["read_file"].requires_approval is True
     assert normalized["delete_file"].destructive is True
-    assert normalized["delete_file"].enabled is False
+    # On after discovery (5.3.1 A5), and it always asks first.
+    assert normalized["delete_file"].enabled is True
+    assert normalized["delete_file"].requires_approval is True
 
 
 @pytest.mark.parametrize(

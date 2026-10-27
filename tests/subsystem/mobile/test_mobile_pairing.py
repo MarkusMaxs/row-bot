@@ -11,6 +11,7 @@ from row_bot.access.routes import register_access_routes
 from row_bot.access.service import AccessService
 from row_bot.mobile.routes import register_mobile_routes
 from row_bot.mobile.store import MobileAuthStore
+from tests.helpers.access import sign_in_this_computer
 
 ORIGIN = "http://localhost:8080"
 
@@ -31,6 +32,13 @@ def _app(tmp_path):
         session_authenticator=registration.authenticator,
     )
     return app, service, registration
+
+
+def _window(app, service, registration) -> TestClient:
+    """The person's own Row-Bot window on this computer, signed in by the launcher (A0)."""
+    window = _client(app)
+    sign_in_this_computer(window, service, registration, origin=ORIGIN)
+    return window
 
 
 def _client(app, address: str = "127.0.0.1") -> TestClient:
@@ -57,8 +65,8 @@ def _start_invitation(client: TestClient) -> tuple[str, dict]:
 def test_pair_start_creates_compact_owner_invitation_without_duplicate_secret(
     tmp_path,
 ) -> None:
-    app, service, _registration = _app(tmp_path)
-    desktop = _client(app)
+    app, service, registration = _app(tmp_path)
+    desktop = _window(app, service, registration)
 
     token, pairing = _start_invitation(desktop)
 
@@ -102,7 +110,7 @@ def test_legacy_rbp_link_is_converted_without_claiming(tmp_path) -> None:
 
 def test_legacy_json_confirm_never_claims_or_sets_a_cookie(tmp_path) -> None:
     app, service, registration = _app(tmp_path)
-    desktop = _client(app)
+    desktop = _window(app, service, registration)
     phone = _client(app, "192.168.1.25")
     token, _pairing = _start_invitation(desktop)
 
@@ -121,7 +129,7 @@ def test_legacy_json_confirm_never_claims_or_sets_a_cookie(tmp_path) -> None:
 
 def test_legacy_form_confirm_redirects_without_claiming(tmp_path) -> None:
     app, service, registration = _app(tmp_path)
-    desktop = _client(app)
+    desktop = _window(app, service, registration)
     phone = _client(app, "192.168.1.25")
     token, _pairing = _start_invitation(desktop)
 

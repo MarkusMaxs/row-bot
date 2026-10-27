@@ -2963,12 +2963,12 @@ it('attaches several dropped files and names the one over the limit (U18)', asyn
   const small = new File(['notes'], 'notes.txt', { type: 'text/plain' });
   const other = new File(['more'], 'more.txt', { type: 'text/plain' });
   const huge = new File(['x'], 'film.mov', { type: 'video/quicktime' });
-  Object.defineProperty(huge, 'size', { value: 40 * 1024 * 1024 });
+  Object.defineProperty(huge, 'size', { value: 240 * 1024 * 1024 });
   const dataTransfer = { types: ['Files'], files: [small, other, huge] };
   fireEvent.dragEnter(field, { dataTransfer });
   expect(field).toHaveAttribute('data-dragging', 'true');
   expect(container.querySelector('.composer-drop')).toHaveTextContent(
-    'Drop to attach · up to 25 MB each',
+    'Drop to attach · up to 200 MB each',
   );
   await act(async () => {
     fireEvent.drop(field, { dataTransfer });
@@ -2979,7 +2979,7 @@ it('attaches several dropped files and names the one over the limit (U18)', asyn
     'more.txt',
   ]);
   expect(
-    screen.getByText(/“film.mov” is 40 MB; files can be up to 25 MB./),
+    screen.getByText(/“film.mov” is 240 MB; files can be up to 200 MB./),
   ).toBeVisible();
 });
 

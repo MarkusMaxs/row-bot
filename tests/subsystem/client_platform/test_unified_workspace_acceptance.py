@@ -8,6 +8,7 @@ import pytest
 from tests.helpers.client_platform_fakes import CheckpointCommit, ScriptedAgentStream, StreamBarrier, ToolMediaResult
 from tests.subsystem.client_protocol.test_protocol_application import _client, _command, service  # noqa: F401
 from tests.subsystem.client_protocol.test_protocol_security import bootstrap
+from tests.helpers.access import person_window
 
 
 pytestmark = pytest.mark.subsystem
@@ -162,7 +163,7 @@ def test_token_burst_and_acknowledgement_rate_limit_preserve_stop_control(servic
     fake = ScriptedAgentStream(tuple(("token", f"Token {index}. ") for index in range(160)) + (barrier,))
     service.stream_factory = fake.stream
     security = ClientSecurity("acknowledgement-fixture", clock=lambda: 100.0)
-    app = create_client_platform_app(service, security=security, choices=lambda: {"models": [], "capabilities": []})
+    app = create_client_platform_app(service, security=security, choices=lambda: {"models": [], "capabilities": []}, session_authenticator=person_window)
     with TestClient(app, base_url="http://localhost", client=("127.0.0.1", 12345)) as client:
         _, headers = bootstrap(client)
         conversation = _command(client, headers, "conversation.create", {}).json()["conversation_id"]
@@ -454,7 +455,7 @@ def test_explicit_folder_selection_reuses_identity_and_preserves_source_bytes(re
         return folder
 
     app = create_client_platform_app(service, choices=lambda: {"models": [], "capabilities": []},
-                                    folder_selections=FolderSelections(picker=picker))
+                                    folder_selections=FolderSelections(picker=picker), session_authenticator=person_window)
     with TestClient(app, base_url="http://localhost", client=("127.0.0.1", 12345)) as client:
         _, headers = bootstrap(client)
         confirmed = []
@@ -488,7 +489,7 @@ def test_cancelled_folder_picker_creates_nothing_and_grants_are_session_scoped(r
     folder.mkdir()
     results = iter((None, folder))
     app = create_client_platform_app(service, choices=lambda: {"models": [], "capabilities": []},
-                                    folder_selections=FolderSelections(picker=lambda: next(results)))
+                                    folder_selections=FolderSelections(picker=lambda: next(results)), session_authenticator=person_window)
     with TestClient(app, base_url="http://localhost", client=("127.0.0.1", 12345)) as client:
         _, first = bootstrap(client)
         _, second = bootstrap(client)

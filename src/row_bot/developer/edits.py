@@ -17,6 +17,7 @@ from row_bot.developer.change_ledger import ChangeSet, FileChange
 from row_bot.developer.sandbox import ApprovalDecision, decide_action
 from row_bot.developer.state import ApprovalMode
 from row_bot.developer.storage import get_workspace
+from row_bot.application.attachments import MAX_ATTACHMENT_BYTES
 
 
 _DIFF_PATH_RE = re.compile(r"^(?:diff --git a/(.+?) b/(.+)|--- (?:a/)?(.+)|\+\+\+ (?:b/)?(.+))$")
@@ -744,7 +745,7 @@ def import_conversation_media(*, workspace_id: str, thread_id: str, media_ref: s
     )
     if suffix is None or not path.casefold().endswith(suffix):
         raise ValueError("media_type_conflict")
-    if len(data) > 25 * 1024 * 1024:
+    if len(data) > MAX_ATTACHMENT_BYTES:
         raise ValueError("media_too_large")
     root = _workspace_root(workspace_id)
     target = _validate_relative_path(root, path, strip_git_prefix=False)

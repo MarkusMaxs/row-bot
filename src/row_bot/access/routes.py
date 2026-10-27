@@ -596,6 +596,7 @@ def build_access_router(
                 "ok": True,
                 "authenticated": True,
                 "authentication_kind": context.authentication_kind.value,
+                "may_act": context.may_act,
                 "device_id": context.device_id,
                 "session_id": context.session_id,
                 "presentation": context.presentation.value,

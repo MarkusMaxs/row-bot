@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 from datetime import datetime, timedelta
 import threading
 import time
@@ -38,6 +39,10 @@ TEMPORARY_SESSION_TTL = timedelta(hours=12)
 TRUSTED_SESSION_RENEWAL_WINDOW = timedelta(days=7)
 SESSION_REFRESH_POLL_INTERVAL = timedelta(hours=12)
 REMOTE_CLIENT_PATH = "/app-v2/"
+# A session's "last seen" is written at most this often: every request used to write it.
+SESSION_TOUCH_SECONDS = 30.0
+# The access route of a sign-in the launcher makes for its own window or browser (A0).
+THIS_COMPUTER_ROUTE = "this_computer"
 
 
 @dataclass(frozen=True)
@@ -105,6 +110,13 @@ class AccessService:
         # contains no secrets and never replaces durable authorization state.
         self._request_budget_lock = threading.Lock()
         self._request_budgets: dict[tuple[str, str], tuple[float, int]] = {}
+        # Tokens already checked against their stored verifier, by the SHA-256 of the token: a window
+        # makes many requests a second, and each paid 200,000 PBKDF2 rounds (a tenth of a second or
+        # more). The session's state is still read on every request, so revoking, expiring or rotating
+        # a session takes effect at once. Memory only, and no secret: the tokens are random.
+        self._verified_lock = threading.Lock()
+        self._verified: dict[str, tuple[str, str]] = {}
+        self._touched: dict[str, float] = {}
 
     @property
     def instance_id(self) -> str:
@@ -319,21 +331,41 @@ class AccessService:
             session is None
             or session.token_format is not TokenFormat.SESSION_V1
             or not session.is_active(current)
-            or not verify_secret(
-                secret,
-                salt=session.token_salt,
-                expected_hash=session.token_hash,
-            )
+            or not self._token_matches(token, secret, session)
         ):
             return None
         device = self.store.get_device(session.device_id)
         if device is None or device.revoked_at is not None:
             return None
-        if touch:
+        if touch and self._touch_due(session.id):
             self.store.touch_session(session.id, now=current, address=address)
             session = self.store.get_session(session.id) or session
             device = self.store.get_device(device.id) or device
         return AuthenticatedSession(device=device, session=session)
+
+    def _token_matches(self, token: str, secret: str, session: AccessSession) -> bool:
+        """Whether *token* is this session's, checking the slow verifier once per token and verifier."""
+        key = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        with self._verified_lock:
+            if self._verified.get(key) == (session.id, session.token_hash):
+                return True
+        if not verify_secret(secret, salt=session.token_salt, expected_hash=session.token_hash):
+            return False
+        with self._verified_lock:
+            if len(self._verified) >= 1024:
+                self._verified.clear()
+            self._verified[key] = (session.id, session.token_hash)
+        return True
+
+    def _touch_due(self, session_id: str) -> bool:
+        clock = time.monotonic()
+        with self._verified_lock:
+            if clock - self._touched.get(session_id, float("-inf")) < SESSION_TOUCH_SECONDS:
+                return False
+            if len(self._touched) >= 1024:
+                self._touched.clear()
+            self._touched[session_id] = clock
+            return True
 
     def validate_legacy_session(
         self,
@@ -398,22 +430,44 @@ class AccessService:
             renewed=renewed,
         )
 
-    def list_devices(self, *, include_revoked: bool = True) -> list[AccessDevice]:
-        return self.store.list_devices(include_revoked=include_revoked)
+    # The windows and browsers the launcher signs in on this computer (A0) are the
+    # computer itself, not devices to manage: lists leave them out unless asked.
+
+    def list_devices(
+        self, *, include_revoked: bool = True, include_this_computer: bool = False
+    ) -> list[AccessDevice]:
+        devices = self.store.list_devices(include_revoked=include_revoked)
+        if include_this_computer:
+            return devices
+        return [device for device in devices if device.access_route != THIS_COMPUTER_ROUTE]
 
     def list_sessions(
         self,
         *,
         device_id: str | None = None,
         include_revoked: bool = True,
+        include_this_computer: bool = False,
     ) -> list[AccessSession]:
-        return self.store.list_sessions(
+        sessions = self.store.list_sessions(
             device_id=device_id,
             include_revoked=include_revoked,
         )
+        if include_this_computer:
+            return sessions
+        hidden = {
+            device.id
+            for device in self.store.list_devices(include_revoked=True)
+            if device.access_route == THIS_COMPUTER_ROUTE
+        }
+        return [session for session in sessions if session.device_id not in hidden]
 
-    def list_invitations(self, *, limit: int = 100) -> list[AccessInvitation]:
-        return self.store.list_invitations(limit=limit)
+    def list_invitations(
+        self, *, limit: int = 100, include_this_computer: bool = False
+    ) -> list[AccessInvitation]:
+        invitations = self.store.list_invitations(limit=limit)
+        if include_this_computer:
+            return invitations
+        return [item for item in invitations if item.access_route != THIS_COMPUTER_ROUTE]
 
     def claimed_device_ids(self, invitation_ids: list[str]) -> dict[str, str]:
         return self.store.claimed_device_ids(invitation_ids)

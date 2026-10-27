@@ -1397,6 +1397,37 @@ from row_bot.tunnel import tunnel_manager as _managed_tunnel_manager
 
 _managed_tunnel_manager.set_managed_origin_registrar(_runtime_access_policy)
 register_mobile_routes(app)
+
+
+async def _launcher_sign_in_handler(request: Request) -> JSONResponse:
+    """A one-time sign-in for the window or browser the launcher opens.
+
+    Only a signed-in window or browser on this computer may change anything (A0), so a
+    program Row-Bot starts can't act as the person. The launcher alone holds the secret.
+    """
+    if not _launcher_request_authorized(request):
+        return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
+    from datetime import timedelta
+
+    from row_bot.access.models import SessionLifetime
+    from row_bot.access.policy import context_from_scope
+    from row_bot.access.service import THIS_COMPUTER_ROUTE
+
+    context = context_from_scope(request.scope)
+    if context is None or not context.direct_loopback:
+        return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
+    created = await asyncio.to_thread(
+        _access_registration.service.create_invitation,
+        intended_origin=context.origin,
+        session_lifetime=SessionLifetime.TRUSTED,
+        ttl=timedelta(minutes=2),
+        created_by="launcher",
+        access_route=THIS_COMPUTER_ROUTE,
+    )
+    return JSONResponse({"ok": True, "invitation": created.token})
+
+
+app.add_route("/api/launcher/sign-in", _launcher_sign_in_handler, methods=["POST"])
 from row_bot.api.v1.routes import install_client_platform
 from row_bot.application.client_platform import client_platform_service
 from row_bot.application.folder_selections import FolderSelections

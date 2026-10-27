@@ -15,6 +15,7 @@ from row_bot.api.v1.security import ClientSecurity
 from row_bot.application import app_notices as notices_module
 from row_bot.application.app_notices import MAX_NOTICES, NoticeJournal
 from tests.subsystem.client_protocol.test_protocol_security import Service, bootstrap
+from tests.helpers.access import person_window
 
 pytestmark = pytest.mark.subsystem
 
@@ -81,7 +82,7 @@ def notice_client(journal):
     service.snapshot = lambda conversation: {"conversation_id": conversation, "server_epoch": service.server_epoch,
         "projection_revision": "0", "cursor": "0", "checkpoint_revision": "", "rows": [], "generation": None}
     service.events_since = lambda *_: {"server_epoch": service.server_epoch, "snapshot_required": False, "events": []}
-    app = create_client_platform_app(service, security=security, choices=lambda: {"models": [], "capabilities": []})
+    app = create_client_platform_app(service, security=security, choices=lambda: {"models": [], "capabilities": []}, session_authenticator=person_window)
     return app, security
 
 

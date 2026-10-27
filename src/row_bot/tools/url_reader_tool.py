@@ -30,8 +30,8 @@ class _ReadURLInput(BaseModel):
 
 
 _USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
-_PDF_MAX_BYTES = 25 * 1024 * 1024
-_PDF_MAX_PAGES = 200
+_PDF_MAX_BYTES = 200 * 1024 * 1024
+_PDF_MAX_PAGES = 2000
 _TIMEOUT = 15
 _MAX_REDIRECTS = 10
 _REDIRECTS = {301, 302, 303, 307, 308}

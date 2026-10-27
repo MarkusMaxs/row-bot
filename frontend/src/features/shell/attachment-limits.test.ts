@@ -10,19 +10,19 @@ function sized(name: string, bytes: number) {
 it('names each file it leaves out, with the limit, before any upload', () => {
   const MB = 1024 * 1024;
   const { accepted, problem } = attachmentLimitProblem(
-    [sized('empty.txt', 0), sized('a.pdf', 20 * MB), sized('b.pdf', 30 * MB)],
+    [sized('empty.txt', 0), sized('a.pdf', 20 * MB), sized('b.pdf', 230 * MB)],
     [],
   );
   expect(accepted.map((file) => file.name)).toEqual(['a.pdf']);
   expect(problem).toBe(
-    '“empty.txt” is empty. “b.pdf” is 30 MB; files can be up to 25 MB.',
+    '“empty.txt” is empty. “b.pdf” is 230 MB; files can be up to 200 MB.',
   );
   const batch = attachmentLimitProblem(
-    [sized('c.pdf', 20 * MB)],
-    [{ size_bytes: 90 * MB }],
+    [sized('c.pdf', 150 * MB)],
+    [{ size_bytes: 900 * MB }],
   );
   expect(batch.accepted).toEqual([]);
-  expect(batch.problem).toMatch(/can add up to 100 MB/);
+  expect(batch.problem).toMatch(/can add up to 1024 MB/);
   const many = attachmentLimitProblem(
     [sized('d.txt', 10), sized('e.txt', 10)],
     Array.from({ length: 31 }, () => ({ size_bytes: 1 })),

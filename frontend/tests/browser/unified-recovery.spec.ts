@@ -6,6 +6,7 @@ import {
   openConversation,
   releaseProducer,
 } from './unified-helpers';
+import { SIGNED_IN_STATE } from './signed-in';
 
 test('a delayed real observer exhausts history without delaying the producer or another client', async ({
   page,
@@ -15,6 +16,7 @@ test('a delayed real observer exhausts history without delaying the producer or 
   const conversation = await newConversation(page);
   const origin = new URL(page.url()).origin;
   const slowContext = await browser.newContext({
+    storageState: SIGNED_IN_STATE,
     baseURL: origin,
     viewport: page.viewportSize(),
     serviceWorkers: 'block',

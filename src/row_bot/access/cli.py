@@ -526,18 +526,18 @@ def _dispatch_list(
     current = normalize_datetime(now)
     devices = [
         device.to_public_dict()
-        for device in service.list_devices(include_revoked=include_revoked)
+        for device in service.list_devices(include_revoked=include_revoked, include_this_computer=True)
     ]
     sessions = [
         session.to_public_dict()
-        for session in service.list_sessions(include_revoked=include_revoked)
+        for session in service.list_sessions(include_revoked=include_revoked, include_this_computer=True)
     ]
     invitations = [
         {
             **invitation.to_public_dict(),
             "status": _invitation_status(invitation, current),
         }
-        for invitation in service.list_invitations()
+        for invitation in service.list_invitations(include_this_computer=True)
     ]
     payload = {
         "ok": True,

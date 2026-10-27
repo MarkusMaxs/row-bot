@@ -332,18 +332,18 @@ def test_a_chat_app_failing_mid_send_is_reported_per_file(chat):
 # ── Caps ────────────────────────────────────────────────────────────────────
 
 
-def test_at_most_ten_files_go_in_one_reply(chat):
+def test_at_most_fifty_files_go_in_one_reply(chat):
     from row_bot.application.attachments import register_attachment
 
-    for index in range(11):
+    for index in range(51):
         register_attachment(chat.conversation, f"page-{index}.pdf", PDF)
-    eleven = [f"page-{index}.pdf" for index in range(11)]
-    assert "At most 10 files can be sent at once" in chat.send(files=eleven)
+    every = [f"page-{index}.pdf" for index in range(51)]
+    assert "At most 50 files can be sent at once" in chat.send(files=every)
     assert chat.deliveries.list_deliveries() == []
 
-    chat.send(files=eleven[:6])
-    refused = chat.send(files=eleven[6:], to="telegram")
-    assert "At most 10 files can be sent in one reply, and 6 already were" in refused
+    chat.send(files=every[:30])
+    refused = chat.send(files=every[30:], to="telegram")
+    assert "At most 50 files can be sent in one reply, and 30 already were" in refused
     assert chat.asked == [] and chat.telegram.documents == []
     assert len(chat.deliveries.list_deliveries()) == 1
 

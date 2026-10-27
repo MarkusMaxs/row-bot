@@ -38,8 +38,8 @@ from row_bot.application.live_updates import publish as _publish_live, publishes
 logger = logging.getLogger(__name__)
 
 # At most this many run at once in one conversation, and in all of Row-Bot (D1).
-MAX_RUNNING_PER_CONVERSATION = 5
-MAX_RUNNING_TOTAL = 12
+MAX_RUNNING_PER_CONVERSATION = 20
+MAX_RUNNING_TOTAL = 50
 # run_command waits this long before a command carries on in the background (F6).
 INLINE_SECONDS = 120
 # Each log file; one older file is kept, so a process keeps at most twice this.

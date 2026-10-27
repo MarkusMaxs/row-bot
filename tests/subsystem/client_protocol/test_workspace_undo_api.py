@@ -14,6 +14,7 @@ from tests.subsystem.client_protocol.test_protocol_security import bootstrap
 from tests.subsystem.developer import test_client_workspace_edits as edit_tests
 from tests.subsystem.developer import test_client_workspace_imports as import_tests
 from tests.subsystem.developer import test_client_workspace_undo as undo_tests
+from tests.helpers.access import person_window
 
 pytestmark = pytest.mark.subsystem
 domain = edit_tests.domain
@@ -30,7 +31,7 @@ def api(undo, request):
     service = _isolated_service()
     now = [100.0]
     security = ClientSecurity(instance_id=service.instance_id, clock=lambda: now[0])
-    app = create_client_platform_app(service, security=security, choices=lambda: {"models": [], "capabilities": []})
+    app = create_client_platform_app(service, security=security, choices=lambda: {"models": [], "capabilities": []}, session_authenticator=person_window)
     base = f"/api/v1/conversations/chat/workspaces/{binding}/undo"
     with TestClient(app, base_url="http://localhost", client=("127.0.0.1", 12345)) as client:
         _, headers = bootstrap(client)

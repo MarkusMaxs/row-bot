@@ -9,15 +9,13 @@ pytestmark = [pytest.mark.subsystem, pytest.mark.mcp_transport]
 
 
 def test_mcp_safety_classifies_browser_tools_as_safe_but_mutations_destructive() -> None:
-    from row_bot.mcp_client.safety import is_destructive_tool, prefixed_tool_name, sanitize_name_component, tool_enabled_by_default
+    from row_bot.mcp_client.safety import is_destructive_tool, prefixed_tool_name, sanitize_name_component
 
     assert sanitize_name_component("File Server!") == "file_server"
     assert prefixed_tool_name("File Server!", "Read File") == "mcp_file_server_read_file"
     assert is_destructive_tool("browser_click", "click a browser target") is False
     assert is_destructive_tool("delete_file", "remove a file") is True
     assert is_destructive_tool("inspect", "read-only", type("Tool", (), {"annotations": {"readOnlyHint": True}})()) is False
-    assert tool_enabled_by_default(False) is True
-    assert tool_enabled_by_default(True) is False
 
 
 def test_mcp_status_summary_counts_enabled_destructive_tools(monkeypatch) -> None:
