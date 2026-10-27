@@ -80,3 +80,9 @@ def test_the_card_says_what_will_happen_on_which_site():
 ])
 def test_navigation_refuses_only_what_no_browser_should_open(url, decision):
     assert navigation_policy(url)[0] == decision
+
+
+def test_a_file_page_says_to_serve_its_folder_instead():
+    decision, why = navigation_policy("file:///C:/Users/me/site/index.html")
+
+    assert decision == "block" and "python -m http.server 8000" in why and "opens without asking" in why
