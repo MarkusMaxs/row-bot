@@ -5,6 +5,7 @@ import {
   publishBuddyTarget,
 } from './features/buddy/BuddyFollow';
 import { bindDraftSync } from './draft-sync';
+import { reloadAfterUpdate } from './api/stale-build';
 import { keepNativeLease } from './native-lease';
 import { keepAccessSessionRenewed } from './api/access-renewal';
 import { createKnowledgeSessions } from './features/knowledge/knowledge-sessions';
@@ -390,6 +391,7 @@ async function start() {
       </RenderBoundary>
     </ThemeProvider>,
   );
+  reloadAfterUpdate();
   bindPageLifecycle({
     setOnline: (value) => controller.setOnline(value),
     hasUnsavedDraft: () =>

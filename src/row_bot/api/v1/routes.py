@@ -10669,7 +10669,10 @@ def create_router(
                 if notices_epoch is not None
                 else None
             )
-            heartbeat = security.clock()
+            heartbeat = started = security.clock()
+            # How it ended, for the log (#568): a dropped window left no trace before.
+            ended = "the window went away, or Row-Bot is stopping"
+            logger.debug("Event stream opened (session %s)", current.id[:8])
             try:
                 # Flush the accepted stream even when replay is empty; an idle
                 # connection need not wait for the periodic heartbeat.
@@ -10688,6 +10691,7 @@ def create_router(
                             + dto.StreamReset().model_dump_json()
                             + "\n\n"
                         )
+                        ended = "the window needs a fresh snapshot"
                         return
                     else:
                         for item in result["events"]:
@@ -10714,10 +10718,15 @@ def create_router(
                         yield ": heartbeat\n\n"
                         heartbeat = security.clock()
                     await asyncio.sleep(0.25)
-            except ProtocolError:
+                if not sub.streaming:
+                    ended = "the window unsubscribed"
+            except ProtocolError as error:
+                ended = f"refused ({error.code})"
                 return
             finally:
                 security.leave_stream(sub)
+                logger.debug("Event stream ended after %.0f s: %s (session %s)",
+                             security.clock() - started, ended, current.id[:8])
 
         return StreamingResponse(
             stream(), media_type="text/event-stream", headers=HEADERS
@@ -10735,7 +10744,9 @@ def create_router(
 
         async def stream() -> Any:
             sent: tuple[str, int] | None = None
-            heartbeat = security.clock()
+            heartbeat = started = security.clock()
+            ended = "the window went away, or Row-Bot is stopping"
+            logger.debug("Live stream opened (session %s)", current.id[:8])
             try:
                 yield ": connected\n\n"
                 while not await request.is_disconnected():
@@ -10749,10 +10760,13 @@ def create_router(
                         yield ": heartbeat\n\n"
                         heartbeat = security.clock()
                     await asyncio.sleep(0.25)
-            except ProtocolError:
+            except ProtocolError as error:
+                ended = f"refused ({error.code})"
                 return
             finally:
                 security.leave_live(current)
+                logger.debug("Live stream ended after %.0f s: %s (session %s)",
+                             security.clock() - started, ended, current.id[:8])
 
         return StreamingResponse(
             stream(), media_type="text/event-stream", headers=HEADERS

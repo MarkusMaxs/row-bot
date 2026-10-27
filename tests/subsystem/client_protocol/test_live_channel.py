@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import threading
 
 import pytest
@@ -117,6 +118,18 @@ def test_the_stream_sends_revisions_at_once_then_one_frame_per_burst(live):
         assert set(frame["topics"]) == set(TOPICS)
         assert all(isinstance(value, int) for value in frame["topics"].values())
     assert security._live == {}
+
+
+def test_the_log_says_when_a_window_s_stream_opened_and_why_it_ended(live, caplog):
+    """A dropped window left no trace in the log (#568)."""
+    app, _security = live_client()
+    with TestClient(app, base_url="http://localhost", client=("127.0.0.1", 1234)) as client:
+        _, headers = bootstrap(client)
+        with caplog.at_level(logging.DEBUG, logger="row_bot.api.v1.routes"):
+            read_stream(app, headers, frames=1)
+    lines = [record.getMessage() for record in caplog.records if "Live stream" in record.getMessage()]
+    assert lines[0].startswith("Live stream opened (session ")
+    assert lines[-1].startswith("Live stream ended after ") and ": the window went away" in lines[-1]
 
 
 def test_a_client_that_missed_changes_resumes_and_a_new_server_resyncs(live, monkeypatch):
