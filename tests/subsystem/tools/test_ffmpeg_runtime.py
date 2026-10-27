@@ -333,8 +333,9 @@ def test_programs_row_bot_starts_find_the_ffmpeg_it_downloaded(monkeypatch, tmp_
                                     version="7.1", licence="GPL-3.0-or-later")
     monkeypatch.setattr(ffmpeg_runtime, "installed", lambda: managed)
 
-    env = api_keys.child_environment({"Path": os.pathsep.join(["C:\\Tools", "C:\\Windows"])})
+    tools, system = str(tmp_path / "tools"), str(tmp_path / "system")
+    env = api_keys.child_environment({"Path": os.pathsep.join([tools, system])})
 
-    assert env["Path"].split(os.pathsep) == ["C:\\Tools", "C:\\Windows", str(folder)]
+    assert env["Path"].split(os.pathsep) == [tools, system, str(folder)]
     monkeypatch.setattr(ffmpeg_runtime, "installed", lambda: None)
     assert api_keys.child_environment({"PATH": "/usr/bin"}) == {"PATH": "/usr/bin"}
