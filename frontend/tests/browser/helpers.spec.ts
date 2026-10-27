@@ -83,6 +83,26 @@ async function agentsList(page: Page) {
   // The rail can still be opening (or its Agents section loading) just after a
   // reload, when a check sees nothing and the toggle would close it: try again.
   await expect(async () => {
+    // DIAGNOSTIC (#565 CI): removed once CI reports.
+    console.log(
+      'DIAG agentsList',
+      JSON.stringify(
+        await page.evaluate(() => {
+          const work = document.querySelector('.chat-workspace');
+          const toggle = document.querySelector('[data-context-toggle]');
+          return {
+            viewport: innerWidth,
+            width: work?.getBoundingClientRect().width,
+            classes: work?.className,
+            pressed: toggle?.getAttribute('aria-pressed'),
+            hidden: localStorage.getItem('row-bot.context-hidden.v1'),
+            cards: [...document.querySelectorAll('.context-card')].map(
+              (card) => card.className,
+            ),
+          };
+        }),
+      ),
+    );
     if (!(await details.isVisible()) && !(await sheet.isVisible()))
       await headerAction(page, 'Conversation details');
     await expect(agents).toBeVisible({ timeout: 2_000 });
