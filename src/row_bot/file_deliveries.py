@@ -48,12 +48,12 @@ Approval = Literal["", "not_needed", "you", "reviewer", "hands_off"]
 
 MB = 1024 * 1024
 # At most this many files in one send, and in one reply.
-MAX_FILES = 10
-DEVICE_FILE_LIMIT = 100 * MB
+MAX_FILES = 50
+DEVICE_FILE_LIMIT = 500 * MB
 DEVICE_KEEP_DAYS = 7
 DEVICE_KEEP_SECONDS = DEVICE_KEEP_DAYS * 24 * 3600
 # Copies waiting for the person's devices, in all; expired ones are removed first.
-DEVICE_STORE_LIMIT = 2 * 1024 * MB
+DEVICE_STORE_LIMIT = 10 * 1024 * MB
 # What each chat app takes from a bot, at most (the smallest of the app's own limits that apply).
 CHANNEL_LIMITS = {"telegram": 50 * MB, "discord": 10 * MB, "slack": 100 * MB, "whatsapp": 16 * MB}
 OTHER_CHANNEL_LIMIT = 10 * MB

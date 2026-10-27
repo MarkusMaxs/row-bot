@@ -10,19 +10,19 @@
       "src/row_bot/api/v1/__init__.py": "f54ba3b1c9555e65c5e715ba99685ae3c795ced6c6c15c9bac2bc3f18a1498a8",
       "src/row_bot/api/v1/document_upload_stream.py": "9d7f480472630d5aa7298503af7b9451607b1856406caa115cb6578bbe700494",
       "src/row_bot/api/v1/routes.py": "3a0d365775c77e5756d95ead08304e52e6d38456de54e9de44fcf6e4dfb69ca7",
-      "src/row_bot/api/v1/schemas.py": "154041c232266d6a7e589bb45b39f8aaec8f5506cddb0ae6cfbf39f5a5d08fd5",
+      "src/row_bot/api/v1/schemas.py": "6069d2848dbd8cb8a10c881d973a6aa8090724923c817a2d405596cc12d1814f",
       "src/row_bot/api/v1/security.py": "d94a1f82917863bd2a6bd7996b268557d742c3a5f0c564dd18c2673c16a63ea3",
       "src/row_bot/application/__init__.py": "139fbb6a5592b9bf600f82c1623c05a4f0b90b793e4d7183cac03951984fff51",
       "src/row_bot/application/app_notices.py": "ad6f7c8e2b2f1d1508d82ee1a82e236d22c5fc0518f1ec871d1d04aaa8ea1338",
       "src/row_bot/application/approval_grants.py": "0735fc5a9b6b118cc1627a72ef5622a5f0f247be4dfe1000bd34550944418c67",
       "src/row_bot/application/approval_projection.py": "09fb6b0a7e08db5b067c0fc5151ff360585e18078f2578cc70cf2de903fda0f3",
       "src/row_bot/application/artifact_controls.py": "25f0f623e0cd0571d4808a7f3dcecedecf932754993ba45b28b0f968d9b82dac",
-      "src/row_bot/application/artifact_design_commands.py": "37b1c1823728560ec153aca6b12f441f92977c2f947742f8a5b10c31a051d038",
+      "src/row_bot/application/artifact_design_commands.py": "05687d82ebdd2fe0f0d19a330a4bcf6775ee1a146604e1822ff9c2d187c73f87",
       "src/row_bot/application/artifact_exports.py": "6d9c956a0ebf9f923543364da82bb245682ebabe96511ce5c9f29115a195d637",
       "src/row_bot/application/artifact_lifecycle_commands.py": "163d45391fd3e499d4f6ab6c706ee26d49d98e5f2e0c7327b9e75cb7d88e1d2b",
       "src/row_bot/application/artifact_sharing.py": "48ebf9e785573186b63194b3733293abb926aa98e4af25b3453b78e381d301dc",
       "src/row_bot/application/attachment_context.py": "b8c463c9f8b599d203890b0bb9dabddc982333333f71d9262c4e453278c0f2ef",
-      "src/row_bot/application/attachments.py": "85309a3b86beafdae28cbbd0917e3c35ce44e5cbcdea905b5288f348544ced7c",
+      "src/row_bot/application/attachments.py": "72c3f5512df57de3cb573e7e7f6bf8cf01004b2cf6bc2a776c9705a63d07b78d",
       "src/row_bot/application/background_process_views.py": "98e7a8bb090f4d3366cb831694b869d7daf23db01dfab1937f55adca7de8f559",
       "src/row_bot/application/buddy_commands.py": "8a4fe09ee9926132cb20c148e8335dcb430b1b7afe79c0e8d4da23890944a0ac",
       "src/row_bot/application/buddy_policy.py": "1f7219a52a883d87140065bee725a244a3ac12cc6cf97909b4c695f267eb2de2",
@@ -59,7 +59,7 @@
       "src/row_bot/application/conversation_creation.py": "8a00fdc716496361a74ee792c9d23062ed1a652c7fe5a7cd2e92831640c44217",
       "src/row_bot/application/conversation_drafts.py": "e26915568fd055535e959435853a0193afa5a3426650eed1511a7c171d8fdd94",
       "src/row_bot/application/conversation_followups.py": "15ac284c04f740cfbe0a8a1d6de046335de7de9ab5b7a74dafe4a95847c33a37",
-      "src/row_bot/application/conversation_media_copy.py": "0ce3dcab3bffc50fba509330687ed1c563b1226ce2642cc7229b80883ac8cac1",
+      "src/row_bot/application/conversation_media_copy.py": "6f900bb958179a5f3320e679086945b2f9d0e2002980fde53d6450b476262861",
       "src/row_bot/application/conversation_naming.py": "b4e04699858f82c02f493d0e17f4745b5b3b968470f033a2fffaa95278f92f97",
       "src/row_bot/application/conversation_open.py": "df746e819a8ad48ee24a8a372d3ac0e36ac1fc648bb4615bab75bd1fe84205ad",
       "src/row_bot/application/conversation_pdf.py": "871ba1243cbba5c57ba5456221d7d911e9f4b0161ac18c60dd816b5f9e542353",
@@ -132,7 +132,7 @@
       "src/row_bot/threads.py": "8ef91738963fadf21d814f9c918c107af876f59141b56a71f7910a4edd3e38c2",
       "tests/helpers/client_platform_fakes.py": "d42f99a12400aa20b34994a0dbb01904a160f0dd918258e5a3930a0054df898d"
     },
-    "sha256": "210bb5bea0e7b0319f2f44f4e0762feb77020e1111e0f576c0f5ec537cb64f5f"
+    "sha256": "01cd445cd3d27fa02731aa477a64ba269d3f6a79773673fd55022bc1636485a6"
   },
   "records": [
     {
@@ -184,9 +184,9 @@
           "query_rows": 200,
           "transcript_rows": 100,
           "stream_connections_per_session": 4,
-          "attachment_bytes": 26214400,
+          "attachment_bytes": 209715200,
           "upload_chunk_bytes": 1048576,
-          "upload_batch_bytes": 104857600,
+          "upload_batch_bytes": 1073741824,
           "upload_chunks_in_flight": 4,
           "upload_ttl_seconds": 1800
         }

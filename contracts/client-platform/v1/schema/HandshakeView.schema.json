@@ -47,8 +47,8 @@
       "additionalProperties": false,
       "properties": {
         "attachment_bytes": {
-          "const": 26214400,
-          "default": 26214400,
+          "const": 209715200,
+          "default": 209715200,
           "title": "Attachment Bytes",
           "type": "integer"
         },
@@ -83,8 +83,8 @@
           "type": "integer"
         },
         "upload_batch_bytes": {
-          "const": 104857600,
-          "default": 104857600,
+          "const": 1073741824,
+          "default": 1073741824,
           "title": "Upload Batch Bytes",
           "type": "integer"
         },

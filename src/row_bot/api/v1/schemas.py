@@ -8429,9 +8429,9 @@ class Limits(WireModel):
     query_rows: Literal[200] = 200
     transcript_rows: Literal[100] = 100
     stream_connections_per_session: Literal[4] = 4
-    attachment_bytes: Literal[26214400] = 26214400
+    attachment_bytes: Literal[209715200] = 209715200
     upload_chunk_bytes: Literal[1048576] = 1048576
-    upload_batch_bytes: Literal[104857600] = 104857600
+    upload_batch_bytes: Literal[1073741824] = 1073741824
     upload_chunks_in_flight: Literal[4] = 4
     upload_ttl_seconds: Literal[1800] = 1800
 

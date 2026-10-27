@@ -15,6 +15,7 @@ from uuid import UUID
 
 from row_bot.application.client_platform import ClientPlatformError
 from row_bot.runtime import admissions
+from row_bot.application.attachments import MAX_ATTACHMENT_BYTES
 
 _TYPES = {'artifact.design.control', 'artifact.asset.upload', 'artifact.preset.mutate', 'artifact.document.import', 'artifact.notes.generate'}
 _OPERATIONS = {'brand', 'preset', 'style', 'hotspot', 'image', 'review_fix', 'review_fix_all', 'asset_insert', 'asset_remove',
@@ -251,7 +252,7 @@ def execute_artifact_design_command(service: Any, command: dict, conversation_id
                     raise ClientPlatformError('upload_unavailable')
                 data = resolve_upload(payload['upload_id'])
                 if (type(data) is not bytes or type(payload.get('size_bytes')) is not int
-                        or not 0 < len(data) <= 25 * 1024 * 1024 or len(data) != payload['size_bytes']
+                        or not 0 < len(data) <= MAX_ATTACHMENT_BYTES or len(data) != payload['size_bytes']
                         or not isinstance(payload.get('sha256'), str) or hashlib.sha256(data).hexdigest() != payload['sha256']):
                     raise ClientPlatformError('upload_identity_conflict')
             authority(effect=True)
@@ -269,7 +270,7 @@ def execute_artifact_design_command(service: Any, command: dict, conversation_id
                     if (set(value) != {'stage', 'asset_id', 'sha256', 'size_bytes'}
                             or value['stage'] not in _ASSET_STAGES
                             or value['asset_id'] != 'asset-' + UUID(command['command_id']).hex
-                            or type(value['size_bytes']) is not int or not 0 < value['size_bytes'] <= 25 * 1024 * 1024
+                            or type(value['size_bytes']) is not int or not 0 < value['size_bytes'] <= MAX_ATTACHMENT_BYTES
                             or not isinstance(value['sha256'], str) or not re.fullmatch('[0-9a-f]{64}', value['sha256'])):
                         raise ClientPlatformError('invalid_design_checkpoint')
                     previous = private.get('asset')

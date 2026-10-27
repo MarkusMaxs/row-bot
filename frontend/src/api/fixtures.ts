@@ -10,6 +10,7 @@ import f08 from '../../../contracts/client-platform/v1/fixtures/F-P08.json';
 import f09 from '../../../contracts/client-platform/v1/fixtures/F-P09.json';
 import f10 from '../../../contracts/client-platform/v1/fixtures/F-P10.json';
 import type { ClientTransport, ConversationListGroup } from './types';
+import { ATTACHMENT_LIMITS } from './limits';
 
 /** The server's listing groups (`client_platform._LIST_GROUPS`) over a row. */
 function inGroup(
@@ -739,7 +740,8 @@ export class FixtureTransport implements ClientTransport {
     signal?: AbortSignal,
   ): Promise<wire.AttachmentView> {
     this.available(signal);
-    if (file.size > 26214400) throw { code: 'payload_too_large' };
+    if (file.size > ATTACHMENT_LIMITS.fileBytes)
+      throw { code: 'payload_too_large' };
     return {
       ...recorded<wire.AttachmentView>('F-P07', 'AttachmentView')[0],
       name: file.name,

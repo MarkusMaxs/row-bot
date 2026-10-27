@@ -191,7 +191,9 @@ def test_chunk_upload_out_of_order_retry_hash_and_session_scope(service):
 
 
 def test_upload_idle_expiry_restart_batch_and_inflight_limits(service):
-    from row_bot.application.attachments import AttachmentUploads, AttachmentError, MAX_ATTACHMENT_BYTES
+    from row_bot.application.attachments import (
+        AttachmentError, AttachmentUploads, MAX_ATTACHMENT_BYTES, UPLOAD_BATCH_BYTES,
+    )
     conversation = str(uuid4())
     from row_bot import threads
     threads._save_thread_meta(conversation, "Fixture")
@@ -200,7 +202,9 @@ def test_upload_idle_expiry_restart_batch_and_inflight_limits(service):
     common = {"conversation_id": conversation, "name": "fixture.bin", "size_bytes": MAX_ATTACHMENT_BYTES,
               "sha256": "a" * 64, "batch_id": str(uuid4())}
     try:
-        identifiers = [staging.create("fixture-session", **common)["upload_id"] for _ in range(4)]
+        # As many of the largest files as fit in one message; one more doesn't.
+        fitting = UPLOAD_BATCH_BYTES // MAX_ATTACHMENT_BYTES
+        identifiers = [staging.create("fixture-session", **common)["upload_id"] for _ in range(fitting)]
         with pytest.raises(AttachmentError, match="payload_too_large"):
             staging.create("fixture-session", **common)
         for _ in range(4):
