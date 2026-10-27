@@ -2051,7 +2051,7 @@ const CATALOG: Record<string, Entry> = {
     open('system', 'System', 'browser-computer-use'),
   ],
   browser_navigation_denied: [
-    "Row-Bot's browser can't open that address. Addresses on your local network, and Row-Bot itself, never open there.",
+    "Row-Bot's browser can't open that address. Cloud metadata addresses, and Row-Bot itself, never open there.",
     'review',
   ],
   browser_unavailable: [

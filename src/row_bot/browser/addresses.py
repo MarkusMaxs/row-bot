@@ -63,11 +63,12 @@ def literal_address(host: str) -> Address | None:
 
 
 def host_kind(host: str) -> str:
-    """``public``, ``this_computer`` or ``local_network`` for a host name or IP literal.
+    """``public``, ``this_computer``, ``local_network`` or ``metadata`` for a host name or IP literal.
 
     Only what the name itself says is used (no lookup): ``.local`` and
-    ``.internal`` names, metadata names and private, link-local and reserved
-    IP literals are the local network. Any other name counts as public.
+    ``.internal`` names and private and reserved IP literals are the local
+    network; cloud metadata names and link-local addresses are ``metadata``,
+    which never opens. Any other name counts as public.
     """
 
     name = str(host or "").strip().strip("[]").rstrip(".").casefold()
@@ -79,8 +80,12 @@ def host_kind(host: str) -> str:
     if address is not None:
         if address.is_loopback:
             return "this_computer"
-        return "public" if is_public(address) and not is_metadata_address(address) else "local_network"
-    if name in _METADATA_HOSTS or name.endswith((".local", ".internal", ".lan", ".home.arpa")) or "." not in name:
+        if is_metadata_address(address):
+            return "metadata"
+        return "public" if is_public(address) else "local_network"
+    if name in _METADATA_HOSTS:
+        return "metadata"
+    if name.endswith((".local", ".internal", ".lan", ".home.arpa")) or "." not in name:
         return "local_network"
     return "public"
 

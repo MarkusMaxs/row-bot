@@ -151,19 +151,23 @@ def test_the_address_bar_refuses_what_never_opens_and_allows_what_the_person_typ
     with _client(service) as client:
         _, headers = bootstrap(client)
         url = f"/api/v1/conversations/{chat}/browser/actions"
-        for denied in ("http://192.168.1.1/", "http://localhost:8080/app-v2/", "http://printer.local/",
+        for denied in ("http://169.254.169.254/latest/meta-data/", "http://localhost:8080/app-v2/",
                        "https://user:pw@example.com/"):
             response = client.post(url, json={"action": "navigate", "url": denied}, headers=headers)
             assert response.status_code == 403 and response.json()["code"] == "browser_navigation_denied"
         assert client.post(url, json={"action": "navigate", "url": "homeserve.co.uk"}, headers=headers).status_code == 200
         assert client.post(url, json={"action": "navigate", "url": "localhost:5173"}, headers=headers).status_code == 200
+        # The person's own network (5.3.1 B3): what they typed opens, and the chat may use it.
+        assert client.post(url, json={"action": "navigate", "url": "http://192.168.1.1/"},
+                           headers=headers).status_code == 200
         state = client.post(url, json={"action": "take_control"}, headers=headers).json()
         assert state["control"] == "person"
         assert client.post(url, json={"action": "give_back"}, headers=headers).json()["control"] == "agent"
         assert client.post(url, json={"action": "close_tab", "tab": "../x"}, headers=headers).status_code == 422
-    assert engine.actions == [(chat, "navigate", "https://homeserve.co.uk"), (chat, "navigate", "http://localhost:5173")]
-    [grant] = engine.local_address_grants(chat)
-    assert (grant.address, grant.source) == ("localhost:5173", "you")
+    assert engine.actions == [(chat, "navigate", "https://homeserve.co.uk"), (chat, "navigate", "http://localhost:5173"),
+                              (chat, "navigate", "http://192.168.1.1/")]
+    assert [(grant.address, grant.source) for grant in engine.local_address_grants(chat)] == [
+        ("localhost:5173", "you"), ("192.168.1.1", "you")]
 
 
 def test_with_the_browser_turned_off_the_pane_says_so(service, browser, monkeypatch):  # noqa: F811
