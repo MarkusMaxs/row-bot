@@ -5906,9 +5906,10 @@ class ApprovalAnswer(WireModel):
 class ApprovalPayload(WireModel):
     decision: Literal["approve", "reject"]
     nonce: Annotated[str, StringConstraints(min_length=32, max_length=256)]
-    # "turn" also approves later actions of the same kind until the turn ends (F21); only kinds the view marks
-    # repeatable take it, others are approved once.
-    scope: Literal["once", "turn"] = "once"
+    # "turn" also approves later actions of the same kind until the turn ends (F21), "chat" until the
+    # conversation ends ("Allow in this chat", 5.3.1 B2); only kinds the view marks repeatable take them,
+    # others are approved once.
+    scope: Literal["once", "turn", "chat"] = "once"
     # A question card (N4): "approve" answers it with these, one per question; "reject" skips it. An answer is the
     # person's input, never an approval of an action.
     answers: list[ApprovalAnswer] | None = Field(default=None, max_length=4)
@@ -8506,7 +8507,7 @@ class ApprovalView(WireModel):
     requesting_trace_id: str = Field(default="", max_length=256)
     setup: ApprovalSetup | None = None
     app: TraceAppRef | None = None
-    # Whether "approve the rest of this turn" is offered for this action (F21).
+    # Whether "Allow in this chat" is offered for this action (F21, 5.3.1 B2).
     repeatable: bool = False
     # Under Auto: why the reviewer asked the person rather than approving ("The reviewer asked you: …").
     reviewer_reason: str = Field(default="", max_length=240)

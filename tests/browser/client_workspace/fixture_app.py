@@ -2577,6 +2577,25 @@ def stream(text: str, enabled_tools: list[str], config: dict, *, stop_event=None
         finally:
             call["quiesced"] = True
         return
+    if "outside files fixture" in text:
+        # 5.3.1 B1/B2: a change outside the workspace asks, and may be allowed for the rest of the chat.
+        from row_bot.threads import append_checkpoint_messages
+        call = predecessor._record("submit", config, "outside-files")
+        thread = call["conversation_id"]
+        identity = f"outside-files:{call['generation_id']}"
+        tool_id = fixture_id(identity + ":tool")
+        args = {"file_path": "D:/Videos/trip/cut-list.txt", "text": "00:00 intro"}
+        try:
+            append_checkpoint_messages(thread, [AIMessage(id=fixture_id(identity + ":tool-call"), content="",
+                tool_calls=[{"id": tool_id, "name": "workspace_write_file", "args": args}])])
+            yield "tool_call", {"tool_call_id": tool_id, "name": "workspace_write_file", "args": args}
+            yield "interrupt", [{"__interrupt_id": fixture_id(identity + ":approval"),
+                                 "tool": "workspace_write_file", "label": "Change files outside the workspace?",
+                                 "description": "Outside the workspace: D:/Videos/trip/cut-list.txt",
+                                 "args": args}]
+        finally:
+            call["quiesced"] = True
+        return
     if "decided without asking fixture" in text:
         # Auto and Hands-off (A0): steps that ran without asking say who let them run.
         from row_bot.threads import append_checkpoint_messages

@@ -199,6 +199,43 @@ PRIVATE_DATA_PATH_REFUSAL = (
 )
 
 
+# File operations that only read: outside the workspace they still ask, since they reach the person's
+# other files, but the card says reading.
+_READING_OPERATIONS = {"read_file", "list_directory", "file_search"}
+
+
+def outside_workspace_refusal(operation: str, paths: list[Path]) -> tuple[str | None, str]:
+    """Ask by the approval level before a file operation reaches outside the workspace (5.3.1 B1).
+
+    Returns the refusal (None when it may run) and the approval line for the result. Row-Bot's data
+    folder stays refused at every level.
+    """
+    from row_bot.tools.approval_gate import approval_check
+
+    if any(is_private_data_path(path) for path in paths):
+        return PRIVATE_DATA_PATH_REFUSAL, ""
+    reading = operation in _READING_OPERATIONS
+    names = [str(path) for path in paths]
+    payload = {
+        "tool": f"workspace_{operation}",
+        "label": "Read outside the workspace?" if reading else "Change files outside the workspace?",
+        # The card asks by the tool ("Write a file?"); this line says where.
+        "description": "Outside the workspace: " + ", ".join(names),
+        "args": {"paths": names},
+    }
+    return approval_check(
+        payload,
+        risks=("reaches files outside the workspace",),
+        blocked_message=f"BLOCKED: {', '.join(names)} is outside the workspace, and this chat is on Block.",
+        cancelled_message="Cancelled: nothing outside the workspace was read or changed.",
+    )
+
+
+def _absolute(value: str, root_dir: str) -> Path:
+    given = Path(value.strip()).expanduser()
+    return (given if given.is_absolute() else Path(root_dir) / _normalise_path(value, root_dir)).resolve()
+
+
 def _wrap_tool_with_path_fix(tool, root_dir: str):
     """Return a copy of *tool* that:
     1. Rejects absolute paths outside the workspace with a redirect hint.
@@ -226,17 +263,36 @@ def _wrap_tool_with_path_fix(tool, root_dir: str):
         if tool.name == "list_directory":
             _path_params = list(sig.parameters.keys())[:1]
 
+    operation = tool.name.removeprefix("workspace_")
+
+    def _outside(**kwargs):
+        """A path elsewhere on this computer: ask by the level, then run the same tool rooted there."""
+        import os
+
+        keys = [key for key in _path_params if isinstance(kwargs.get(key), str)]
+        paths = {key: _absolute(kwargs[key], root_dir) for key in keys}
+        try:
+            # The folder holding every path; a list_directory path is the folder itself.
+            folders = [path if operation == "list_directory" else path.parent for path in paths.values()]
+            common = Path(os.path.commonpath([str(folder) for folder in folders]))
+        except ValueError:
+            return "Error: these paths are on different drives; copy them with run_command instead."
+        # The decision is recorded on the result by the agent's tool wrapper.
+        refusal, _line = outside_workspace_refusal(operation, list(paths.values()))
+        if refusal:
+            return refusal
+        rooted = type(tool)(root_dir=str(common))
+        for key, path in paths.items():
+            kwargs[key] = os.path.relpath(path, common).replace("\\", "/")
+        return rooted._run(**kwargs)
+
     def _wrapped(**kwargs):
-        # ── Sandbox redirect: reject paths outside workspace ─────────
+        # A path outside the workspace asks first (5.3.1 B1); inside it, paths are normalised.
+        if any(isinstance(kwargs.get(key), str) and _is_outside_workspace(kwargs[key], root_dir)
+               for key in _path_params):
+            return _outside(**kwargs)
         for key in _path_params:
             if key in kwargs and isinstance(kwargs[key], str):
-                if _is_outside_workspace(kwargs[key], root_dir):
-                    return (
-                        f"Error: the path '{kwargs[key]}' is outside the "
-                        f"workspace folder ({root_dir}). This tool ONLY "
-                        f"operates within the workspace. Use the run_command "
-                        f"tool instead to access paths outside the workspace."
-                    )
                 kwargs[key] = _normalise_path(kwargs[key], root_dir)
                 if is_private_data_path(Path(root_dir) / kwargs[key]):
                     return PRIVATE_DATA_PATH_REFUSAL
@@ -246,8 +302,8 @@ def _wrap_tool_with_path_fix(tool, root_dir: str):
     new_name = f"workspace_{tool.name}"
     new_desc = (
         f"{tool.description} "
-        f"(WORKSPACE ONLY — paths are relative to the workspace folder. "
-        f"For files outside the workspace, use run_command instead.)"
+        f"(Paths are relative to the workspace folder. An absolute path elsewhere on this "
+        f"computer works too, after the person's approval.)"
     )
 
     # Preserve the original input schema so StructuredTool passes kwargs
@@ -307,21 +363,23 @@ def _make_pdf_aware_read_tool(root_dir: str):
         if "::" in file_path:
             file_path, sheet_name = file_path.rsplit("::", 1)
 
-        file_path = _normalise_path(file_path, root_dir)
-        resolved = Path(root_dir) / file_path
-        resolved = resolved.resolve()
-
-        # Sandbox check — must stay within root
-        if not _within(resolved, root_dir):
-            return (
-                f"Error: path '{file_path}' is outside the workspace folder "
-                f"({root_dir}). This tool ONLY operates within the workspace. "
-                f"Use the run_command tool instead to access paths outside "
-                f"the workspace."
-            )
-
-        if is_private_data_path(resolved):
-            return PRIVATE_DATA_PATH_REFUSAL
+        if _is_outside_workspace(file_path, root_dir):
+            # A file elsewhere on this computer: read after asking by the level (5.3.1 B1).
+            resolved = Path(file_path.strip()).expanduser().resolve()
+            refusal, _line = outside_workspace_refusal("read_file", [resolved])
+            if refusal:
+                return refusal
+        else:
+            file_path = _normalise_path(file_path, root_dir)
+            resolved = (Path(root_dir) / file_path).resolve()
+            # Sandbox check — a relative path must stay within root
+            if not _within(resolved, root_dir):
+                return (
+                    f"Error: path '{file_path}' climbs out of the workspace folder ({root_dir}); "
+                    f"give the file's full path instead."
+                )
+            if is_private_data_path(resolved):
+                return PRIVATE_DATA_PATH_REFUSAL
 
         if not resolved.exists() and "/" not in file_path.replace("\\", "/"):
             received = Path(root_dir) / "Received Files" / file_path

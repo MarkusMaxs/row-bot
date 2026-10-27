@@ -229,10 +229,11 @@ def test_the_recording_tools_stay_out_of_the_models_and_generic_paths(screen):
     assert screen.transport.calls == []
 
 
-@pytest.mark.parametrize("context", [{"runtime_surface": "channel"}, {"runtime_surface": "workflow"},
-                                     {"background_workflow": True}, {"runtime_surface": "agent"}])
-def test_only_an_interactive_chat_on_this_computer_records_the_screen(screen, monkeypatch, context):
+@pytest.mark.parametrize("context", [{"runtime_surface": "channel"}, {"channel_streaming": True}])
+def test_a_channel_chat_never_records_the_screen(screen, monkeypatch, context):
+    """The person is usually away from this computer's screen; a chat, workflow or helper may (5.3.1 B4)."""
     monkeypatch.setattr("row_bot.agent.get_active_runtime_context", lambda: dict(context))
 
-    assert _computer("start_recording").startswith("Recording the screen works only in a chat in Row-Bot")
+    assert _computer("start_recording").startswith("Recording the screen works in Row-Bot on this computer, "
+                                                   "not from a channel chat")
     assert screen.asked == [] and screen.transport.calls == []

@@ -376,7 +376,8 @@ def test_real_durable_approval_resume_and_response_loss_replay(service):
         view = client.get(f"/api/v1/approvals/{handle.approval_id}", headers=headers)
         assert view.status_code == 200, view.text
         assert "private-argument" not in view.text and "action_digest" not in view.text
-        assert view.json()["repeatable"] is False
+        # Any tool may be allowed for the rest of the chat (5.3.1 B2).
+        assert view.json()["repeatable"] is True
         body = {"command_id": str(uuid4()), "client_session_id": headers["X-Client-Session"], "type": "approval.resolve",
                 "expected_revision": view.json()["revision"], "payload": {"decision": "approve", "nonce": view.json()["nonce"]}}
         commit_headers = {**headers, "Idempotency-Key": str(uuid4())}

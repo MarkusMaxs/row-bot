@@ -286,8 +286,8 @@ export default function ApprovalCard({
   async function resolve(
     decision: 'approve' | 'reject',
     allow = false,
-    // 'turn' also approves later actions of this kind until the reply ends (F21).
-    scope: 'once' | 'turn' = 'once',
+    // 'chat' also approves later actions of this kind in this conversation (F21, 5.3.1 B2).
+    scope: 'once' | 'chat' = 'once',
   ) {
     if (!view || busy || resolution) return;
     setBusy(true);
@@ -296,7 +296,7 @@ export default function ApprovalCard({
       await controller.intent(
         id,
         'approval.resolve',
-        scope === 'turn'
+        scope === 'chat'
           ? { decision, nonce: view.nonce, scope }
           : { decision, nonce: view.nonce },
         view.revision,
@@ -612,13 +612,13 @@ export default function ApprovalCard({
               )}
             </Button>
             {view.repeatable && (
-              <Hint label="Approve this and the rest of this kind until this reply ends">
+              <Hint label="Approves this, and actions like it later in this chat, without asking. Sending, posting, deleting and paying still ask.">
                 <Button
                   variant="ghost"
                   disabled={busy || Boolean(resolution)}
-                  onClick={() => void resolve('approve', false, 'turn')}
+                  onClick={() => void resolve('approve', false, 'chat')}
                 >
-                  Approve the rest
+                  Allow in this chat
                 </Button>
               </Hint>
             )}

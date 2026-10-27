@@ -310,7 +310,8 @@
           "default": "once",
           "enum": [
             "once",
-            "turn"
+            "turn",
+            "chat"
           ],
           "title": "Scope",
           "type": "string"
