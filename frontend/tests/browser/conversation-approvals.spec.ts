@@ -140,6 +140,14 @@ test('an ordinary action may be allowed for the rest of the chat', async ({
   await page.setViewportSize(PHONE);
   await expect(allow).toBeVisible();
   await views(page, info, 'allow-in-this-chat-card-phone');
+  await page.setViewportSize({ width: 1280, height: 900 });
+  // Answer it: an approval left waiting shows in every later spec's sidebar and Buddy.
+  await card.getByRole('button', { name: 'Deny', exact: true }).click();
+  await expect(
+    page
+      .getByRole('log', { name: 'Conversation' })
+      .getByText('You said no, so Row-Bot stopped there.', { exact: true }),
+  ).toBeVisible();
 });
 
 test('the reviewer’s decisions are visible but quiet', async ({
