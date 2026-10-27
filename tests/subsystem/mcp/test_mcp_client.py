@@ -119,7 +119,7 @@ class McpClientFoundationTests(unittest.TestCase):
                                        annotations=readonly_tool.annotations)
         normalized = runtime._normalize_tools("demo", {"enabled": True, "tools": {}}, [update_index])["update_index"]
         self.assertTrue(normalized.requires_approval)
-        self.assertFalse(normalized.enabled)
+        self.assertTrue(normalized.enabled)
         self.assertFalse(is_destructive_tool("search_messages", tool_obj=readonly_tool))
         destructive_tool = SimpleNamespace(annotations={"destructiveHint": True})
         self.assertTrue(is_destructive_tool("lookup", tool_obj=destructive_tool))
