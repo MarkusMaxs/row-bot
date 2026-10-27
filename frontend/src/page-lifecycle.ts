@@ -7,7 +7,19 @@ type PageLifecycle = {
   addEventListener(type: string, listener: EventListener): void;
   removeEventListener(type: string, listener: EventListener): void;
   navigator: { readonly onLine: boolean };
+  location: { readonly hostname: string };
 };
+
+/** Row-Bot opened on this computer: reaching it never needs the network. */
+function onThisComputer(hostname: string) {
+  const host = hostname.replace(/^\[|\]$/g, '');
+  return (
+    host === 'localhost' ||
+    host.endsWith('.localhost') ||
+    host === '::1' ||
+    host.startsWith('127.')
+  );
+}
 
 /** Suspend cached documents; returning pages reauthenticate without replaying work. */
 export function bindPageLifecycle(
@@ -15,7 +27,11 @@ export function bindPageLifecycle(
   page: PageLifecycle = window,
 ): () => void {
   let cached = false;
-  const online = () => client.setOnline(!cached && page.navigator.onLine);
+  // A Wi-Fi drop makes the browser report offline, but a page from this
+  // computer still reaches Row-Bot: it carries on instead of disconnecting (#568).
+  const local = onThisComputer(page.location.hostname);
+  const online = () =>
+    client.setOnline(!cached && (local || page.navigator.onLine));
   const hide: EventListener = (event) => {
     if ((event as PageTransitionEvent).persisted) {
       cached = true;
