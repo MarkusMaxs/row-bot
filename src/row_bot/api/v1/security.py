@@ -453,15 +453,17 @@ class ClientSecurity:
             self._subscriptions.pop(sub.id, None)
 
     def approval_nonce(self, session: ClientSession, approval_id: str, revision: str,
-                       action_digest: str, *, ttl: float = 300, mcp_server_id: str | None = None) -> str:
+                       action_digest: str, *, ttl: float = 300, hard_cap: float = 300,
+                       mcp_server_id: str | None = None) -> str:
         with self._lock:
             self._prune()
             if len(self._nonces) >= 1024:
                 raise ProtocolError("rate_limited", 429)
             nonce = secrets.token_urlsafe(32)
+            cap = min(float(ttl), float(hard_cap)) if hard_cap else float(ttl)
             self._nonces[hashlib.sha256(nonce.encode()).hexdigest()] = (
                 session.id, approval_id, revision, action_digest,
-                self.clock() + max(0, min(ttl, 300)), self.policy_revision, None,
+                self.clock() + max(0, cap), self.policy_revision, None,
                 *(((mcp_server_id, self._mcp_policy_digest(mcp_server_id), None),) if mcp_server_id is not None else ()))
             return nonce
 
