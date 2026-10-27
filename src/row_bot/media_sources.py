@@ -10,7 +10,9 @@ A tool names a source in one of these ways, and nothing else is ever opened:
   folder are refused, and the file must resolve inside the workspace. This is the Developer
   tools' guard (``developer.review.scoped_workspace_path``) with two differences: folders above
   the workspace aren't checked (the person chose it), and cloud-file placeholders (OneDrive's
-  "online only" files and folders, also reparse points) aren't taken for links.
+  "online only" files and folders, also reparse points) aren't taken for links;
+- a file elsewhere on this computer, by its full path, read in place once the person allows it by
+  the approval level (5.3.1 A1); Row-Bot's own data folder never.
 """
 
 from __future__ import annotations
@@ -108,14 +110,46 @@ def _relative(root: Path, value: str) -> str:
         try:
             relative = os.path.relpath(given, root)
         except ValueError:  # Another drive.
-            raise SourceError(f"{value} is outside the workspace; only files in it can be used.") from None
+            raise SourceError(f"{value} is outside the workspace; this uses files in it. Copy the file with workspace_copy_file, "
+                              "which asks first.") from None
         if relative == os.pardir or relative.startswith(os.pardir + os.sep):
-            raise SourceError(f"{value} is outside the workspace; only files in it can be used.")
+            raise SourceError(f"{value} is outside the workspace; this uses files in it. Copy the file with workspace_copy_file, "
+                              "which asks first.")
         text = relative
     text = text.replace("\\", "/")
     while text.startswith("./"):
         text = text[2:]
     return text
+
+
+def _leaves(root: Path, path: Path) -> bool:
+    try:
+        relative = os.path.relpath(path, root)
+    except ValueError:  # Another drive.
+        return True
+    return relative == os.pardir or relative.startswith(os.pardir + os.sep)
+
+
+def _outside_file(value: str, place: Workspace | None) -> Path | None:
+    """A file outside the workspace named by its full path, once the person allows reading it; else None."""
+    from row_bot.data_paths import is_private_data_path
+
+    given = Path(value.strip().strip('"')).expanduser()
+    if not given.is_absolute() or (place is not None and not _leaves(place.root, given)):
+        return None
+    path = given.resolve()
+    if is_private_data_path(path):
+        raise SourceError("That path is inside Row-Bot's private data folder, which tools can't read.")
+    if not path.is_file():
+        raise SourceError(f"{value} isn't a file.")
+    if _kind_of(path.name) is None:
+        raise SourceError(f"{value} isn't a video or a picture.")
+    from row_bot.tools.filesystem_tool import outside_workspace_refusal
+
+    refusal, _line = outside_workspace_refusal("read_file", [path])
+    if refusal:
+        raise SourceError(refusal)
+    return path
 
 
 def _is_link(info: os.stat_result) -> bool:
@@ -247,6 +281,9 @@ def resolve(value: str, conversation_id: str) -> list[Media]:
                     for ref, moment in zip(edit.frame_refs, edit.frame_times)]
         return [Media(label=edit.output_name or "Edited video", kind="video", ref=edit.media_ref)]
     place = workspace(conversation_id)
+    outside = _outside_file(text, place)
+    if outside is not None:
+        return [Media(label=str(outside), kind=_kind_of(outside.name) or "video", path=outside)]
     refused: SourceError | None = None
     if place is not None:
         try:

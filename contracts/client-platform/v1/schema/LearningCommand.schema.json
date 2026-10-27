@@ -166,6 +166,7 @@
         "edit_change",
         "test_lesson",
         "delete_lesson",
+        "undo_method",
         "hf_sign_in",
         "hf_cancel_sign_in",
         "hf_sign_out",

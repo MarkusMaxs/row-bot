@@ -9,9 +9,9 @@ from typing import Any
 from .models import SkillBundle, SkillScanFinding, SkillScanResult
 from .sources import parse_skill_markdown
 
-MAX_FILE_BYTES = 1_000_000
-MAX_TOTAL_BYTES = 5_000_000
-MAX_FILE_COUNT = 100
+MAX_FILE_BYTES = 10_000_000
+MAX_TOTAL_BYTES = 50_000_000
+MAX_FILE_COUNT = 500
 HIGH_TOKEN_WARNING = 4_000
 
 ALLOWED_BINARY_EXTENSIONS = {
@@ -27,7 +27,11 @@ INSTALLER_METADATA_KEYS = {
     "postinstall", "preinstall", "scripts",
 }
 
-BLOCK_PATTERNS = {
+# Wording that deserves a careful look before a skill is added. These were refusals, but the words
+# turn up in ordinary skills ("send the token count", "ignore the permission prompt in the tutorial"),
+# so the person reads the warning and decides (5.3.1 A5). A skill's instructions never get past an
+# approval: every action still asks by the approval level.
+REVIEW_PATTERNS = {
     "secret_exfiltration": re.compile(
         r"\b(reveal|dump|exfiltrate|send|upload|steal)\b.{0,80}\b(secret|token|api key|password|credential|env)\b",
         re.IGNORECASE | re.DOTALL,
@@ -72,7 +76,7 @@ def scan_bundle(bundle: SkillBundle) -> SkillScanResult:
         if file.size_bytes > MAX_FILE_BYTES:
             findings.append(_finding("block", "file_too_large", f"File exceeds {MAX_FILE_BYTES} bytes.", path))
         if file.kind == "binary" and suffix not in ALLOWED_BINARY_EXTENSIONS:
-            findings.append(_finding("block", "suspicious_binary", "Binary file type is not allowed for passive skills.", path))
+            findings.append(_finding("warn", "suspicious_binary", "Unusual binary file: copied with the skill, never run.", path))
         if path.startswith("scripts/") or "/scripts/" in path:
             findings.append(_finding("warn", "scripts_present", "scripts/ is copied passively and never executed.", path))
         if suffix in EXECUTABLE_EXTENSIONS:
@@ -118,9 +122,10 @@ def scan_bundle(bundle: SkillBundle) -> SkillScanResult:
         ))
 
     body = instructions or bundle.instructions or ""
-    for code, pattern in BLOCK_PATTERNS.items():
+    for code, pattern in REVIEW_PATTERNS.items():
         if pattern.search(body):
-            findings.append(_finding("block", code, "Instructions contain a blocked security pattern.", primary.path if primary else ""))
+            findings.append(_finding("warn", code, "Instructions mention secrets or approvals: read them before adding it.",
+                                     primary.path if primary else ""))
     for code, pattern in WARN_PATTERNS.items():
         if pattern.search(body):
             findings.append(_finding("warn", code, "Instructions contain language that deserves review.", primary.path if primary else ""))

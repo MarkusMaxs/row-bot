@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import { assertNoOverflow, expect, screenshot, test } from './evidence';
 import { fixtureHeaders } from './surface-helpers';
 import { composer, dismissNotices, newConversation } from './unified-helpers';
+import { SIGNED_IN_STATE } from './signed-in';
 
 /*
  * F7 · Send a file to your devices or a chat app. The fixture scripts the
@@ -58,6 +59,7 @@ async function everywhere(
 async function phoneOf(page: Page, browser: Browser) {
   const origin = new URL(page.url()).origin;
   const context = await browser.newContext({
+    storageState: SIGNED_IN_STATE,
     baseURL: origin,
     viewport: PHONE,
     hasTouch: true,

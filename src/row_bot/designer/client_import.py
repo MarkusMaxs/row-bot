@@ -14,6 +14,7 @@ from zipfile import ZipFile
 from row_bot.designer import history, storage
 from row_bot.designer.client_service import ArtifactError, read_artifact
 from row_bot.designer.state import DesignerPage
+from row_bot.application.attachments import MAX_ATTACHMENT_BYTES
 
 
 @dataclass(frozen=True)
@@ -35,7 +36,7 @@ class DocumentImportPreview:
 
 def _parse(filename: str, data: bytes) -> list[DesignerPage]:
     suffix = filename.lower().rsplit('.', 1)[-1]
-    if suffix not in {'pptx', 'docx'} or not 0 < len(data) <= 25 * 1024 * 1024:
+    if suffix not in {'pptx', 'docx'} or not 0 < len(data) <= MAX_ATTACHMENT_BYTES:
         raise ArtifactError('invalid_document_import')
     try:
         with ZipFile(io.BytesIO(data)) as archive:

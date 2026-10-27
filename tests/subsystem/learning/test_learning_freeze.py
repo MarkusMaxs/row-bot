@@ -262,3 +262,35 @@ def test_the_vaults_counts_come_without_reading_any_problem_out(writer, chats, c
     assert counts["uncorrected"] == 2 and counts["exact"] == 3 and counts["redacted"] == 0
     assert len(holdout.waiting_for_vault(store)) == 1 and counts["corrections_waiting"] == 0
     assert CANARY not in json.dumps(counts)
+
+
+class GuardedPacks:
+    """Pack tasks: "personal" passes them all; "start" offers two answers on half of them (METRIC_VERSION 3's
+    guard fails those, version 2 passed them) and fails the rest."""
+
+    signature = "fake-packs-guarded"
+
+    def run(self, task, arm, *, budget, meter, arm_left):
+        if arm.name == "personal":
+            return CaseResult(task.id, "pack", task.kind_of_work, "passed", "answer", tokens=1, local_tokens=1)
+        guarded = int(task.id.split("_")[-1]) % 2 == 0
+        return CaseResult(task.id, "pack", task.kind_of_work, "failed", "answer", tokens=1, local_tokens=1,
+                          detail="offered more than one answer" if guarded else "wrong", guarded=guarded)
+
+
+def test_the_freeze_reads_the_same_runs_under_both_checker_versions(vault):
+    # §7's sensitivity analysis: H1 and H2 under METRIC_VERSION 3 (the guard) and under 2 (before it), from the
+    # same runs; a run the guard failed passes under version 2.
+    tasks = [task for task in visible_tasks() if task.pack == "document_lookups"][:8]
+    vault(tasks, [])
+
+    result = evaluation.freeze_check(
+        [Arm("start", model_ref="start"), Arm("personal", model_ref="personal")], as_of=FREEZE, asked_by="test",
+        contrasts=[("start", "personal")], client=ScriptedClient(_answers(lambda *_: True), local=True),
+        runner=GuardedPacks(), meter=TokenMeter(10**9), store=LearningStore(), repeats=1)
+
+    assert result["metric_version"] == 3 and result["previous_metric_version"] == 2
+    packs = result["arms"]["start"]["splits"]["packs"]
+    assert (packs["mean"], packs["mean_metric_v2"], packs["guarded_runs"]) == (0.0, 0.5, 4)
+    contrast = result["contrasts"]["personal vs start"]["packs"]
+    assert contrast["primary"]["difference"] == 1.0 and contrast["metric_v2"]["difference"] == 0.5

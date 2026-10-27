@@ -68,8 +68,9 @@ APP_LANES = ("tests", "--ignore=tests/docs", "--ignore=tests/marketing")
 # pages (a plan approved and sent, a dashboard, a checklist, Library › Pages, the sandbox),
 # and Learning (preview): turning it on, its tab, Teach and Undo, a chat switched off, the personal
 # model's download, training, its versions, comparing, trying and using it, the night's look
-# for things to improve with the changes it drafted, testing and using those changes, and training on
-# Hugging Face (sign in, the quote, a run at each stage, lost contact, done).
+# for things to improve with the changes it drafted, testing and using those changes, how Row-Bot
+# learns (its learning methods, their comparisons and Undo), and training on Hugging Face (sign in, the
+# quote, a run at each stage, lost contact, done).
 BROWSER_SMOKE_SPECS = (
     "bootstrap",
     "setup-first-run",
@@ -109,6 +110,7 @@ BROWSER_SMOKE_SPECS = (
     "learning-diagnosis",
     "learning-starting-model",
     "learning-changes",
+    "learning-method",
     "learning-hugging-face",
 )
 # Nightly at desktop width, in four fixture runs (each run starts a fresh backend).
@@ -136,6 +138,7 @@ BROWSER_PHONE_SPECS = (
     "settings-routes", "settings", "shell", "sidebar", "terminal", "theme",
     "unified-panels", "unified-quality", "visual-alignment", "apps-sign-in-elsewhere",
     "model-visibility", "learning", "learning-training", "learning-download", "learning-version", "learning-use", "learning-starting-model",
+    "learning-method",
     "learning-hugging-face",
     "settings-claude-plan", "install-count",
 )

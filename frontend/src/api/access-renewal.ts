@@ -10,7 +10,7 @@ const RETRY_MS = 10 * 60 * 1000;
  * extends only when asked during its last week; the NiceGUI page asked every
  * 12 hours, the React client never did, so devices were signed out after 30
  * days however often they were used. Only a browser signed in with an access
- * session renews: the owner on this computer has none. The request never
+ * session renews: a bare connection on this computer has none. The request never
  * carries or changes a secret, and it stops for good once the server says the
  * session has ended (it is never revived).
  */
@@ -65,10 +65,16 @@ export function keepAccessSessionRenewed(
       const session = (await response.json()) as {
         authenticated?: unknown;
         authentication_kind?: unknown;
+        session_id?: unknown;
       };
+      // A window or browser on this computer signed in by the launcher (A0)
+      // holds an access session too, and renews like any device.
       const invited =
         session.authenticated === true &&
-        session.authentication_kind === 'session';
+        (session.authentication_kind === 'session' ||
+          (session.authentication_kind === 'local_owner' &&
+            typeof session.session_id === 'string' &&
+            session.session_id !== ''));
       if (!active || !invited) return stop();
     } catch {
       return stop();

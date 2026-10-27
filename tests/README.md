@@ -128,8 +128,14 @@ uv run python scripts/learning_release_check.py --people all --days 30 --tiers 8
   --scratch <folder> --eval-profile <eval profile> --runtimes-from <data folder with the engine>
 ```
 
+With `--stages generations --generations 3` (L4a, PLAN O109) the people's days go on past the
+run until the product's own strategy trials have made three inherited generations of how
+Row-Bot learns, then the final set judges every generation and the frozen control
+(`--generation-days`, `--night-every`, `--monthly-limit`); the report adds each trial with
+its denominators and the H3 estimate.
+
 **The paper's report** (`scripts/learning_paper_report.py`, PLAN O83/O109): the script
-the participant runs on their own profile (`--health`, `--freeze --as-of`, `--thinking`);
+the participant runs on their own profile (`--health`, `--freeze --as-of` with `--paper v1|v2`, `--h2` and `--h3-final`, `--thinking`);
 it works on a checked scratch copy and writes one JSON of aggregates under a strict
 schema. Its privacy tests run in the PR lane
 (`tests/subsystem/learning/test_learning_paper_report.py`, `test_learning_freeze.py`);

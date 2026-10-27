@@ -2577,6 +2577,25 @@ def stream(text: str, enabled_tools: list[str], config: dict, *, stop_event=None
         finally:
             call["quiesced"] = True
         return
+    if "outside files fixture" in text:
+        # 5.3.1 B1/B2: a change outside the workspace asks, and may be allowed for the rest of the chat.
+        from row_bot.threads import append_checkpoint_messages
+        call = predecessor._record("submit", config, "outside-files")
+        thread = call["conversation_id"]
+        identity = f"outside-files:{call['generation_id']}"
+        tool_id = fixture_id(identity + ":tool")
+        args = {"file_path": "D:/Videos/trip/cut-list.txt", "text": "00:00 intro"}
+        try:
+            append_checkpoint_messages(thread, [AIMessage(id=fixture_id(identity + ":tool-call"), content="",
+                tool_calls=[{"id": tool_id, "name": "workspace_write_file", "args": args}])])
+            yield "tool_call", {"tool_call_id": tool_id, "name": "workspace_write_file", "args": args}
+            yield "interrupt", [{"__interrupt_id": fixture_id(identity + ":approval"),
+                                 "tool": "workspace_write_file", "label": "Change files outside the workspace?",
+                                 "description": "Outside the workspace: D:/Videos/trip/cut-list.txt",
+                                 "args": args}]
+        finally:
+            call["quiesced"] = True
+        return
     if "decided without asking fixture" in text:
         # Auto and Hands-off (A0): steps that ran without asking say who let them run.
         from row_bot.threads import append_checkpoint_messages
@@ -5326,6 +5345,90 @@ def l3b_learning(action: str, x_fixture_token: str = Header(default="")) -> dict
         _l3b_saved_lesson()
     elif action == "restore":
         _l3b_restore()
+    else:
+        raise HTTPException(404, "Unknown Learning fixture action")
+    return {"action": action}
+
+
+# ── Learning (preview), L4a: how Row-Bot learns: its methods, their trials and history, a night's switch ──
+
+
+def _l4a_methods() -> None:
+    """Method v1 (the first), v2 tried and dropped, v3 switched in by a trial (with Undo)."""
+
+    import time as _time
+    from dataclasses import replace
+
+    from row_bot.learning.improver import archive
+    from row_bot.learning.improver import strategy as strategy_module
+    from row_bot.learning.store import LearningStore
+
+    store = LearningStore()
+    now = _time.time()
+    first = archive.ensure_first(store)
+    tried = archive.add(store, replace(first.strategy, budget=replace(first.strategy.budget, tests=4)),
+                        parents=(first.id,), at=now - 2 * 86_400)
+    archive.set_status(store, tried, "not_used")
+    archive.record_trial(store, {"id": "trial_l4a_1", "at": now - 2 * 86_400, "finished_at": now - 2 * 86_400 + 3600,
+                                 "problems": 30, "arm_tokens": 2_000_000, "incumbent": first.id, "control": first.id,
+                                 "winner": first.id, "switched": False, "arms": [
+                                     {"role": "incumbent", "release": first.id, "version": 1, "accepted": 1,
+                                      "better": 0, "tokens": 1_400_000, "yield": 0.0},
+                                     {"role": "challenger", "release": tried.id, "version": 2, "accepted": 2,
+                                      "better": 0, "tokens": 1_900_000, "yield": 0.0}]})
+    won = archive.add(store, replace(first.strategy, methods=strategy_module.MethodChoice(
+        ("way_of_working", "lesson", "create_skill", "patch_skill", "train"))), parents=(first.id,), at=now - 5 * 3600)
+    archive.switch(store, won, by="trial", trial="trial_l4a_2", at=now - 4 * 3600)
+    archive.record_trial(store, {"id": "trial_l4a_2", "at": now - 5 * 3600, "finished_at": now - 4 * 3600,
+                                 "problems": 31, "arm_tokens": 1_500_000, "incumbent": first.id, "control": first.id,
+                                 "winner": won.id, "switched": True, "arms": [
+                                     {"role": "incumbent", "release": first.id, "version": 1, "accepted": 1,
+                                      "better": 0, "tokens": 1_000_000, "yield": 0.0},
+                                     {"role": "challenger", "release": won.id, "version": 3, "accepted": 2,
+                                      "better": 1, "tokens": 500_000, "yield": 2.0}]})
+
+
+def _l4a_night(switched: bool) -> None:
+    import json as _json
+    from datetime import date
+
+    from row_bot.learning import changes, diagnosis
+    from row_bot.learning.improver import meta
+    from row_bot.learning.store import LearningStore
+
+    store = LearningStore()
+    night = date.today().isoformat()
+    diagnosis._save(store, diagnosis.NightReport(night, found=2, drafted=1))
+    store.set_meta_values({changes.NIGHT_KEY: _json.dumps(changes.NightTests(night, tested=1, not_better=1).to_dict())})
+    report = meta.TrialReport(night, "done", "trial_l4a_2", 31,
+                              switched={"from": 1, "to": 3, "words": "tries a way of working first"} if switched else None)
+    meta._note(store, report)
+
+
+def _l4a_restore() -> None:
+    from row_bot.learning.improver import archive, meta
+    from row_bot.learning.store import LearningStore
+
+    store = LearningStore()
+    if not store.exists():
+        return
+    for entry in archive.entries(store):
+        store.remove("release", entry.id)
+    store.set_meta_values({archive.CHAIN_KEY: "[]", archive.TRIALS_KEY: "[]", meta.NIGHT_KEY: "null",
+                           meta.STATE_KEY: "null"})
+
+
+@app.post("/__l4a_fixture/learning/{action}")
+def l4a_learning(action: str, x_fixture_token: str = Header(default="")) -> dict:
+    """Learning (preview) for the L4a spec: learning methods and their trials, and a night that switched to a new
+    method or kept the one in use. Nothing reaches a model: methods and trial results are written directly."""
+    predecessor._authorize(x_fixture_token)
+    if action == "methods":
+        _l4a_methods()
+    elif action in {"switched", "kept"}:
+        _l4a_night(action == "switched")
+    elif action == "restore":
+        _l4a_restore()
     else:
         raise HTTPException(404, "Unknown Learning fixture action")
     return {"action": action}

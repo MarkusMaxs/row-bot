@@ -2051,7 +2051,7 @@ const CATALOG: Record<string, Entry> = {
     open('system', 'System', 'browser-computer-use'),
   ],
   browser_navigation_denied: [
-    "Row-Bot's browser can't open that address. Addresses on your local network, and Row-Bot itself, never open there.",
+    "Row-Bot's browser can't open that address. Cloud metadata addresses, and Row-Bot itself, never open there.",
     'review',
   ],
   browser_unavailable: [
@@ -2843,6 +2843,10 @@ const CATALOG: Record<string, Entry> = {
   ],
   learning_change_busy: [
     'Row-Bot is testing a change right now. It says here when it’s done.',
+    'none',
+  ],
+  learning_method_changed: [
+    'How Row-Bot learns changed meanwhile, so there’s nothing to undo. It shows the method in use now.',
     'none',
   ],
   knowledge_changed: [

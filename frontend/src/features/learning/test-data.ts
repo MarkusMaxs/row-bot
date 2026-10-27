@@ -6,6 +6,7 @@ import type {
   LearningComparison,
   LearningDownload,
   LearningHardware,
+  LearningMethod,
   LearningOvernight,
   LearningPersonalModel,
   LearningReceipt,
@@ -609,6 +610,68 @@ export function overnight(
     left_out: 0,
     needs_examples: 0,
     looks_like_bug: 0,
+    ...overrides,
+  };
+}
+
+/** How Row-Bot learns (L4a): method v3 switched in by a trial over v1 (v2 tried and dropped). */
+export function learningMethod(
+  overrides: Partial<LearningMethod> = {},
+): LearningMethod {
+  return {
+    version: 3,
+    since: '2026-10-28T02:10:00',
+    description:
+      'Looks first at mistakes you corrected, tries a way of working before a lesson, shows itself up to 6 examples of each mistake, and looks into up to 6 issues a night and tests 2 ideas.',
+    tried: 17,
+    kept: 4,
+    tokens: 1_100_000,
+    trials: [
+      {
+        at: '2026-10-28T02:10:00',
+        problems: 31,
+        arm_tokens: 1_500_000,
+        outcome: 'switched',
+        to_version: 3,
+        arms: [
+          {
+            role: 'incumbent',
+            version: 1,
+            accepted: 1,
+            better: 0,
+            tokens: 1_000_000,
+            per_million: 0,
+          },
+          {
+            role: 'challenger',
+            version: 3,
+            accepted: 2,
+            better: 1,
+            tokens: 500_000,
+            per_million: 2,
+          },
+        ],
+      },
+    ],
+    history: [
+      {
+        at: '2026-10-28T02:10:00',
+        version: 3,
+        event: 'switched',
+        words: 'tries a way of working first',
+        can_undo: true,
+      },
+      {
+        at: '2026-10-27T02:00:00',
+        version: 2,
+        event: 'tried',
+        words: 'tests a different number of ideas a night',
+        against: 1,
+      },
+      { at: '2026-10-26T01:00:00', version: 1, event: 'first', words: '' },
+    ],
+    can_undo: true,
+    next_trial: { state: 'waiting', fresh: 12, needed: 30 },
     ...overrides,
   };
 }

@@ -11,9 +11,10 @@ keys, what the key does in that kind of app (Enter sends in a chat app,
 Delete removes files in a file manager).
 
 Row-Bot never types into a password, one-time code or card field, never
-controls itself, a terminal (its own shell tool asks first), a password
-manager or a protected system screen, and never presses the keys that open
-other apps or the secure screen.
+controls itself, a password manager or a protected system screen, and never
+presses the keys that open other apps or the secure screen. In a terminal it
+types commands, each checked as its shell tool checks one (5.3.1 A3), and
+never pastes.
 """
 
 from __future__ import annotations
@@ -67,15 +68,32 @@ def own_window(app: str, title: str = "") -> bool:
     return app_key in {"python", "pythonw"} and "rowbot" in _key(title)
 
 
+def is_terminal(app: str) -> bool:
+    return _key(app) in _TERMINALS
+
+
+TERMINAL_PASTE_REFUSAL = ("In a terminal Row-Bot types each command, so it's checked first; it doesn't paste. "
+                          "Type the command instead.")
+
+
+def terminal_paste(action: str, keys: tuple[tuple[str, ...], str] | None) -> bool:
+    """Whether the action pastes in a terminal (a right-click pastes in Windows terminals)."""
+
+    if action == "right_click":
+        return True
+    if action != "key" or keys is None:
+        return False
+    modifiers, key = set(keys[0]), keys[1]
+    return ((key == "v" and modifiers in ({"ctrl"}, {"ctrl", "shift"}, {"cmd"}))
+            or (key == "insert" and modifiers == {"shift"}))
+
+
 def unusable_app(app: str, title: str = "") -> str:
     """Why Row-Bot doesn't use this app, in plain words; empty when it may."""
 
     app_key = _key(app)
     if own_window(app, title):
         return "Row-Bot can't control its own window."
-    if app_key in _TERMINALS:
-        return ("Row-Bot doesn't type into terminals: it runs commands with its own shell tool, which asks first "
-                "when it should.")
     if app_key in _PASSWORD_MANAGERS:
         return "Row-Bot doesn't use password managers: the person signs in themselves."
     if _PROTECTED_TITLES.match(_words(title)):

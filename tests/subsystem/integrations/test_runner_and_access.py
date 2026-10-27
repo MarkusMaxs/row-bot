@@ -137,11 +137,13 @@ def test_routine_changes_ask_until_allowed_while_high_impact_and_unknown_always_
     found = mcp_runtime._normalize_tools("fixture", allowed, tools)
     assert {n: i.requires_approval for n, i in found.items()} == {
         "get_record": False, "update_record": False, "delete_record": True, "frobnicate": True}
-    # A policy saved before this change has no allowance: routine changes keep asking and stay off by default.
+    # A policy saved before this change has no allowance: routine changes keep asking.
     legacy = mcp_runtime._normalize_tools("fixture", {"enabled": True, "tools": {"enabled": {"update_record": True}}}, tools)
     assert legacy["update_record"].requires_approval is True
     fresh = mcp_runtime._normalize_tools("fixture", {"enabled": True, "tools": {}}, tools)
-    assert (fresh["update_record"].enabled, fresh["delete_record"].enabled, fresh["get_record"].enabled) == (False, False, True)
+    # Every tool is on after discovery (5.3.1 A5); changes still ask by the approval level.
+    assert (fresh["update_record"].enabled, fresh["delete_record"].enabled, fresh["get_record"].enabled) == (True, True, True)
+    assert (fresh["update_record"].requires_approval, fresh["delete_record"].requires_approval) == (True, True)
 
 
 @pytest.mark.parametrize(("preset", "expected"), [

@@ -38,7 +38,7 @@ _ACTIONS = frozenset({
     "export_version", "delete_version", "save_advanced", "reset_advanced", "retrain_without", "dismiss",
     "review_version", "use_smaller_model", "change_starting_model",
     "test_change", "use_change", "undo_change", "not_now_change", "dont_suggest_change", "edit_change",
-    "test_lesson", "delete_lesson",
+    "test_lesson", "delete_lesson", "undo_method",
 })
 # Changes Learning drafted (L3b): test, use, undo, not now, don't suggest again, edit; a lesson Row-Bot saved
 # for itself tested, or deleted. Every one is the person's own choice (D24).
@@ -260,9 +260,36 @@ def _tests() -> dict[str, Any] | None:
         return None
 
 
+def _trial_night() -> dict[str, Any] | None:
+    if not learning.store_exists():
+        return None
+    try:
+        from row_bot.learning.improver import meta
+
+        return meta.last_night(_store())
+    except Exception:
+        logger.debug("Learning could not read last night's trial", exc_info=True)
+        return None
+
+
+def _method_line(trial: dict[str, Any] | None, night: str) -> dict[str, Any]:
+    """The night's strategy trial for the Overnight lines: a switch (with what it changes) or a kept method."""
+
+    if not trial or trial.get("night") != night or trial.get("state") != "done":
+        return {}
+    switched = trial.get("switched")
+    if isinstance(switched, dict) and switched.get("to"):
+        return {"method": "switched", "method_version": max(1, int(switched["to"])),
+                "method_words": _text(switched.get("words"), 200)}
+    from row_bot.learning.improver import archive
+
+    current = archive.current(_store(), create=False)
+    return {"method": "kept", "method_version": current.version if current else 1}
+
+
 def _overnight(night: dict[str, Any] | None, today: date | None = None,
-               tests: dict[str, Any] | None = None) -> dict[str, Any] | None:
-    """Last night's look and its tests (UX §3 Overnight): only a recent one, in counts."""
+               tests: dict[str, Any] | None = None, trial: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """Last night's look, its tests and its strategy trial (UX §3 Overnight): only a recent one, in counts."""
 
     if not night or night.get("state") not in _OVERNIGHT_STATES:
         return None
@@ -284,7 +311,7 @@ def _overnight(night: dict[str, Any] | None, today: date | None = None,
             "tested": count("tested"), "ready": count("ready"), "not_better": count("not_better"),
             "used": count("used"),
             "tests_state": same.get("state") if same.get("state") in ("stopped", "limit", "claude_plan", "failed")
-            else None}
+            else None, **_method_line(trial, when.isoformat())}
 
 
 def _testing_now() -> dict[str, Any] | None:
@@ -397,6 +424,91 @@ def _changes() -> list[dict[str, Any]]:
             "agent_saved": meta.get("origin") == "agent_saved",
         })
     return found[:50]
+
+
+def _method() -> dict[str, Any] | None:
+    """How Row-Bot learns (L4a; designs/learning-ux.md §6): the method in use, its trials, its history."""
+
+    if not learning.store_exists():
+        return None
+    try:
+        return _method_view(_store())
+    except Exception:
+        logger.debug("Learning could not read how it learns", exc_info=True)
+        return None
+
+
+def _method_view(store: Any, now: float | None = None) -> dict[str, Any]:
+    from row_bot.learning import evaluation, spending
+    from row_bot.learning.contracts import Attempt
+    from row_bot.learning.improver import archive, meta
+    from row_bot.learning.improver import strategy as strategy_module
+
+    current = archive.current(store, create=False)
+    method = current.strategy if current is not None else strategy_module.FIRST
+    chain = archive.chain(store)
+    trials = archive.trials(store)
+    versions = {entry.id: entry for entry in archive.entries(store)}
+    since = next((step for step in reversed(chain) if current is not None and step.get("release") == current.id), None)
+    start = spending.month_start(now)
+    attempts = [item for item in store.find("attempt", limit=100_000)
+                if isinstance(item, Attempt) and item.change_kind != "strategy" and item.created_at >= start]
+    tried = sum(1 for item in attempts if item.outcome not in ("pending", "failed", "stopped"))
+    kept = sum(1 for item in attempts if item.outcome == "improved" and item.kept)
+
+    def version_of(release: Any) -> int | None:
+        found = versions.get(str(release or ""))
+        return found.version if found else None
+
+    trial_rows = []
+    for item in reversed(trials[-20:]):
+        arms = []
+        for arm in item.get("arms") or ():
+            role = str(arm.get("role") or "")
+            role = "generation" if role.startswith("generation") else ("challenger" if role.startswith("challenger") else role)
+            if role not in ("incumbent", "challenger", "control", "generation") or not arm.get("version"):
+                continue
+            arms.append({"role": role, "version": int(arm["version"]), "accepted": max(0, int(arm.get("accepted") or 0)),
+                         "better": max(0, int(arm.get("better") or 0)), "tokens": max(0, int(arm.get("tokens") or 0)),
+                         "per_million": max(0.0, float(arm.get("yield") or 0.0))})
+        outcome = "final" if item.get("final") else ("switched" if item.get("switched") else "kept")
+        trial_rows.append({"at": _iso(item.get("finished_at") or item.get("at")) or "", "problems": max(0, int(item.get("problems") or 0)),
+                           "arm_tokens": max(0, int(item.get("arm_tokens") or 0)), "arms": arms[:8], "outcome": outcome,
+                           "to_version": version_of(item.get("winner")) if outcome == "switched" else None})
+    history: list[dict[str, Any]] = []
+    can_undo = bool(chain) and chain[-1].get("by") == "trial"
+    for index, step in enumerate(chain):
+        entry = versions.get(str(step.get("release")))
+        if entry is None:
+            continue
+        before = versions.get(str(step.get("from") or ""))
+        event = {"first": "first", "trial": "switched", "undo": "undone"}.get(str(step.get("by")), "switched")
+        words = strategy_module.change_words(before.strategy, entry.strategy) if before and event == "switched" else ""
+        history.append({"at": _iso(step.get("at")) or "", "version": entry.version, "event": event, "words": words,
+                        "against": None, "can_undo": can_undo and index == len(chain) - 1})
+    for item in trials:
+        if item.get("final"):
+            continue
+        for arm in item.get("arms") or ():
+            if str(arm.get("role") or "").startswith("challenger") and arm.get("release") != item.get("winner"):
+                entry = versions.get(str(arm.get("release")))
+                parent = versions.get(str(item.get("incumbent")))
+                if entry is None:
+                    continue
+                history.append({"at": _iso(item.get("finished_at") or item.get("at")) or "", "version": entry.version,
+                                "event": "tried",
+                                "words": strategy_module.change_words(parent.strategy, entry.strategy) if parent else "",
+                                "against": parent.version if parent else None, "can_undo": False})
+    # Newest first; the first method is always the oldest line.
+    history.sort(key=lambda row: (row["event"] != "first", row["at"], row["version"]), reverse=True)
+    plan = meta.plan(store, quick=True)
+    fresh = evaluation.fresh_count(store=store)
+    state = {"resume": "running", "ready": "ready", "limit": "limit"}.get(plan.state, "waiting")
+    return {"version": current.version if current is not None else 1, "since": _iso(since.get("at")) if since else None,
+            "description": _text(method.describe(), 600), "tried": tried, "kept": kept,
+            "tokens": max(0, int(spending.used_this_month(now=now))), "trials": trial_rows, "history": history[:30],
+            "can_undo": can_undo, "next_trial": {"state": state, "fresh": max(0, int(fresh)),
+                                                 "needed": evaluation.MIN_FRESH}}
 
 
 def _kinds_learning(changes: list[dict[str, Any]]) -> list[dict[str, str]]:
@@ -1097,10 +1209,12 @@ def read_learning(*, validate: Callable[[], None]) -> dict[str, Any]:
         "opted_out_conversations": [_text(item, 256) for item in opted_out[:2000]],
         "owner_unset_channels": _owner_unset_channels(),
         "needs_you": _needs_you(settings),
-        "overnight": _overnight(night, tests=_tests() if settings.enabled else None),
+        "overnight": _overnight(night, tests=_tests() if settings.enabled else None,
+                                trial=_trial_night() if settings.enabled else None),
         "changes": changes,
         "testing_now": _testing_now() if settings.enabled else None,
         "kinds_learning": _kinds_learning(changes) if settings.enabled else [],
+        "method": _method() if settings.enabled else None,
     }
     data["revision"] = sha256(
         json.dumps(_control_state(settings, opted_out), sort_keys=True).encode("utf-8")
@@ -2008,6 +2122,13 @@ def _perform(
         summary = _use_action(action, wire)
     elif action in _CHANGE_ACTIONS:
         summary = _change_action(action, wire)
+    elif action == "undo_method":
+        from row_bot.learning.improver import meta
+
+        back = meta.undo(_store()) if learning.store_exists() else None
+        if back is None:
+            raise ClientPlatformError("learning_method_changed")
+        summary = f"Back to learning method v{back.version}."
     elif action in _hugging_face.ACTIONS:
         summary = _hugging_face.perform(action, wire)
     elif action == "delete_data":

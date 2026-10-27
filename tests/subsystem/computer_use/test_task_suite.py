@@ -518,11 +518,25 @@ def test_row_bot_never_types_a_password_and_the_model_never_sees_one(turn, deskt
     assert all(abs(channel - expected) < 24 for channel, expected in zip(covered, (96, 104, 116)))
 
 
-def test_row_bot_doesnt_use_terminals_itself_or_keys_that_open_other_apps(turn, desktop):
+def test_a_terminal_takes_commands_checked_as_the_shell_tool_checks_them(turn, desktop):
+    """5.3.1 A3: a REPL or an interactive tool works; each command asks like run_command, and nothing pastes."""
+    turn.answers = [True, False, True]
+    turn.call("screenshot", app="Terminal")
+
+    assert turn.call("type", text="git status").startswith("Typed 10 characters.")  # Read-only: no card.
+    assert "didn't type that command" in turn.call("type", text="npm install left-pad\n")
+    assert turn.call("type", text="npm test\n").startswith("Typed 9 characters.")
+    assert turn.call("type", text="rm -rf /").startswith("Blocked: BLOCKED: that command matches a blocked")
+    assert turn.call("key", keys="ctrl+v").startswith("Blocked: In a terminal Row-Bot types each command")
+    assert turn.call("key", keys="Enter").startswith("Pressed Enter.")
+
+    assert [card["label"] for card in turn.asked[1:]] == ["Run shell command", "Run shell command"]
+    assert turn.asked[1]["args"] == {"command": "npm install left-pad"}
+    assert [text for _window, text in desktop.typed] == ["git status", "npm test\n"]
+
+
+def test_row_bot_doesnt_use_keys_that_open_other_apps(turn, desktop):
     turn.mode = "full"
-    assert turn.call("screenshot", app="Terminal") == (
-        "Blocked: Row-Bot doesn't type into terminals: it runs commands with its own shell tool, which asks first "
-        "when it should.")
     assert turn.call("screenshot", app="Row-Bot").startswith('Error: No window of "Row-Bot" is open.')
     turn.call("screenshot", app="Notepad")
     assert turn.call("key", keys="win+r") == (
@@ -619,12 +633,20 @@ def test_when_windows_keeps_another_window_in_front_nothing_is_typed_or_clicked_
     assert desktop.inputs == [] and desktop.typed == []
 
 
-@pytest.mark.parametrize("surface", ["channel", "workflow", "agent"])
-def test_computer_use_works_only_in_a_chat_on_this_computer(turn, desktop, surface):
+def test_a_channel_chat_never_uses_the_computer(turn, desktop):
+    turn.surface = "channel"
+
+    assert turn.call("list_apps").startswith("Error: Computer use works in Row-Bot on this computer, "
+                                             "not from a channel chat")
+    assert desktop.opened is False
+
+
+@pytest.mark.parametrize("surface", ["workflow", "agent", "agent_child", "goal"])
+def test_a_workflow_goal_or_helper_uses_the_computer_as_a_chat_does(turn, desktop, surface):
+    """5.3.1 B4: unattended work can use an app too; each app still asks first by the approval level."""
     turn.surface = surface
 
-    assert turn.call("list_apps").startswith("Error: Computer use works only in a chat in Row-Bot on this computer")
-    assert desktop.opened is False
+    assert not turn.call("list_apps").startswith("Error:")
 
 
 def test_a_finished_turn_gives_the_computer_back_and_a_waiting_one_keeps_it(turn, computer):

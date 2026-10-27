@@ -13,6 +13,7 @@ from row_bot.access.routes import register_access_routes
 from row_bot.access import routes as access_routes
 from row_bot.access.service import AccessService
 from row_bot.access.store import AccessStore
+from tests.helpers.access import sign_in_this_computer
 
 
 def _application(tmp_path, *, mode: str = "server", tailscale_controller=None):
@@ -39,6 +40,9 @@ def _application(tmp_path, *, mode: str = "server", tailscale_controller=None):
         client=("127.0.0.1", 51000),
         follow_redirects=False,
     )
+    if mode == "desktop":
+        # The person's own Row-Bot window, signed in by the launcher (A0).
+        sign_in_this_computer(client, service, registration, origin="http://localhost:8080")
     return client, service, registration
 
 
@@ -291,6 +295,7 @@ def test_failed_origin_save_leaves_the_live_host_policy_alone(
         client=("127.0.0.1", 51000),
         follow_redirects=False,
         raise_server_exceptions=False,
+        cookies=_client.cookies,
     )
     policy = RuntimeAccessPolicy(registration.config)
     client.app.state.row_bot_access_runtime_policy = policy

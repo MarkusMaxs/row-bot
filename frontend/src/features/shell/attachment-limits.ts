@@ -1,13 +1,7 @@
+import { ATTACHMENT_LIMITS } from '../../api/limits';
 import type { AttachmentView } from '../../api/types';
 
-/** The server's attachment limits (application/attachments.py). */
-export const ATTACHMENT_LIMITS = {
-  fileBytes: 25 * 1024 * 1024,
-  fileMegabytes: 25,
-  files: 32,
-  batchBytes: 100 * 1024 * 1024,
-  batchMegabytes: 100,
-} as const;
+export { ATTACHMENT_LIMITS };
 
 function size(bytes: number) {
   if (bytes >= 1024 * 1024) return `${Math.round(bytes / (1024 * 1024))} MB`;

@@ -44,22 +44,9 @@ REGISTER_TIMEOUT = 15.0
 # Row-Bot internals stay behind PluginAPI so plugins cannot bypass lifecycle,
 # approval, channel, MCP, or data-access boundaries.
 _ALLOWED_CORE_IMPORTS = {"plugins.api", "row_bot.plugins.api"}
-_FORBIDDEN_TOP_LEVEL_IMPORTS = {
-    "agent",
-    "app",
-    "channels",
-    "documents",
-    "dream_cycle",
-    "knowledge_graph",
-    "memory",
-    "memory_extraction",
-    "models",
-    "prompts",
-    "tasks",
-    "threads",
-    "tools",
-    "ui",
-}
+# Row-Bot's own entry points beside its code. Generic names ("models", "tools", "ui") are a plugin's
+# own modules: Row-Bot's internals live under row_bot, refused above (5.3.1 A5).
+_FORBIDDEN_TOP_LEVEL_IMPORTS = {"app", "launcher"}
 _FORBIDDEN_UI_FRAMEWORK_IMPORTS = {
     "gradio",
     "nicegui",

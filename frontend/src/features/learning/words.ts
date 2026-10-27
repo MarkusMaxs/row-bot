@@ -372,7 +372,10 @@ export function overnightLines(night: LearningOvernight): OvernightLine[] {
         },
       ];
     case 'nothing':
-      return [{ text: 'Looked for things to improve: nothing new.' }];
+      return [
+        { text: 'Looked for things to improve: nothing new.' },
+        ...methodLines(night),
+      ];
     default:
       break;
   }
@@ -428,7 +431,18 @@ export function overnightLines(night: LearningOvernight): OvernightLine[] {
     lines.push({
       text: 'Stopped when you came back to Row-Bot; it carries on when you’re away.',
     });
-  return lines;
+  return [...lines, ...methodLines(night)];
+}
+
+/** The night's comparison of learning methods (designs §9): a switch is shown with its Undo apart. */
+function methodLines(night: LearningOvernight): OvernightLine[] {
+  if (night.method === 'kept' && night.method_version)
+    return [
+      {
+        text: `Tried a new way of learning; it wasn’t better. Kept method v${night.method_version}.`,
+      },
+    ];
+  return [];
 }
 
 export const CHANGE_NAMES: Record<LearningChangeView['change'], string> = {

@@ -48,6 +48,7 @@ import {
   useConfirmFullAutonomy,
   type ApprovalLevel,
 } from './approval-levels';
+import { ATTACHMENT_LIMITS } from './attachment-limits';
 
 /**
  * The composer's left cluster: a + menu (attach, add resource, skills, agent
@@ -418,7 +419,7 @@ export default function ComposerControls({
                 <span className="menu-item-label">Attach file</span>
                 {/* The limit is said before anything is refused (U18). */}
                 <span className="menu-item-meta" id={attachHintId}>
-                  Up to 25 MB each
+                  Up to {ATTACHMENT_LIMITS.fileMegabytes} MB each
                 </span>
               </Dropdown.Item>
             )}

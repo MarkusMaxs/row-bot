@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from row_bot.api.v1.routes import create_client_platform_app
 from tests.helpers.client_platform_fakes import CheckpointCommit, ScriptedAgentStream, StreamBarrier
 from tests.subsystem.client_protocol.test_protocol_security import bootstrap
+from tests.helpers.access import person_window
 
 pytestmark = pytest.mark.subsystem
 
@@ -60,7 +61,7 @@ def service(tmp_path, monkeypatch):
 
 
 def _client(service):
-    return TestClient(create_client_platform_app(service, choices=lambda: {"models": [], "capabilities": []}),
+    return TestClient(create_client_platform_app(service, choices=lambda: {"models": [], "capabilities": []}, session_authenticator=person_window),
                       base_url="http://localhost", client=("127.0.0.1", 12345))
 
 
@@ -190,7 +191,9 @@ def test_chunk_upload_out_of_order_retry_hash_and_session_scope(service):
 
 
 def test_upload_idle_expiry_restart_batch_and_inflight_limits(service):
-    from row_bot.application.attachments import AttachmentUploads, AttachmentError, MAX_ATTACHMENT_BYTES
+    from row_bot.application.attachments import (
+        AttachmentError, AttachmentUploads, MAX_ATTACHMENT_BYTES, UPLOAD_BATCH_BYTES,
+    )
     conversation = str(uuid4())
     from row_bot import threads
     threads._save_thread_meta(conversation, "Fixture")
@@ -199,7 +202,9 @@ def test_upload_idle_expiry_restart_batch_and_inflight_limits(service):
     common = {"conversation_id": conversation, "name": "fixture.bin", "size_bytes": MAX_ATTACHMENT_BYTES,
               "sha256": "a" * 64, "batch_id": str(uuid4())}
     try:
-        identifiers = [staging.create("fixture-session", **common)["upload_id"] for _ in range(4)]
+        # As many of the largest files as fit in one message; one more doesn't.
+        fitting = UPLOAD_BATCH_BYTES // MAX_ATTACHMENT_BYTES
+        identifiers = [staging.create("fixture-session", **common)["upload_id"] for _ in range(fitting)]
         with pytest.raises(AttachmentError, match="payload_too_large"):
             staging.create("fixture-session", **common)
         for _ in range(4):
@@ -371,7 +376,8 @@ def test_real_durable_approval_resume_and_response_loss_replay(service):
         view = client.get(f"/api/v1/approvals/{handle.approval_id}", headers=headers)
         assert view.status_code == 200, view.text
         assert "private-argument" not in view.text and "action_digest" not in view.text
-        assert view.json()["repeatable"] is False
+        # Any tool may be allowed for the rest of the chat (5.3.1 B2).
+        assert view.json()["repeatable"] is True
         body = {"command_id": str(uuid4()), "client_session_id": headers["X-Client-Session"], "type": "approval.resolve",
                 "expected_revision": view.json()["revision"], "payload": {"decision": "approve", "nonce": view.json()["nonce"]}}
         commit_headers = {**headers, "Idempotency-Key": str(uuid4())}

@@ -5,8 +5,10 @@ looks at what is due, after Dream, in this order:
 
 - **the night's look for things to improve** (L3a, :class:`NightLook`): once a night, when nobody
   is using Row-Bot, the vault takes its share of new work and held-out corrections first, then
-  ``diagnosis`` groups issues and drafts changes. It stops before its next model call when the
-  person comes back or Learning is paused, and goes on later that night;
+  ``diagnosis`` groups issues and drafts changes, all by the learning method in use (L4a,
+  ``improver.archive``). It stops before its next model call when the person comes back or Learning
+  is paused, and goes on later that night. Its tests follow (L3b), then a **strategy trial** when
+  enough fresh hidden problems have built up (L4a, ``improver.meta``);
 
 - a personal-model training run starts or continues when **Train during quiet hours**
   is on, training happens on this computer, the training engine and its weights are
@@ -173,13 +175,14 @@ class NightLook:
 
     def __init__(self, *, lease: Any, root: Path | None = None, hours: QuietHours | None = None,
                  client: Any = None, check_model: Callable[[], None] | None = None,
-                 clock: Callable[[], float] | None = None, tester: Callable[[], Any] | None = None) -> None:
+                 clock: Callable[[], float] | None = None, tester: Callable[..., Any] | None = None) -> None:
         self.lease = lease
         self._root = root
         self.hours = hours or QuietHours(root)
         self.client = client
         self.check_model = check_model
         self.clock = clock
+        # ``tester(method=None, purpose=...)`` makes the changes' tester (tests pass fakes).
         self.tester = tester
 
     def _store(self) -> Any:
@@ -212,8 +215,17 @@ class NightLook:
         except Exception:  # noqa: BLE001 - the changes can't be read: nothing to test tonight
             return True
 
+    def tried_tonight(self) -> bool:
+        """Tonight's strategy trial finished, or none could run (L4a)."""
+
+        from row_bot.learning.improver import meta
+
+        night = self.tonight()
+        found = meta.last_night(self._store()) if gate.store_exists(self._root) else None
+        return bool(night and found and found.get("night") == night and found.get("state") != "stopped")
+
     def done_tonight(self) -> bool:
-        return self.looked_tonight() and self.tested_tonight()
+        return self.looked_tonight() and self.tested_tonight() and self.tried_tonight()
 
     def due(self) -> bool:
         """Learning is on, it is quiet hours after Dream, and tonight's look hasn't finished."""
@@ -235,6 +247,8 @@ class NightLook:
         report = self._look(night) if not self.looked_tonight() else None
         if self.looked_tonight() and not self.tested_tonight():
             self._test(night)
+        if self.looked_tonight() and self.tested_tonight() and not self.tried_tonight() and not self._stop():
+            self._trial(night)
         return report
 
     def _stop(self) -> bool:
@@ -268,6 +282,13 @@ class NightLook:
         if used > 0:
             parts.append(f"{used} change{'s' if used != 1 else ''} put into use by "
                          f"{'themselves' if used != 1 else 'itself'} (Undo in Learning)")
+        from row_bot.learning.improver import meta
+
+        trial = meta.last_night(store) or {}
+        switched = trial.get("switched") if trial.get("night") == night else None
+        if isinstance(switched, dict) and switched.get("to"):
+            parts.append(f"changed how it learns (method v{switched['to']}): {switched.get('words') or 'a new method'}"
+                         " (Undo in Learning)")
         store.set_meta_values({MORNING_KEY: night})
         if not parts:
             return None
@@ -302,9 +323,13 @@ class NightLook:
             from row_bot.learning.calls import LedgerModelClient
 
             client = LedgerModelClient()
+        from row_bot.learning.improver import archive
+
+        method = archive.current(store)
         try:
             return diagnosis.run(store, client=client, night=night, should_stop=self._stop,
-                                 check_model=self.check_model or diagnosis.check_default_model)
+                                 check_model=self.check_model or diagnosis.check_default_model,
+                                 method=method.strategy, strategy_release_id=method.id)
         except Exception:
             logger.exception("Learning's look for things to improve failed")
             diagnosis.note_night(store, night, "failed")
@@ -313,15 +338,52 @@ class NightLook:
     def _test(self, night: str) -> Any:
         """Tonight's drafts tested (L3b), under the same stop rule as the look; training waits for them."""
 
-        from row_bot.learning import changes, diagnosis
+        from row_bot.learning import changes
+        from row_bot.learning.improver import archive
 
         try:
-            tester = self.tester() if self.tester is not None else changes.Tester(
-                self._root, store=self._store(), client=self.client,
-                check_model=self.check_model or diagnosis.check_default_model)
-            return changes.test_waiting(tester, night=night, should_stop=self._stop)
+            method = archive.current(self._store()).strategy
+            tester = self._tester(method)
+            return changes.test_waiting(tester, night=night, should_stop=self._stop, limit=method.budget.tests)
         except Exception:
             logger.exception("Learning couldn't test tonight's changes")
+            return None
+
+    def _tester(self, method: Any = None, purpose: str = "learning_test") -> Any:
+        from row_bot.learning import changes, diagnosis
+
+        if self.tester is not None:
+            return self.tester(method=method, purpose=purpose)
+        kwargs = {"clock": self.clock} if self.clock is not None else {}
+        return changes.Tester(self._root, store=self._store(), client=self.client, plan=changes.TestPlan.of(method),
+                              check_model=self.check_model or diagnosis.check_default_model, purpose=purpose,
+                              **kwargs)
+
+    def _trial(self, night: str) -> Any:
+        """Tonight's strategy trial (L4a) when enough fresh hidden problems have built up and the trials' share
+        allows it; under the same stop rule; training waits for it."""
+
+        from row_bot.learning import changes
+        from row_bot.learning.improver import meta
+
+        store = self._store()
+        client = self.client
+        if client is None:
+            from row_bot.learning.calls import LedgerModelClient
+
+            client = LedgerModelClient()
+        try:
+            probe = self._tester(None, meta.PURPOSE)
+            local = changes._local(probe._main())  # noqa: SLF001 - the main model runs on this computer
+            return meta.run_trial(store, night=night, client=client, should_stop=self._stop, local=local,
+                                  tester_factory=lambda method: self._tester(method, meta.PURPOSE),
+                                  check_model=self.check_model, now=self.clock() if self.clock else None)
+        except Exception:
+            logger.exception("Learning's strategy trial failed")
+            try:
+                meta._note(store, meta.TrialReport(night, "failed"))  # noqa: SLF001 - recorded once a night
+            except Exception:  # noqa: BLE001
+                logger.debug("Learning couldn't note tonight's trial", exc_info=True)
             return None
 
 

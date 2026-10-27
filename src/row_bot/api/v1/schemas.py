@@ -4376,6 +4376,74 @@ class LearningOvernight(WireModel):
     not_better: int = Field(default=0, ge=0)
     used: int = Field(default=0, ge=0)
     tests_state: Literal["stopped", "limit", "claude_plan", "failed"] | None = None
+    # L4a: the night's strategy trial: a new learning method switched in by itself (with Undo), or one tried and
+    # not better (the method in use kept); the version in use after it and what the new one changes, in words.
+    method: Literal["switched", "kept"] | None = None
+    method_version: int | None = Field(default=None, ge=1)
+    method_words: str = Field(default="", max_length=200)
+
+
+class LearningMethodArm(WireModel):
+    """One method's result in a trial: the changes it accepted and how many were better on the trial's new
+    problems, what its improvement loop spent, and the ideas kept per 1M tokens."""
+
+    role: Literal["incumbent", "challenger", "control", "generation"]
+    version: int = Field(ge=1)
+    accepted: int = Field(ge=0)
+    better: int = Field(ge=0)
+    tokens: int = Field(ge=0)
+    per_million: float = Field(ge=0)
+
+
+class LearningMethodTrial(WireModel):
+    """One strategy trial (L4a): every method on the same new problems at the same budget."""
+
+    at: str = Field(max_length=64)
+    problems: int = Field(ge=0)
+    arm_tokens: int = Field(ge=0)
+    arms: list[LearningMethodArm] = Field(max_length=8)
+    # switched: a new method won and is in use; kept: the method in use stayed; final: the paper's final set.
+    outcome: Literal["switched", "kept", "final"]
+    to_version: int | None = Field(default=None, ge=1)
+
+
+class LearningMethodStep(WireModel):
+    """A line of the learning method's history: the first method, a switch, one tried and dropped, an Undo."""
+
+    at: str = Field(max_length=64)
+    version: int = Field(ge=1)
+    event: Literal["first", "switched", "tried", "undone"]
+    # What it changes from the method before, in plain words ("tries a lesson first").
+    words: str = Field(default="", max_length=200)
+    # Against which version it was tried (a dropped one).
+    against: int | None = Field(default=None, ge=1)
+    can_undo: bool = False
+
+
+class LearningNextTrial(WireModel):
+    """When the next strategy trial can run: once 30 new hidden problems have built up and the trials' share of
+    the month allows it."""
+
+    state: Literal["waiting", "ready", "running", "limit"]
+    fresh: int = Field(ge=0)
+    needed: int = Field(ge=0)
+
+
+class LearningMethod(WireModel):
+    """How Row-Bot learns (L4a; designs/learning-ux.md §6): the method in use in plain words, its trials with their
+    denominators, its history and Undo."""
+
+    version: int = Field(ge=1)
+    since: str | None = Field(default=None, max_length=64)
+    description: str = Field(max_length=600)
+    # This month: ideas tested, kept, and Learning's tokens.
+    tried: int = Field(ge=0)
+    kept: int = Field(ge=0)
+    tokens: int = Field(ge=0)
+    trials: list[LearningMethodTrial] = Field(default_factory=list, max_length=20)
+    history: list[LearningMethodStep] = Field(default_factory=list, max_length=30)
+    can_undo: bool = False
+    next_trial: LearningNextTrial
 
 
 class LearningChangeWhy(WireModel):
@@ -4563,6 +4631,8 @@ class LearningSnapshot(WireModel):
     kinds_learning: list[LearningKindState] = Field(default_factory=list, max_length=5)
     # L3b: the change being tested now, if any.
     testing_now: LearningTestingNow | None = None
+    # L4a: how Row-Bot learns (while Learning is on).
+    method: LearningMethod | None = None
 
 
 class LearningNamedValue(WireModel):
@@ -4726,7 +4796,7 @@ class LearningCommand(WireModel):
         "export_version", "delete_version", "save_advanced", "reset_advanced", "retrain_without", "dismiss",
         "review_version", "use_smaller_model", "change_starting_model",
         "test_change", "use_change", "undo_change", "not_now_change", "dont_suggest_change", "edit_change",
-        "test_lesson", "delete_lesson",
+        "test_lesson", "delete_lesson", "undo_method",
         "hf_sign_in", "hf_cancel_sign_in", "hf_sign_out", "hf_choose_model", "hf_set_cap", "hf_start", "hf_cancel",
         "hf_check_now",
     ]
@@ -5954,9 +6024,10 @@ class ApprovalAnswer(WireModel):
 class ApprovalPayload(WireModel):
     decision: Literal["approve", "reject"]
     nonce: Annotated[str, StringConstraints(min_length=32, max_length=256)]
-    # "turn" also approves later actions of the same kind until the turn ends (F21); only kinds the view marks
-    # repeatable take it, others are approved once.
-    scope: Literal["once", "turn"] = "once"
+    # "turn" also approves later actions of the same kind until the turn ends (F21), "chat" until the
+    # conversation ends ("Allow in this chat", 5.3.1 B2); only kinds the view marks repeatable take them,
+    # others are approved once.
+    scope: Literal["once", "turn", "chat"] = "once"
     # A question card (N4): "approve" answers it with these, one per question; "reject" skips it. An answer is the
     # person's input, never an approval of an action.
     answers: list[ApprovalAnswer] | None = Field(default=None, max_length=4)
@@ -8477,9 +8548,9 @@ class Limits(WireModel):
     query_rows: Literal[200] = 200
     transcript_rows: Literal[100] = 100
     stream_connections_per_session: Literal[4] = 4
-    attachment_bytes: Literal[26214400] = 26214400
+    attachment_bytes: Literal[209715200] = 209715200
     upload_chunk_bytes: Literal[1048576] = 1048576
-    upload_batch_bytes: Literal[104857600] = 104857600
+    upload_batch_bytes: Literal[1073741824] = 1073741824
     upload_chunks_in_flight: Literal[4] = 4
     upload_ttl_seconds: Literal[1800] = 1800
 
@@ -8493,6 +8564,9 @@ class HandshakeView(Choices):
     client_group_id: UUID
     csrf_token: str = Field(min_length=32, max_length=256)
     authentication_kind: Literal["local_owner", "session"]
+    # False for a window or browser on this computer that no person signed in (a program
+    # Row-Bot started, or its own browser): it may look, never change anything.
+    may_act: bool = True
     client_compatibility: Literal["current", "newer", "unknown"] = "unknown"
     application_capabilities: list[OpaqueId] = Field(
         default_factory=list, max_length=64
@@ -8551,7 +8625,7 @@ class ApprovalView(WireModel):
     requesting_trace_id: str = Field(default="", max_length=256)
     setup: ApprovalSetup | None = None
     app: TraceAppRef | None = None
-    # Whether "approve the rest of this turn" is offered for this action (F21).
+    # Whether "Allow in this chat" is offered for this action (F21, 5.3.1 B2).
     repeatable: bool = False
     # Under Auto: why the reviewer asked the person rather than approving ("The reviewer asked you: …").
     reviewer_reason: str = Field(default="", max_length=240)

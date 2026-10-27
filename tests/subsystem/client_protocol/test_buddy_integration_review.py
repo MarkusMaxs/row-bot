@@ -14,6 +14,7 @@ from tests.subsystem.buddy.test_client_buddy_policy import env as policy_env  # 
 from tests.subsystem.client_protocol.test_buddy_api import BASE, prepare
 from tests.subsystem.client_protocol.test_protocol_application import _client, _command, service  # noqa: F401
 from tests.subsystem.client_protocol.test_protocol_security import bootstrap
+from tests.helpers.access import person_window
 
 pytestmark = pytest.mark.subsystem
 
@@ -61,7 +62,7 @@ def test_worker_provider_callback_rechecks_real_session_after_start_was_admitted
         kwargs["validate_provider"]("motion", "google/veo-3.1-generate-preview")
         pytest.fail("Revoked session must not reach next provider effect")
     monkeypatch.setattr(client_hatch, "start_hatch", start)
-    app = create_client_platform_app(service, security=security, choices=lambda: {"models": [], "capabilities": []})
+    app = create_client_platform_app(service, security=security, choices=lambda: {"models": [], "capabilities": []}, session_authenticator=person_window)
     with TestClient(app, base_url="http://localhost", client=("127.0.0.1", 12345)) as client:
         _, headers = bootstrap(client)
         command = reviewed(client, headers)
@@ -81,7 +82,7 @@ def test_media_revoked_after_owned_read_is_refused_without_a_byte(service, env, 
         security._sessions.clear()
         return secret, "video/mp4"
     monkeypatch.setattr(client_service, "read_buddy_media", media)
-    app = create_client_platform_app(service, security=security, choices=lambda: {"models": [], "capabilities": []})
+    app = create_client_platform_app(service, security=security, choices=lambda: {"models": [], "capabilities": []}, session_authenticator=person_window)
     with TestClient(app, base_url="http://localhost", client=("127.0.0.1", 12345), raise_server_exceptions=False) as client:
         _, headers = bootstrap(client)
         response = client.get(path + "?revision=revision", headers=headers)

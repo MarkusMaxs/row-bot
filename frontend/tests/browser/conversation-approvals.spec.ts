@@ -123,6 +123,33 @@ test('on a phone the levels sit under + and Hands-off still shows', async ({
   await views(page, info, 'hands-off-on-phone');
 });
 
+test('an ordinary action may be allowed for the rest of the chat', async ({
+  page,
+}, info) => {
+  await newConversation(page);
+  await send(page, 'Save the cut list outside files fixture');
+  const card = page.getByRole('complementary', {
+    name: /^Approval required/,
+  });
+  await expect(card).toContainText(
+    'Outside the workspace: D:/Videos/trip/cut-list.txt',
+  );
+  const allow = card.getByRole('button', { name: /Allow in this chat/ });
+  await expect(allow).toBeVisible();
+  await views(page, info, 'allow-in-this-chat-card');
+  await page.setViewportSize(PHONE);
+  await expect(allow).toBeVisible();
+  await views(page, info, 'allow-in-this-chat-card-phone');
+  await page.setViewportSize({ width: 1280, height: 900 });
+  // Answer it: an approval left waiting shows in every later spec's sidebar and Buddy.
+  await card.getByRole('button', { name: 'Deny', exact: true }).click();
+  await expect(
+    page
+      .getByRole('log', { name: 'Conversation' })
+      .getByText('You said no, so Row-Bot stopped there.', { exact: true }),
+  ).toBeVisible();
+});
+
 test('the reviewer’s decisions are visible but quiet', async ({
   page,
 }, info) => {

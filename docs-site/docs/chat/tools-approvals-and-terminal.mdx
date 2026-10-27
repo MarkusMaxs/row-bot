@@ -36,7 +36,7 @@ Approval cards appear when an action can change local files, run commands, conta
 | **Hands-off** | Every action runs without asking, and each one is recorded. |
 | **Block** | Anything that would change something is refused. |
 
-**Auto's reviewer** is one short call to the conversation's own model at its lowest effort, made just before the action. It sees only your own recent messages in the conversation (or a workflow's saved steps), the folder in play and the action as its card describes it, never tool results, web pages, files or app output, so text an action picked up can't talk it into approving. It asks you when an action goes beyond your request, reaches other people, moves money, grants access, deletes outside the folder in play, or when it can't decide: an error, no answer within 10 seconds or no model available all mean it asks. When it asks, the card says why ("The reviewer asked you: …"). Actions it approved show **Reviewer approved** in the conversation's tool steps, with its reason in the step's details. Read-only actions never reach it.
+**Auto's reviewer** is one short call to the conversation's own model at its lowest effort, made just before the action. It sees only your own recent messages in the conversation (or a workflow's saved steps), the folder in play and the action as its card describes it, never tool results, web pages, files or app output, so text an action picked up can't talk it into approving. A message, email or file to someone you named, saying what you asked for, is within your request, and so is reading your data or capturing the screen when the task needs it. It asks you when an action goes beyond your request, reaches people you didn't name, posts publicly, moves money, grants access or changes permissions, deletes something you didn't ask to change, or when it can't decide: an error, no answer within 30 seconds or no model available all mean it asks. When it asks, the card says why ("The reviewer asked you: …"). Actions it approved show **Reviewer approved** in the conversation's tool steps, with its reason in the step's details. Read-only actions never reach it.
 
 **Hands-off** skips every approval, including screen and camera captures, high-impact app actions and reading Row-Bot's own data when that setting is on, and workflows don't pause for approval. The first time you choose it, a dialog lists what it skips; after **Turn on** it doesn't ask again on this computer. While it's on, the Approvals control reads **Hands-off** in a warning colour, and Buddy says so while work runs. Each action that would have asked shows **Hands-off** in the tool steps. A conversation other people share (a Slack or Discord channel thread, or a group chat) runs on **Auto** at most, and Hands-off can only be turned on in the app, not with a channel command.
 
@@ -68,8 +68,12 @@ Approving lets Row-Bot continue that action. Denying stops that action and retur
 
 An approval card offers **Details**, **Deny** and **Approve** (⌘/Ctrl+Enter), and in a chat also:
 
-- **Approve the rest**: approves this and later actions of the same kind until this reply ends. It is offered only for code-folder work that stays on this computer: applying sandbox changes, editing files, creating or switching branches, committing, running detected checks and plain commands. Pushing, opening a pull request, merging, reverting, installing, deleting, network actions, the Shell tool and the Custom Tool Builder ask every time.
+- **Allow in this chat**: approves this, and later actions of the same kind in this conversation, without asking again (commands count by what they do, so allowing `npm test` doesn't allow `git push`). It ends when the conversation is deleted or Row-Bot restarts. Sending, posting, sharing, deleting, paying, pushing or opening a pull request, reading Row-Bot's private data, high-risk app actions and anything only you can approve always ask.
 - **Use Auto in this chat** (under **Ask**): approves this and switches the chat to reviewed **Auto**.
+
+### Files Outside The Workspace
+
+Row-Bot's file tools work in the workspace folder. Give a full path elsewhere on this computer, such as `D:\Videos\trip.mp4`, and they ask first by the approval level, the card saying **Outside the workspace** and naming the paths. Row-Bot's own data folder is never read or changed this way. The video and picture tools take such a path too and read the file where it is, asking the same way; saving an edit and sending a file use the workspace, so Row-Bot copies a file in or out first (which asks).
 
 ### What Asks In A Code Folder
 
@@ -121,12 +125,14 @@ Most of what Row-Bot does on a page just runs, as you would click it. Paying, bu
 
 ### Apps On This Computer
 
-An address on this computer, such as `localhost:5173` or `127.0.0.1:8000`, opens only once it's allowed in that conversation. **Ask** asks ("Allow Row-Bot's browser to open localhost:5173 in this chat?"), **Auto**'s reviewer decides or asks, **Hands-off** allows it, and **Block** refuses. A server Row-Bot started in the same conversation, and that is listening on that port, opens without asking; an address a program only printed doesn't count.
+An address on this computer, such as `localhost:5173` or `127.0.0.1:8000`, or on your network, such as a router, a file server, another computer, a Tailscale address or an intranet name like `http://jira`, opens only once it's allowed in that conversation. An address you type in the Browser pane yourself opens at once. **Ask** asks ("Allow Row-Bot's browser to open localhost:5173 in this chat?"), **Auto**'s reviewer decides or asks, **Hands-off** allows it, and **Block** refuses. A server Row-Bot started in the same conversation, and that is listening on that port, opens without asking; an address a program only printed doesn't count.
 
 - **One address, one conversation, one hour.** Another port, or another conversation, asks again. The server's live-reload connection (same address) is included.
 - **The list and Remove**: the Browser pane's **⋯ › Addresses on this computer** lists each allowed address, who allowed it and when it ends, with **Remove**.
 - **Once allowed, the app works as any site does**: its forms and uploads included. Paying, sending, deleting and the rest still ask first.
-- **Never allowed**: other computers and devices on your network (routers, printers, file servers), cloud metadata addresses, and Row-Bot's own app. Row-Bot says so instead of asking.
+- **Reading a page shares it**: an address allowed in the browser can be read with the URL reader in that conversation, and one allowed while reading opens in the browser. The URL reader asks the same way ("Allow Row-Bot to read localhost:5173 in this chat?").
+- **Never allowed**: cloud metadata addresses (they hand out a computer's own credentials) and Row-Bot's own app. Row-Bot says so instead of asking.
+- **Files**: a `file://` page doesn't open, since it could show any other file on this computer. To preview a page Row-Bot built, it starts a server in the page's folder in that conversation (such as `python -m http.server 8000`) and opens `http://localhost:8000`, which opens without asking.
 
 ### Screenshots And Page Sizes
 
@@ -139,7 +145,7 @@ Row-Bot can also show the page at **phone**, **tablet** or **desktop** size (and
 Ask Row-Bot to record what it does in its browser and it asks first, then records the conversation's page to a video saved to the conversation's files. Recording the whole screen works through [Computer Use](/docs/computer-use) and needs it set up.
 
 - **While it records**, the conversation shows **Recording · 0:42** with **Stop**, and Buddy shows **Recording the browser** (or **the screen**).
-- **It stops** when Row-Bot or you stop it, at its time limit (5 minutes unless asked otherwise; at most 15 for the browser and 10 for the screen), before the video gets too large for the chat (25 MB), when its conversation is deleted, and when Row-Bot quits. Stopping needs no approval.
+- **It stops** when Row-Bot or you stop it, at its time limit (5 minutes unless asked otherwise; at most an hour), before the video gets too large for the chat (200 MB), when its conversation is deleted, and when Row-Bot quits. Stopping needs no approval.
 - **The video** (MP4) then shows in the conversation with a player, and in the conversation's files.
 - **Hidden in browser recordings**: pages with a password, one-time code or card field, and anything shown while you've taken over the browser, record as a blank frame.
 - Recording needs Row-Bot's video support, which comes with the full install; Row-Bot says so if it's missing.
@@ -151,7 +157,7 @@ Row-Bot can edit videos you already have: its recordings, files in the conversat
 - **In the conversation**, the step leaves a card: what the edit does, its progress and **Stop** while it's made, then the video with a player and **Download**. Stills show as one contact sheet. **Details** says which ffmpeg made it.
 - **Long edits** carry on in the background, so the reply isn't held up; they also show in **Home › Monitor › Background processes**. Stopping one needs no approval and saves nothing.
 - **Into the workspace**: ask Row-Bot to save a finished edit there. Replacing a file that's already there asks first; in a code folder, files are never replaced and each new one is recorded as a change you can undo.
-- Edits stop when their conversation is deleted and when Row-Bot quits. A result larger than a conversation can hold (25 MB) isn't saved; Row-Bot says how to make it smaller.
+- Edits stop when their conversation is deleted and when Row-Bot quits. A result larger than a conversation can hold (200 MB) isn't saved; Row-Bot says how to make it smaller.
 
 ### ffmpeg
 
@@ -172,7 +178,7 @@ If the conversation's model can't see images, Row-Bot says so and gathers nothin
 
 Ask Row-Bot to send you a file, for example "send the report to my phone" or "send it to me on Telegram". It sends files you already have: files in the conversation, its recordings and video edits, and files in the workspace (the conversation's code folder when it has one, otherwise the workspace folder). It never sends anything from elsewhere on the computer or from Row-Bot's own data folder. Up to 10 files go in one reply.
 
-- **To your devices.** The files show in the conversation as a card, **Sent to your devices**, with **Download** for each file, on every phone or computer signed in to Row-Bot (see [Phone And Native Desktop](/docs/mobile-native)). Each open Row-Bot window also shows **Row-Bot sent you report.pdf** with **Open**. Downloads need that device's sign-in and end after 7 days, when Row-Bot removes its copy; each file can be up to 100 MB. Sending to your own devices never asks, at any approval level. Row-Bot has no push notifications: a device with Row-Bot closed finds the file in the conversation the next time it opens it. The desktop app saves a download into the workspace's **Exports** folder, with **Show in folder**.
+- **To your devices.** The files show in the conversation as a card, **Sent to your devices**, with **Download** for each file, on every phone or computer signed in to Row-Bot (see [Phone And Native Desktop](/docs/mobile-native)). Each open Row-Bot window also shows **Row-Bot sent you report.pdf** with **Open**. Downloads need that device's sign-in and end after 7 days, when Row-Bot removes its copy; each file can be up to 500 MB. Sending to your own devices never asks, at any approval level. Row-Bot has no push notifications: a device with Row-Bot closed finds the file in the conversation the next time it opens it. The desktop app saves a download into the workspace's **Exports** folder, with **Show in folder**.
 - **To a chat app.** Telegram, Discord, Slack or WhatsApp, once it's set up in [Channels](/docs/integrations/channels). The files go to your own chat there, or, when the conversation came from that app, to that same chat; Row-Bot can't send them to any other chat. A file leaving Row-Bot asks like sending a message: **Ask** asks, **Auto**'s reviewer approves it only when you clearly asked for it, **Hands-off** allows it, and **Block** refuses. A conversation other people share (a Slack or Discord channel thread, a group chat) never sends on Hands-off. Each app has a size limit: Telegram 50 MB, Discord 10 MB, WhatsApp 16 MB and Slack 100 MB through Row-Bot.
 - **When a file can't go**, the card says why in plain words (too big for the app, the app isn't connected, or it can't take files) and offers **Send to your devices instead**. SMS can't send files.
 

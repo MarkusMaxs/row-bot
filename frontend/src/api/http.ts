@@ -1,6 +1,7 @@
 import * as wire from '../../../contracts/client-platform/v1/typescript/client';
 import type { ClientTransport } from './types';
 import { sha256Hex } from '../platform/crypto';
+import { ATTACHMENT_LIMITS } from './limits';
 
 /** Same-origin generated transport; only the in-memory owner holds the CSRF proof. */
 export class HttpTransport implements ClientTransport {
@@ -1574,7 +1575,7 @@ export class HttpTransport implements ClientTransport {
     commandId: string,
     signal?: AbortSignal,
   ) {
-    if (file.size < 1 || file.size > 26214400)
+    if (file.size < 1 || file.size > ATTACHMENT_LIMITS.fileBytes)
       throw { code: 'payload_too_large' };
     const proof = this.session();
     signal?.throwIfAborted();
@@ -3190,7 +3191,7 @@ export class HttpTransport implements ClientTransport {
     signal?: AbortSignal,
     progress?: (sent: number) => void,
   ): Promise<wire.AttachmentView> {
-    if (file.size < 1 || file.size > 26214400)
+    if (file.size < 1 || file.size > ATTACHMENT_LIMITS.fileBytes)
       throw { code: 'payload_too_large' };
     signal?.throwIfAborted();
     const sha256 = await sha256Hex(await file.arrayBuffer());
