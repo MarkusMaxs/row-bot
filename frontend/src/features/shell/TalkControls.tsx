@@ -303,7 +303,7 @@ export default function TalkControls(props: TalkControlsProps) {
         () => {
           if (live(a) && recorder.state === 'recording') recorder.stop();
         },
-        Math.min(a.snapshot?.max_utterance_ms ?? 30_000, 30_000),
+        Math.min(a.snapshot?.max_utterance_ms ?? 30_000, 300_000),
       );
       // Browser-local VAD only ends an utterance. The existing STT owner decides
       // whether it contains speech; no transcript or provider work runs here.

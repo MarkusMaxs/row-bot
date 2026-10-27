@@ -9078,16 +9078,16 @@ class DictationSnapshot(WireModel):
         "capturing", "receiving", "transcribing", "completed", "stopping", "stopped"
     ]
     quiesced: bool
-    expires_in_ms: int = Field(ge=0, le=120000)
-    max_audio_bytes: Literal[8388608] = 8388608
-    max_utterance_ms: Literal[30000] = 30000
+    expires_in_ms: int = Field(ge=0, le=360000)
+    max_audio_bytes: Literal[33554432] = 33554432
+    max_utterance_ms: Literal[300000] = 300000
 
 
 class DictationResult(WireModel):
     snapshot: DictationSnapshot
     utterance_id: UUID
     outcome: Literal["transcribed", "no_speech"]
-    text: str = Field(max_length=4000)
+    text: str = Field(max_length=20000)
 
 
 class TalkStart(WireModel):
@@ -9110,11 +9110,11 @@ class TalkSnapshot(WireModel):
         "stopped",
     ]
     quiesced: bool
-    expires_in_ms: int = Field(ge=0, le=120000)
+    expires_in_ms: int = Field(ge=0, le=360000)
     run_id: OpaqueId | None
     transport: Literal["browser_local"]
-    max_audio_bytes: Literal[8388608]
-    max_utterance_ms: Literal[30000]
+    max_audio_bytes: Literal[33554432]
+    max_utterance_ms: Literal[300000]
 
 
 class TalkResult(WireModel):

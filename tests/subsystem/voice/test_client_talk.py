@@ -213,7 +213,7 @@ def test_heartbeat_bounded_by_session_and_cannot_revive_expiry(runtime):
     for now in (100, 200, 300, 400, 500):
         r.clock[0] = now
         current = r.talk.snapshot(r.owner, snapshot.handle, validate=lambda: None, heartbeat=True)
-        assert current.expires_in_ms == min(120_000, (600 - now) * 1000)
+        assert current.expires_in_ms == min(360_000, (600 - now) * 1000)
     r.clock[0] = 601
     assert r.talk.snapshot(r.owner, snapshot.handle, validate=lambda: None, heartbeat=True).state == "stopped"
     with pytest.raises(DictationError, match="voice_session_expired"):
