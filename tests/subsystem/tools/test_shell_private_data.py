@@ -199,7 +199,7 @@ def test_a_file_outside_the_workspace_is_read_only_after_the_persons_approval(sh
 
     assert "private" not in denied and "private" in approved
     assert asked[0]["label"] == "Read outside the workspace?"
-    assert target in asked[0]["description"]
+    assert asked[0]["description"] == f"Outside the workspace: {target}"
 
 
 def test_a_file_outside_the_workspace_is_written_after_approval_through_the_same_tool(shell, reload_for_data_dir,
@@ -213,6 +213,7 @@ def test_a_file_outside_the_workspace_is_written_after_approval_through_the_same
 
     assert (sibling / "plan.md").read_text(encoding="utf-8") == "Ship 5.3.1"
     assert asked[0]["label"] == "Change files outside the workspace?"
+    assert asked[0]["description"] == f"Outside the workspace: {sibling / 'plan.md'}"
 
 
 def test_the_data_folder_stays_out_of_reach_even_under_hands_off(shell, reload_for_data_dir, monkeypatch):

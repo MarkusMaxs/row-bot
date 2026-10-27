@@ -219,7 +219,8 @@ def outside_workspace_refusal(operation: str, paths: list[Path]) -> tuple[str | 
     payload = {
         "tool": f"workspace_{operation}",
         "label": "Read outside the workspace?" if reading else "Change files outside the workspace?",
-        "description": ("Read " if reading else operation.replace("_", " ").capitalize() + ": ") + ", ".join(names),
+        # The card asks by the tool ("Write a file?"); this line says where.
+        "description": "Outside the workspace: " + ", ".join(names),
         "args": {"paths": names},
     }
     return approval_check(
