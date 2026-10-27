@@ -68,8 +68,12 @@ Approving lets Row-Bot continue that action. Denying stops that action and retur
 
 An approval card offers **Details**, **Deny** and **Approve** (⌘/Ctrl+Enter), and in a chat also:
 
-- **Approve the rest**: approves this and later actions of the same kind until this reply ends. It is offered only for code-folder work that stays on this computer: applying sandbox changes, editing files, creating or switching branches, committing, running detected checks and plain commands. Pushing, opening a pull request, merging, reverting, installing, deleting, network actions, the Shell tool and the Custom Tool Builder ask every time.
+- **Allow in this chat**: approves this, and later actions of the same kind in this conversation, without asking again (commands count by what they do, so allowing `npm test` doesn't allow `git push`). It ends when the conversation is deleted or Row-Bot restarts. Sending, posting, sharing, deleting, paying, pushing or opening a pull request, reading Row-Bot's private data, high-risk app actions and anything only you can approve always ask.
 - **Use Auto in this chat** (under **Ask**): approves this and switches the chat to reviewed **Auto**.
+
+### Files Outside The Workspace
+
+Row-Bot's file tools work in the workspace folder. Give a full path elsewhere on this computer, such as `D:\Videos\trip.mp4`, and they ask first by the approval level: **Read outside the workspace?** or **Change files outside the workspace?**, naming the paths. Row-Bot's own data folder is never read or changed this way.
 
 ### What Asks In A Code Folder
 
@@ -121,12 +125,12 @@ Most of what Row-Bot does on a page just runs, as you would click it. Paying, bu
 
 ### Apps On This Computer
 
-An address on this computer, such as `localhost:5173` or `127.0.0.1:8000`, opens only once it's allowed in that conversation. **Ask** asks ("Allow Row-Bot's browser to open localhost:5173 in this chat?"), **Auto**'s reviewer decides or asks, **Hands-off** allows it, and **Block** refuses. A server Row-Bot started in the same conversation, and that is listening on that port, opens without asking; an address a program only printed doesn't count.
+An address on this computer, such as `localhost:5173` or `127.0.0.1:8000`, or on your network, such as a router, a file server, another computer, a Tailscale address or an intranet name like `http://jira`, opens only once it's allowed in that conversation. An address you type in the Browser pane yourself opens at once. **Ask** asks ("Allow Row-Bot's browser to open localhost:5173 in this chat?"), **Auto**'s reviewer decides or asks, **Hands-off** allows it, and **Block** refuses. A server Row-Bot started in the same conversation, and that is listening on that port, opens without asking; an address a program only printed doesn't count.
 
 - **One address, one conversation, one hour.** Another port, or another conversation, asks again. The server's live-reload connection (same address) is included.
 - **The list and Remove**: the Browser pane's **⋯ › Addresses on this computer** lists each allowed address, who allowed it and when it ends, with **Remove**.
 - **Once allowed, the app works as any site does**: its forms and uploads included. Paying, sending, deleting and the rest still ask first.
-- **Never allowed**: other computers and devices on your network (routers, printers, file servers), cloud metadata addresses, and Row-Bot's own app. Row-Bot says so instead of asking.
+- **Never allowed**: cloud metadata addresses (they hand out a computer's own credentials) and Row-Bot's own app. Row-Bot says so instead of asking.
 
 ### Screenshots And Page Sizes
 
