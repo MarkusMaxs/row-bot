@@ -160,3 +160,22 @@ def test_looking_and_the_native_windows_token_checked_routes_need_no_sign_in(met
     route = policy.classify({"type": "http", "method": method, "path": path, "headers": []})
 
     assert policy.authorize(_context(AuthenticationKind.LOCAL_OWNER, person=False), route).allowed
+
+
+def test_a_signed_in_window_is_checked_quickly_and_a_revoked_one_at_once(tmp_path, monkeypatch) -> None:
+    """A window makes many requests a second; each paid 200,000 PBKDF2 rounds and a database write.
+    The slow check now runs once per token, and revoking still takes effect on the next request."""
+    from row_bot.access import service as access_service
+
+    client, service, registration = _desktop(tmp_path)
+    session_id = sign_in_this_computer(client, service, registration, origin=ORIGIN)
+    checks: list[str] = []
+    real = access_service.verify_secret
+    monkeypatch.setattr(access_service, "verify_secret", lambda *a, **k: checks.append("slow") or real(*a, **k))
+
+    for _ in range(5):
+        assert client.get("/api/access/session").json()["may_act"] is True
+    assert checks == ["slow"]
+
+    service.revoke_session(session_id)
+    assert client.get("/api/access/session").json()["may_act"] is False
