@@ -10480,7 +10480,12 @@ def create_router(
     ) -> JSONResponse:
         current = await session(request)
         view = await call(service.get_approval, approval_id)
-        ttl = 300.0
+        # Open question cards have no hard timeout; let the person take up to a
+        # day to read and answer (instead of a 5-minute presentation Nonce that
+        # expires while they type). Action approvals keep the short 5-minute cap.
+        is_question_card = view.get("questions") is not None or view.get("question") is not None
+        card_ttl = 86400.0 if is_question_card else 300.0
+        ttl = card_ttl
         if view.get("expires_at"):
             expiry = datetime.fromisoformat(view["expires_at"].replace("Z", "+00:00"))
             if expiry.tzinfo is None:
@@ -10489,7 +10494,8 @@ def create_router(
         if view.get("status") != "pending" or ttl <= 0:
             raise ProtocolError("approval_expired", 409)
         nonce = security.approval_nonce(
-            current, approval_id, view["revision"], view["action_digest"], ttl=ttl
+            current, approval_id, view["revision"], view["action_digest"],
+            ttl=ttl, hard_cap=card_ttl
         )
         public = {
             k: view[k]
