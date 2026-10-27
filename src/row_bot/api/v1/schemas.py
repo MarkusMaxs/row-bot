@@ -8445,6 +8445,9 @@ class HandshakeView(Choices):
     client_group_id: UUID
     csrf_token: str = Field(min_length=32, max_length=256)
     authentication_kind: Literal["local_owner", "session"]
+    # False for a window or browser on this computer that no person signed in (a program
+    # Row-Bot started, or its own browser): it may look, never change anything.
+    may_act: bool = True
     client_compatibility: Literal["current", "newer", "unknown"] = "unknown"
     application_capabilities: list[OpaqueId] = Field(
         default_factory=list, max_length=64

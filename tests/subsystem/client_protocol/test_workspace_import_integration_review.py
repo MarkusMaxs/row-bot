@@ -12,6 +12,7 @@ from row_bot.runtime import admissions
 from tests.subsystem.client_protocol.test_protocol_application import _isolated_service
 from tests.subsystem.client_protocol.test_protocol_security import bootstrap
 from tests.subsystem.developer.test_client_workspace_imports import domain, imports  # noqa: F401
+from tests.helpers.access import person_window
 
 pytestmark = pytest.mark.subsystem
 
@@ -25,7 +26,7 @@ def test_expiry_after_admission_preserves_original_review_for_explicit_nonce_ren
     service = _isolated_service()
     now = [100.0]
     security = ClientSecurity(instance_id=service.instance_id, clock=lambda: now[0])
-    app = create_client_platform_app(service, security=security, choices=lambda: {'models': [], 'capabilities': []})
+    app = create_client_platform_app(service, security=security, choices=lambda: {'models': [], 'capabilities': []}, session_authenticator=person_window)
     original_claim = admissions.claim_command
     with TestClient(app, base_url='http://localhost', client=('127.0.0.1', 12345)) as client:
         _, headers = bootstrap(client)

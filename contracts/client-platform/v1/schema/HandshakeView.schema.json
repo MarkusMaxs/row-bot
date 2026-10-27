@@ -322,6 +322,11 @@
     "limits": {
       "$ref": "#/$defs/Limits"
     },
+    "may_act": {
+      "default": true,
+      "title": "May Act",
+      "type": "boolean"
+    },
     "minimum_client_version": {
       "const": "1.0",
       "title": "Minimum Client Version",

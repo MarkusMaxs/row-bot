@@ -17,6 +17,7 @@ from row_bot.runtime import admissions
 from tests.subsystem.client_protocol.test_protocol_application import service  # noqa: F401
 from tests.subsystem.client_protocol.test_protocol_security import bootstrap
 from tests.subsystem.mcp.test_capability_configuration_controls import owner  # noqa: F401
+from tests.helpers.access import person_window
 
 pytestmark = pytest.mark.subsystem
 BASE = "/api/v1/settings/mcp"
@@ -64,8 +65,7 @@ def client_for(service, security=None):
         create_client_platform_app(
             service,
             security=security,
-            choices=lambda: {"models": [], "capabilities": []},
-        ),
+            choices=lambda: {"models": [], "capabilities": []}, session_authenticator=person_window),
         base_url="http://localhost",
         client=("127.0.0.1", 12345),
     )

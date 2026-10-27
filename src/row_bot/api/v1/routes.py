@@ -1529,8 +1529,10 @@ def create_router(
                     for item in discovery["capabilities"]
                 ],
             }
+        # The native bridge is a person's window: only a signed-in one gets its token.
+        native_window = local_owner and context.may_act
         native_attestation = (
-            security.issue_native_attestation(current) if local_owner else None
+            security.issue_native_attestation(current) if native_window else None
         )
         return await respond(
             request,
@@ -1544,6 +1546,7 @@ def create_router(
                 "client_group_id": current.group_id,
                 "csrf_token": current.csrf,
                 "authentication_kind": context.authentication_kind,
+                "may_act": context.may_act,
                 "client_compatibility": compatibility,
                 "application_capabilities": [
                     *_APPLICATION_CAPABILITIES,
@@ -1564,9 +1567,9 @@ def create_router(
                 # A new schedule keeps its times in this zone unless another is chosen (N9).
                 "server_timezone": _schedule_zone_name(),
                 "native_adapter": {
-                    "available": local_owner,
+                    "available": native_window,
                     "proof_required": True,
-                    "instance_id": security.instance_id if local_owner else None,
+                    "instance_id": security.instance_id if native_window else None,
                     "attestation": native_attestation,
                 },
                 "limits": dto.Limits().model_dump(),

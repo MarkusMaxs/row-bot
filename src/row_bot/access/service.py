@@ -38,6 +38,8 @@ TEMPORARY_SESSION_TTL = timedelta(hours=12)
 TRUSTED_SESSION_RENEWAL_WINDOW = timedelta(days=7)
 SESSION_REFRESH_POLL_INTERVAL = timedelta(hours=12)
 REMOTE_CLIENT_PATH = "/app-v2/"
+# The access route of a sign-in the launcher makes for its own window or browser (A0).
+THIS_COMPUTER_ROUTE = "this_computer"
 
 
 @dataclass(frozen=True)
@@ -398,22 +400,44 @@ class AccessService:
             renewed=renewed,
         )
 
-    def list_devices(self, *, include_revoked: bool = True) -> list[AccessDevice]:
-        return self.store.list_devices(include_revoked=include_revoked)
+    # The windows and browsers the launcher signs in on this computer (A0) are the
+    # computer itself, not devices to manage: lists leave them out unless asked.
+
+    def list_devices(
+        self, *, include_revoked: bool = True, include_this_computer: bool = False
+    ) -> list[AccessDevice]:
+        devices = self.store.list_devices(include_revoked=include_revoked)
+        if include_this_computer:
+            return devices
+        return [device for device in devices if device.access_route != THIS_COMPUTER_ROUTE]
 
     def list_sessions(
         self,
         *,
         device_id: str | None = None,
         include_revoked: bool = True,
+        include_this_computer: bool = False,
     ) -> list[AccessSession]:
-        return self.store.list_sessions(
+        sessions = self.store.list_sessions(
             device_id=device_id,
             include_revoked=include_revoked,
         )
+        if include_this_computer:
+            return sessions
+        hidden = {
+            device.id
+            for device in self.store.list_devices(include_revoked=True)
+            if device.access_route == THIS_COMPUTER_ROUTE
+        }
+        return [session for session in sessions if session.device_id not in hidden]
 
-    def list_invitations(self, *, limit: int = 100) -> list[AccessInvitation]:
-        return self.store.list_invitations(limit=limit)
+    def list_invitations(
+        self, *, limit: int = 100, include_this_computer: bool = False
+    ) -> list[AccessInvitation]:
+        invitations = self.store.list_invitations(limit=limit)
+        if include_this_computer:
+            return invitations
+        return [item for item in invitations if item.access_route != THIS_COMPUTER_ROUTE]
 
     def claimed_device_ids(self, invitation_ids: list[str]) -> dict[str, str]:
         return self.store.claimed_device_ids(invitation_ids)

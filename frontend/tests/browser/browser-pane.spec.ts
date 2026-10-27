@@ -2,6 +2,7 @@ import type { Page, TestInfo } from '@playwright/test';
 import { assertNoOverflow, expect, screenshot, test } from './evidence';
 import { fixtureHeaders } from './surface-helpers';
 import { composer, newConversation, revealContext } from './unified-helpers';
+import { SIGNED_IN_STATE } from './signed-in';
 
 /*
  * N12-A · Row-Bot's browser in the app. The Browser pane, its live stream,
@@ -44,6 +45,7 @@ async function still(page: Page, name: Still, fit: Fit): Promise<string> {
   if (!browser)
     throw new Error('The spec needs its own browser to picture pages');
   const context = await browser.newContext({
+    storageState: SIGNED_IN_STATE,
     viewport: { width: fit.width, height: fit.height },
     deviceScaleFactor: fit.scale,
   });

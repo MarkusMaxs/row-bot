@@ -23,6 +23,7 @@ import {
   openAddResource,
   revealContextControl,
 } from './unified-helpers';
+import { SIGNED_IN_STATE } from './signed-in';
 
 test.use({ serviceWorkers: 'allow' });
 test.beforeEach(async ({ context }) => blockFixtureServiceWorkers(context));
@@ -84,6 +85,7 @@ async function addDeck(page: Page, name: string): Promise<void> {
 async function independentPeer(browser: Browser, page: Page) {
   const origin = new URL(page.url()).origin;
   const context = await browser.newContext({
+    storageState: SIGNED_IN_STATE,
     baseURL: origin,
     viewport: page.viewportSize(),
     serviceWorkers: 'allow',

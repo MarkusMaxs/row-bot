@@ -85,7 +85,9 @@ def test_dual_host_cache_history_and_private_manifest(build: Path) -> None:
     for path in (".vite/manifest.json", "asset-manifest.json", "assets/missing.js", "assets/missing", "secret.txt", "%252e%252e/secret", "a%5cb"):
         assert host.get("/app-v2/" + path, headers={"Accept": "text/html"}).status_code == 404
     assert host.get("/app-v2/conversation").status_code == 404
-    assert host.post("/app-v2/", headers={"Origin": "http://localhost:8080"}).status_code == 405
+    # The person's own signed-in window (A0): the client's pages still take no POST.
+    signed_in = {"Origin": "http://localhost:8080", "x-fixture-session": "yes"}
+    assert host.post("/app-v2/", headers=signed_in).status_code == 405
 
 
 def test_assets_require_same_host_auth_and_pairing_remains_public(build: Path) -> None:

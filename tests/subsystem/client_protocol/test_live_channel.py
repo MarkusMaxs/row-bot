@@ -20,6 +20,7 @@ from row_bot.api.v1.security import ClientSecurity
 from row_bot.application import live_updates as live_module
 from row_bot.application.live_updates import TOPICS, LiveUpdates
 from tests.subsystem.client_protocol.test_protocol_security import Service, bootstrap
+from tests.helpers.access import person_window
 
 pytestmark = pytest.mark.subsystem
 
@@ -33,7 +34,7 @@ def live(monkeypatch):
 
 def live_client():
     security = ClientSecurity("fixture", clock=lambda: 10.0)
-    app = create_client_platform_app(Service(), security=security, choices=lambda: {"models": [], "capabilities": []})
+    app = create_client_platform_app(Service(), security=security, choices=lambda: {"models": [], "capabilities": []}, session_authenticator=person_window)
     return app, security
 
 
