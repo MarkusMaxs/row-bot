@@ -73,7 +73,7 @@ An approval card offers **Details**, **Deny** and **Approve** (⌘/Ctrl+Enter), 
 
 ### Files Outside The Workspace
 
-Row-Bot's file tools work in the workspace folder. Give a full path elsewhere on this computer, such as `D:\Videos\trip.mp4`, and they ask first by the approval level, the card saying **Outside the workspace** and naming the paths. Row-Bot's own data folder is never read or changed this way.
+Row-Bot's file tools work in the workspace folder. Give a full path elsewhere on this computer, such as `D:\Videos\trip.mp4`, and they ask first by the approval level, the card saying **Outside the workspace** and naming the paths. Row-Bot's own data folder is never read or changed this way. The video and picture tools take such a path too and read the file where it is, asking the same way; saving an edit and sending a file use the workspace, so Row-Bot copies a file in or out first (which asks).
 
 ### What Asks In A Code Folder
 
@@ -130,7 +130,9 @@ An address on this computer, such as `localhost:5173` or `127.0.0.1:8000`, or on
 - **One address, one conversation, one hour.** Another port, or another conversation, asks again. The server's live-reload connection (same address) is included.
 - **The list and Remove**: the Browser pane's **⋯ › Addresses on this computer** lists each allowed address, who allowed it and when it ends, with **Remove**.
 - **Once allowed, the app works as any site does**: its forms and uploads included. Paying, sending, deleting and the rest still ask first.
+- **Reading a page shares it**: an address allowed in the browser can be read with the URL reader in that conversation, and one allowed while reading opens in the browser. The URL reader asks the same way ("Allow Row-Bot to read localhost:5173 in this chat?").
 - **Never allowed**: cloud metadata addresses (they hand out a computer's own credentials) and Row-Bot's own app. Row-Bot says so instead of asking.
+- **Files**: a `file://` page doesn't open, since it could show any other file on this computer. To preview a page Row-Bot built, it starts a server in the page's folder in that conversation (such as `python -m http.server 8000`) and opens `http://localhost:8000`, which opens without asking.
 
 ### Screenshots And Page Sizes
 

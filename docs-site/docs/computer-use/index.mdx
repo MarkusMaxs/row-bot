@@ -32,7 +32,7 @@ Computer use is off by default. It works in Row-Bot on this computer: in a chat,
 
 How each is decided follows the chat's approval level: **Ask** asks you, **Auto**'s reviewer approves what clearly matches your request (otherwise it asks you), **Hands-off** goes ahead, and **Block** refuses.
 
-Row-Bot never types a password, one-time code or card number: it asks you to type it, then carries on. It doesn't control terminals (it runs commands with its own shell tool, which asks first when it should), password managers, Row-Bot itself or protected system screens, and it doesn't press the keys that open other apps (the Windows key, Spotlight, Ctrl+Alt+Delete).
+Row-Bot never types a password, one-time code or card number: it asks you to type it, then carries on. It doesn't control password managers, Row-Bot itself or protected system screens, and it doesn't press the keys that open other apps (the Windows key, Spotlight, Ctrl+Alt+Delete). In a terminal it types each command and never pastes, and every command is checked as its shell tool checks one: a read-only command such as `git status` just runs, anything else asks by the approval level on the same **Run shell command** card, and blocked commands and Row-Bot's private data never run. That lets it use a REPL or an interactive command-line tool.
 
 ## How It Works
 
