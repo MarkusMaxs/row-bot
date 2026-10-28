@@ -356,7 +356,8 @@ class _XPostInput(BaseModel):
     post_at: Optional[str] = Field(
         default=None,
         description=("When it goes out, if not now: a local time like '13:00' or '2026-10-29T09:30', up to 7 days "
-                     "ahead. The person approves it now; Row-Bot posts it then."),
+                     "ahead. Its card waits for the person in Home › Review (several posts made in one step wait "
+                     "there together); approved, Row-Bot posts it then."),
     )
 
 

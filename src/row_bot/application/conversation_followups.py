@@ -54,7 +54,7 @@ def _about(seconds: float) -> str:
         count, unit = math.ceil(seconds / 3600), "hour"
     return f"{count} {unit}{'' if count == 1 else 's'}"
 
-FollowupKind = Literal["goal", "resource", "workflow", "linked"]
+FollowupKind = Literal["goal", "resource", "workflow", "linked", "wait"]
 
 
 @dataclass(frozen=True)

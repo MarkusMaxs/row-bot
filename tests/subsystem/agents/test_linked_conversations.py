@@ -210,3 +210,34 @@ def test_a_message_reaches_a_workflow_by_its_name_even_before_its_first_run(link
     assert "a trend worth a post" in fake.prompts[0]
     assert rows(platform, conversation)[0]["linked_from"]["title"] == "conversation-a"
     assert linked.resolve("Growth | X content") == conversation, "its name reaches the same conversation"
+
+
+def test_an_update_that_needs_no_answer_brings_nothing_back(linked, platform):  # noqa: F811
+    fake = Recording(reply("Noted."))
+    platform.stream_factory = fake.stream
+
+    sent = linked.send("conversation-b", "FYI: the release is out.", reply=False)
+    settle(platform, "conversation-b", "conversation-a")
+
+    assert sent.endswith("No reply comes back.")
+    assert len(fake.prompts) == 1, "only conversation-b took a turn: no thanks went back and forth"
+    assert not [row for row in rows(platform, "conversation-a") if row.get("note") == "linked"]
+
+
+def test_a_note_for_a_workflows_next_run_waits_for_it_and_is_read_once(linked, platform):  # noqa: F811
+    from row_bot import tasks, workflow_turns
+    fake = Recording()
+    platform.stream_factory = fake.stream
+    task_id = tasks.create_task("Daily results", prompts=["Report today's numbers."], channels=[],
+                                apply_default_skills=False)
+    with pytest.raises(linked.LinkError, match="Only a workflow has a next run"):
+        linked.send("conversation-b", "For later.", when="next_run")
+
+    held = linked.send("Daily results", "X content drafted 4 posts; 0 went out.", when="next_run")
+    assert held.startswith("Held for “⚡ Daily results”'s next run") and fake.prompts == [], "no turn starts now"
+
+    first = workflow_turns.with_notes(tasks.get_task(task_id), "Report today's numbers.")
+    assert "- From “conversation-a”: X content drafted 4 posts; 0 went out." in first
+    assert "not the person's request" in first
+    again = workflow_turns.with_notes(tasks.get_task(task_id), "Report today's numbers.")
+    assert "X content drafted" not in again, "read once"

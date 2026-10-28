@@ -324,23 +324,54 @@ def _level_for_child(source_id: str, requested: str) -> str:
 
 # --- Messages between conversations ------------------------------------------------------------------
 
-def send(target: str, message: str) -> str:
-    """Send a message to another conversation: it starts a turn there now, or after its current one."""
+def send(target: str, message: str, *, reply: bool = True, when: Literal["now", "next_run"] = "now") -> str:
+    """Send a message to another conversation: it starts a turn there now, or after its current one.
+
+    *reply* False: an update or note that needs no answer, so nothing comes back. *when* "next_run": to a
+    workflow, held for its next run's first message instead of starting a turn now.
+    """
     source = origin()
     message = _clean(message, _MESSAGE_CHARS, "a message")
     target_id = resolve(target, exclude=source.conversation_id)
+    if when == "next_run":
+        if _workflow_of(target_id) is None:
+            raise LinkError("Only a workflow has a next run: send it now instead.")
+        _insert(source_id=source.conversation_id, target_id=target_id, kind="message", status="held",
+                message=message, hops=0, reply_expected=0)
+        return f"Held for “{_name(target_id)}”'s next run: it reads it then. No reply comes back."
     hops = _hops_of(source.generation_id) + 1
     if hops > MAX_HOPS:
         if not _keep_going(source):
             return "Not sent: the person said to stop this chain of conversations. Tell them where things stand."
         hops = 1
     _insert(source_id=source.conversation_id, target_id=target_id, kind="message", status="queued",
-            message=message, hops=hops, reply_expected=1)
+            message=message, hops=hops, reply_expected=1 if reply else 0)
     name = _name(target_id)
     started = _deliver(target_id)
     return ((f"Sent to “{name}”: it's working on it now." if started else
              f"Sent to “{name}”: it's busy, so it gets the message when its current turn ends.")
-            + " Its reply comes back here as a message.")
+            + (" Its reply comes back here as a message." if reply else " No reply comes back."))
+
+
+def _workflow_of(conversation_id: str) -> dict[str, Any] | None:
+    import row_bot.tasks as tasks_db
+
+    return next((task for task in tasks_db.list_tasks()
+                 if str(task.get("persistent_thread_id") or "") == conversation_id), None)
+
+
+def take_held(conversation_id: str) -> list[tuple[str, str]]:
+    """Messages held for a workflow's next run, oldest first, as (from, text); they're read once."""
+    with closing(_conn()) as conn, conn:
+        found = conn.execute(f"{_SELECT} WHERE target_id = ? AND status = 'held' ORDER BY created_at",
+                             (conversation_id,)).fetchall()
+        records = [dict(zip(_COLUMNS, row)) for row in found]
+        if records:
+            conn.execute(f"UPDATE conversation_links SET status = 'done' WHERE id IN ({', '.join('?' * len(records))})",
+                         [record["id"] for record in records])
+    if records:
+        _publish()
+    return [(_name(record["source_id"]), record["message"]) for record in records]
 
 
 def _keep_going(source: Origin) -> bool:

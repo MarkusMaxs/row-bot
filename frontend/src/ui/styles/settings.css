@@ -4974,6 +4974,11 @@ button.settings-mcp-server-name:hover {
   grid-column: 1 / -1;
   color: var(--status-danger-text);
 }
+.sandbox-hint {
+  grid-column: 1 / -1;
+  color: var(--text-secondary);
+  font-size: var(--type-size-metadata);
+}
 .sandbox-actions,
 .sandbox-confirm {
   display: inline-flex;

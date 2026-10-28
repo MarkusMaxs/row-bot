@@ -350,12 +350,22 @@ def wait_running(sandbox_id: str, seconds: float) -> Sandbox | None:
     return sandbox
 
 
+def has_model(sandbox_id: str) -> bool:
+    """Whether the sandbox has a chat model chosen: it signs in to a provider of its own (decision 4)."""
+    try:
+        saved = json.loads((_folder(sandbox_id) / "data" / "model_settings.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(saved, dict) and bool(str(saved.get("model") or "").strip())
+
+
 def view(sandbox: Sandbox) -> dict[str, Any]:
     from row_bot.sandbox_packs import PACKS
 
     return {"sandbox_id": sandbox.sandbox_id, "name": sandbox.name, "pack": sandbox.pack,
             "pack_name": PACKS.get(sandbox.pack, sandbox.pack), "status": sandbox.status,
-            "url": sandbox.url if sandbox.status == "running" else "", "problem": sandbox.problem}
+            "url": sandbox.url if sandbox.status == "running" else "", "problem": sandbox.problem,
+            "needs_model": not has_model(sandbox.sandbox_id)}
 
 
 def is_sandbox(environ: dict[str, str] | None = None) -> bool:

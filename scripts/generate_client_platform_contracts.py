@@ -75,7 +75,7 @@ MODELS = {name: getattr(schemas, name) for name in (
     "InsightsSnapshot", "InsightCommand", "InsightReceipt",
     "LearningSnapshot", "LearningTraining", "LearningDownload", "LearningHardware", "LearningConversation", "LearningLessonPage", "LearningCommand", "LearningReceipt", "LearningVersionDetails",
     "KnowledgeEditorState", "KnowledgeReviewRequest", "KnowledgeReview", "KnowledgeReceipt",
-    "KnowledgeGraphSnapshot", "BackgroundProcessView", "BackgroundProcessPage", "BackgroundProcessOutput", "RecordingView", "RecordingPage", "VideoEditView", "VideoEditPage", "VideoScene", "VideoSceneWrite", "VideoVersionView", "VideoBrand", "VideoExportView", "RowBotSandboxView", "SandboxPackView", "RowBotSandboxPage", "RowBotSandboxCreate", "RowBotSandboxLink", "VideoProjectExport", "VideoProjectView", "VideoProjectChange", "VideoProjectRestore", "DeliveryView", "DeliveryPage", "PageDecisionView", "PageView", "PagePage", "MediaItem", "MediaPage", "MediaTagsWrite", "MediaTags", "PageTheme", "PageFrameRequest", "PageFrame", "PageStateWrite", "PageDecisionWrite", "PageDownload", "WorkspaceFolderPage", "SandboxJobView", "SandboxJobPage", "SandboxStatusView", "SandboxStartPayload", "LocalAddressGrantView", "LocalAddressPage", "MonitorSnapshot", "MonitorLogs", "SystemDiagnosis", "SystemDiagnosisSettings", "InstallCountSnapshot", "InstallCountChoice", "InstallCountDeletion", "UpdateRelease", "UpdateEngineView", "UpdateHostRequest", "UpdateHostView", "UpdateHeldBack", "UpdateSnapshot", "UpdateCommand", "UpdateReceipt", "MigrationScanRequest", "MigrationSource", "MigrationSources", "MigrationPreviewSummary", "MigrationPreviewItem", "MigrationPreview", "MigrationApplyReviewRequest", "MigrationApplyReview", "MigrationApplyCommand", "MigrationFailedItem", "MigrationApplyReceipt", "OnboardingSnapshot", "OnboardingCommand", "OnboardingReceipt", "LocalRuntimeSnapshot", "ModelTestResult", "ProviderKeyCheckRequest", "ProviderKeyCheck", "DreamRunRequest", "DreamRunReview", "DreamRunCommand", "DreamRunReceipt",
+    "KnowledgeGraphSnapshot", "BackgroundProcessView", "BackgroundProcessPage", "BackgroundProcessOutput", "RecordingView", "RecordingPage", "VideoEditView", "VideoEditPage", "VideoScene", "VideoSceneWrite", "VideoVersionView", "VideoBrand", "VideoExportView", "RowBotSandboxView", "SandboxPackView", "RowBotSandboxPage", "WaitView", "WaitPage", "RowBotSandboxCreate", "RowBotSandboxLink", "VideoProjectExport", "VideoProjectView", "VideoProjectChange", "VideoProjectRestore", "DeliveryView", "DeliveryPage", "PageDecisionView", "PageView", "PagePage", "MediaItem", "MediaPage", "MediaTagsWrite", "MediaTags", "PageTheme", "PageFrameRequest", "PageFrame", "PageStateWrite", "PageDecisionWrite", "PageDownload", "WorkspaceFolderPage", "SandboxJobView", "SandboxJobPage", "SandboxStatusView", "SandboxStartPayload", "LocalAddressGrantView", "LocalAddressPage", "MonitorSnapshot", "MonitorLogs", "SystemDiagnosis", "SystemDiagnosisSettings", "InstallCountSnapshot", "InstallCountChoice", "InstallCountDeletion", "UpdateRelease", "UpdateEngineView", "UpdateHostRequest", "UpdateHostView", "UpdateHeldBack", "UpdateSnapshot", "UpdateCommand", "UpdateReceipt", "MigrationScanRequest", "MigrationSource", "MigrationSources", "MigrationPreviewSummary", "MigrationPreviewItem", "MigrationPreview", "MigrationApplyReviewRequest", "MigrationApplyReview", "MigrationApplyCommand", "MigrationFailedItem", "MigrationApplyReceipt", "OnboardingSnapshot", "OnboardingCommand", "OnboardingReceipt", "LocalRuntimeSnapshot", "ModelTestResult", "ProviderKeyCheckRequest", "ProviderKeyCheck", "DreamRunRequest", "DreamRunReview", "DreamRunCommand", "DreamRunReceipt",
     "KnowledgeMaintenanceRequest", "KnowledgeMaintenanceReview", "KnowledgeMaintenanceCommand", "KnowledgeMaintenanceReceipt",
     "KnowledgeRelationPage", "KnowledgeRelationReviewRequest", "KnowledgeRelationReview", "KnowledgeRelationReceipt",
     "SubscriptionAccountsSnapshot", "SubscriptionFlowSnapshot", "SubscriptionActionReview",
@@ -227,6 +227,8 @@ OPERATIONS = (
     ("post", "/video-projects/{project_id}/make", None, "VideoProjectView"),
     ("post", "/video-projects/{project_id}/export", "VideoProjectExport", "VideoProjectView"),
     ("get", "/video-brand", None, "VideoBrand"),
+    ("get", "/waits", None, "WaitPage"),
+    ("post", "/waits/{wait_id}/stop", None, "WaitPage"),
     ("get", "/row-bot-sandboxes", None, "RowBotSandboxPage"),
     ("post", "/row-bot-sandboxes", "RowBotSandboxCreate", "RowBotSandboxView"),
     ("post", "/row-bot-sandboxes/{sandbox_id}/link", None, "RowBotSandboxLink"),
@@ -818,6 +820,11 @@ export const changeVideoProject = (base: string, proof: SessionProof, project: s
 /** Back to an earlier version, as a new version. */
 export const restoreVideoProject = (base: string, proof: SessionProof, project: string, body: VideoProjectRestore, signal?: AbortSignal): Promise<VideoProjectView> =>
   jsonRequest(base, `/video-projects/${id(project)}/restore`, 'VideoProjectView', proof, 'POST', validateWire('VideoProjectRestore', body), undefined, signal);
+/** What conversations wait for (5.3.1); a stopped one starts nothing. */
+export const getWaits = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<WaitPage> =>
+  jsonRequest(base, '/waits', 'WaitPage', proof, 'GET', undefined, undefined, signal);
+export const stopWait = (base: string, proof: SessionProof, wait: string, signal?: AbortSignal): Promise<WaitPage> =>
+  jsonRequest(base, `/waits/${id(wait)}/stop`, 'WaitPage', proof, 'POST', undefined, undefined, signal);
 /** Sandboxes (5.3.1 B4): second Row-Bots on made-up data. */
 export const getRowBotSandboxes = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<RowBotSandboxPage> =>
   jsonRequest(base, '/row-bot-sandboxes', 'RowBotSandboxPage', proof, 'GET', undefined, undefined, signal);

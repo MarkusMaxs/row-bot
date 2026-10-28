@@ -975,6 +975,9 @@ export interface ClientTransport {
   ): Promise<Wire.VideoProjectView>;
   makeVideoProject?(projectId: string): Promise<Wire.VideoProjectView>;
   videoBrand?(signal?: AbortSignal): Promise<Wire.VideoBrand>;
+  /** What conversations wait for (5.3.1); a stopped one starts nothing. */
+  waits?(signal?: AbortSignal): Promise<Wire.WaitPage>;
+  stopWait?(waitId: string): Promise<Wire.WaitPage>;
   /** Sandboxes (5.3.1 B4): second Row-Bots on made-up data. */
   rowBotSandboxes?(signal?: AbortSignal): Promise<Wire.RowBotSandboxPage>;
   createRowBotSandbox?(
