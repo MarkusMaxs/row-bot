@@ -1376,6 +1376,65 @@
   letter-spacing: 0;
   text-transform: none;
 }
+/* Waiting, Running, Workflow and Linked conversations (5.3.1): one quiet line each, with its one action. */
+.context-live-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 2px;
+}
+.context-live-item {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  color: var(--text-muted);
+}
+.context-live-text,
+.context-live-link {
+  display: grid;
+  min-width: 0;
+}
+.context-live-link {
+  grid-column: 2 / -1;
+  padding: 4px 6px;
+  margin-inline: -6px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.context-live-link:hover {
+  background: var(--surface-hover);
+}
+.context-live-link:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+.context-live-name {
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--text-13);
+  line-height: var(--leading-13);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.context-live-meta {
+  overflow: hidden;
+  font-size: var(--text-12);
+  line-height: var(--leading-12);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.context-live-dot {
+  color: var(--accent-solid);
+  justify-self: center;
+}
 .context-agents > summary,
 .context-goal > summary {
   min-height: 28px;
