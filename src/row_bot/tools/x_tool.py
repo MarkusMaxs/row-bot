@@ -761,11 +761,15 @@ class XTool(BaseTool):
                 lines.append(f"- The X account from before (its handle shows once Row-Bot reaches X): {state}")
             else:
                 name = f" · {row['name']}" if row["name"] else ""
-                lines.append(f"- @{row['username']}{name} (ID {row['id']}): {state}")
+                limit = x_posting.text_limit(XAccount(row["id"], row["username"], row["name"])) \
+                    if row["state"] in {"connected", "saved_unchecked"} else None
+                posts = f"; posts up to {limit:,} characters" if limit else ""
+                lines.append(f"- @{row['username']}{name} (ID {row['id']}): {state}{posts}")
         more = ("" if len(rows) < 2 else
                 "\nWith several accounts, every post, reply, quote, delete, like, repost or bookmark must say "
                 "which with account; ask the person if they haven't said.")
-        return f"Connected X accounts ({len(rows)}):\n" + "\n".join(lines) + more
+        return (f"Connected X accounts ({len(rows)}):\n" + "\n".join(lines) + more
+                + f"\nMedia: {x_posting.MEDIA_LIMITS} per post. Links count {x_posting.LINK_LENGTH} characters.")
 
     # ── Read operations ──────────────────────────────────────────────────────
 
@@ -943,11 +947,24 @@ class XTool(BaseTool):
         try:
             words, target = x_posting.check_text(action, text, tweet_id)
             chosen = x_accounts.resolve(account, required=True)
+            x_posting.check_length(chosen, action, words)
             media = x_posting.media_facts(media_paths) if action != "delete" else []
         except (x_posting.XPostError, XAccountChoice) as exc:
             return str(exc)
         target_text = x_posting.read_text(chosen, target) if action == "delete" else ""
-        refusal, line = x_posting.approve(chosen, action, words, target, media, target_text=target_text)
+        edited = False
+        while True:
+            try:
+                refusal, line = x_posting.approve(chosen, action, words, target, media, target_text=target_text)
+                break
+            except x_posting.PostEdited as edit:
+                # The person changed the post on its card (G2): a new card, bound to the edited post.
+                try:
+                    words, _ = x_posting.check_text(action, edit.text, tweet_id)
+                    x_posting.check_length(chosen, action, words)
+                except x_posting.XPostError as exc:
+                    return f"The person edited the post, but it can't go out as edited: {exc} Nothing was sent to X."
+                media, edited = [item for item in media if item.short in edit.kept], True
         if refusal is not None:
             return refusal
         from row_bot.tools.approval_gate import with_approval
@@ -956,6 +973,8 @@ class XTool(BaseTool):
             sent = x_posting.post_as(chosen, action, words, target, media).text
         except x_posting.XPostError as exc:
             sent = str(exc)
+        if edited:
+            sent = f"The person edited the post on its card, then approved it as edited:\n{words}\n\n{sent}"
         return with_approval(line, sent) if line else sent
 
     # ── Engage operations ────────────────────────────────────────────────────

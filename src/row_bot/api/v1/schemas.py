@@ -5903,8 +5903,17 @@ class ApprovalAnswer(WireModel):
     other: str = Field(default="", max_length=500)
 
 
+class XPostEdit(WireModel):
+    """The person's edit of an X post on its card (G2): the new text, and the files kept by their SHA-256 start."""
+
+    text: str = Field(max_length=25000)
+    media: list[Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{12}$")]] = Field(default_factory=list,
+                                                                                       max_length=4)
+
+
 class ApprovalPayload(WireModel):
-    decision: Literal["approve", "reject"]
+    # "edit" changes an X post on its card (G2): never an approval, the post asks again as edited.
+    decision: Literal["approve", "reject", "edit"]
     nonce: Annotated[str, StringConstraints(min_length=32, max_length=256)]
     # "turn" also approves later actions of the same kind until the turn ends (F21), "chat" until the
     # conversation ends ("Allow in this chat", 5.3.1 B2); only kinds the view marks repeatable take them,
@@ -5913,6 +5922,7 @@ class ApprovalPayload(WireModel):
     # A question card (N4): "approve" answers it with these, one per question; "reject" skips it. An answer is the
     # person's input, never an approval of an action.
     answers: list[ApprovalAnswer] | None = Field(default=None, max_length=4)
+    edit: XPostEdit | None = None
 
 
 class DeckSetupPayload(WireModel):
@@ -6452,6 +6462,8 @@ class TaskSettingsFields(WireModel):
     always_ask: list[Annotated[str, StringConstraints(min_length=1, max_length=512)]] = Field(
         default_factory=list, max_length=16
     )
+    # When its results go to its channels: after every run, only when a run needs the person, or a daily digest.
+    send_results: Literal["every_run", "needs_me", "digest"] = "every_run"
 
 
 class TaskSettingsSnapshot(WireModel):
@@ -8489,6 +8501,8 @@ class XPostApproval(WireModel):
     # The text of the post a delete removes, when X said it.
     target_text: str = Field(default="", max_length=25000)
     media: list[XPostMedia] = Field(default_factory=list, max_length=4)
+    # How long a post the account may send (280, or 25,000 with an X subscription); 0 when X didn't say.
+    limit: int = Field(default=0, ge=0, le=25000)
 
 
 class ApprovalView(WireModel):

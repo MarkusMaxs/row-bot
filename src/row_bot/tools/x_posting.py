@@ -164,6 +164,7 @@ def card(account: XAccount, action: str, text: str, target: str, media: list[Med
         "target_text": target_text[:_MAX_TEXT],
         "media": [{"name": item.name, "size": item.size, "sha256": item.short, "kind": item.kind,
                    "thumbnail": item.thumbnail} for item in media],
+        "limit": _LIMITS.get(account.id, 0),  # How long a post the account may send, when X said (0: unknown).
     }
 
 
@@ -191,14 +192,40 @@ def approval_payload(account: XAccount, action: str, text: str, target: str, med
             "x_post": card(account, action, text, target, media, target_text=target_text)}
 
 
+class PostEdited(Exception):
+    """The person edited the post on its card (G2): ask again with this text and the files they kept."""
+
+    def __init__(self, text: str, kept: list[str]) -> None:
+        super().__init__("The person edited the post.")
+        self.text, self.kept = text, kept
+
+
+def _edited(answer: Any) -> PostEdited | None:
+    edit = answer.get("x_post_edit") if isinstance(answer, dict) else None
+    if not isinstance(edit, dict) or not isinstance(edit.get("text"), str):
+        return None
+    return PostEdited(edit["text"], [str(item) for item in edit.get("media") or []])
+
+
 def approve(account: XAccount, action: str, text: str, target: str, media: list[Media], *,
             target_text: str = "") -> tuple[str | None, str]:
-    """(None, its approval line) when this exact post may go out; else (the refusal, its line)."""
+    """(None, its approval line) when this exact post may go out; else (the refusal, its line).
+
+    Raises PostEdited when the person edited it on the card instead: never an approval of anything.
+    """
     from row_bot.tools.approval_gate import X_POST_RISK, current_approval_mode, resolve_approval_line, with_approval
 
     payload = approval_payload(account, action, text, target, media, target_text=target_text)
+    answers: list[Any] = []
+
+    def ask(asked: dict[str, Any]) -> Any:
+        answers.append(_ask(asked))
+        return answers[-1]
     outcome, line = resolve_approval_line(payload, approval_mode=current_approval_mode(), risks=(X_POST_RISK,),
-                                          approval_callback=lambda asked: _ask(asked))
+                                          approval_callback=ask)
+    edited = _edited(answers[-1]) if answers and outcome == "deny" else None
+    if edited is not None:
+        raise edited
     if outcome == "allow":
         return None, line
     if outcome == "block":
@@ -534,6 +561,63 @@ def read_text(account: XAccount, target: str) -> str:
         return str((response.json().get("data") or {}).get("text") or "")[:_MAX_TEXT] if response.status_code == 200 else ""
     except Exception:
         return ""
+
+
+# X counts a post's length by weight (5.3.1 G1): each link is 23, and characters outside the Latin and common
+# punctuation ranges count 2. Without a subscription a post is 280; with one, 25,000.
+_LINK = re.compile(r"https?://\S+", re.IGNORECASE)
+LINK_LENGTH = 23
+SHORT_POST, LONG_POST = 280, 25_000
+_LIMITS: dict[str, int] = {}
+MEDIA_LIMITS = "up to 4 pictures (5 MB each) or one GIF (15 MB) or one video (512 MB)"
+
+
+def _weigh(text: str) -> int:
+    import unicodedata
+
+    return sum(1 if (code <= 4351 or 8192 <= code <= 8205 or 8208 <= code <= 8223 or 8242 <= code <= 8247) else 2
+               for code in map(ord, unicodedata.normalize("NFC", text)))
+
+
+def weighted_length(text: str) -> int:
+    """The post's length as X counts it."""
+    total, position = 0, 0
+    for match in _LINK.finditer(text):
+        total += _weigh(text[position:match.start()]) + LINK_LENGTH
+        position = match.end()
+    return total + _weigh(text[position:])
+
+
+def text_limit(account: XAccount) -> int | None:
+    """How long a post the account may send: 280, or 25,000 with an X subscription; None when X doesn't say."""
+    if account.id in _LIMITS:
+        return _LIMITS[account.id]
+    token = x_accounts.valid_token(account)
+    if token is None:
+        return None
+    try:
+        response = x_accounts.send("GET", f"{x_accounts.API_BASE}/users/me", headers=x_accounts.bearer(token),
+                                   params={"user.fields": "subscription_type"}, timeout=10)
+        if response.status_code != 200:
+            return None
+        kind = str((response.json().get("data") or {}).get("subscription_type") or "None")
+    except Exception:
+        return None
+    _LIMITS[account.id] = LONG_POST if kind in {"Basic", "Premium", "PremiumPlus"} else SHORT_POST
+    return _LIMITS[account.id]
+
+
+def check_length(account: XAccount, action: str, text: str) -> None:
+    """Refuse, before the card, a post longer than the account may send (X would refuse it after approval)."""
+    if action == "delete" or not text:
+        return
+    limit = text_limit(account)
+    length = weighted_length(text)
+    if limit is not None and length > limit:
+        what = "with its X subscription" if limit == LONG_POST else "without an X subscription"
+        raise XPostError(f"That post is {length:,} characters as X counts them (each link counts {LINK_LENGTH}); "
+                         f"@{account.username} can post up to {limit:,} {what}. Shorten it by {length - limit:,}, "
+                         "or post the rest as a reply to it.")
 
 
 def check_text(action: str, text: str | None, target: str | None) -> tuple[str, str]:

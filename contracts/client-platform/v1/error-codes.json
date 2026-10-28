@@ -18,6 +18,7 @@
     "agent_work_not_resumable": 409,
     "app_not_connected": 409,
     "approval_already_resolved": 409,
+    "approval_edit_invalid": 422,
     "approval_expired": 409,
     "approval_required": 409,
     "artifact_busy": 429,

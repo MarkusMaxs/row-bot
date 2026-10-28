@@ -125,6 +125,10 @@ class _TaskUpdateInput(BaseModel):
         default=None,
         description="Agent Profile slug or id; '' uses the Default profile.",
     )
+    notes: str | None = Field(
+        default=None,
+        description="A workflow's notes for its next run, replacing the old ones; '' clears them.",
+    )
 
 
 # ── Tool functions ───────────────────────────────────────────────────────────
@@ -297,12 +301,21 @@ def _task_update(
     model: str | None = None,
     agent_profile: str | None = None,
     run_at: str | None = None,
+    notes: str | None = None,
 ) -> str:
     """Update fields on an existing task."""
     task = tasks_db.get_task(task_id)
     if not task:
         return f"Task '{task_id}' not found. Use task_list to see available tasks."
 
+    noted = ""
+    if notes is not None:
+        from row_bot import workflow_turns
+
+        kept = workflow_turns.save_notes(task_id, notes)
+        noted = (f"  Notes: {len(kept):,} characters kept for the next run"
+                 + (f" (cut to {workflow_turns.NOTES_LIMIT:,})" if len(notes.strip()) > len(kept) else "")
+                 if kept else "  Notes: cleared")
     updates: dict = {}
     if name is not None:
         updates["name"] = name
@@ -328,7 +341,10 @@ def _task_update(
         updates["agent_profile_id"] = agent_profile or tasks_db.DEFAULT_WORKFLOW_AGENT_PROFILE_ID
 
     if not updates:
-        return "No fields to update. Provide at least one of: name, schedule, prompts, approval_mode, enabled, model."
+        if noted:
+            return f"Updated task '{task['icon']} {task['name']}'.\n{noted}"
+        return ("No fields to update. Provide at least one of: name, schedule, prompts, approval_mode, enabled, "
+                "model, notes.")
 
     try:
         tasks_db.update_task(task_id, **updates)
@@ -346,6 +362,8 @@ def _task_update(
             parts.append(f"  Approval: {approval_label(task.get('safety_mode', 'block'))}")
         if "enabled" in updates:
             parts.append(f"  Enabled: {task.get('enabled', True)}")
+        if noted:
+            parts.append(noted)
 
 
         return "\n".join(parts)
