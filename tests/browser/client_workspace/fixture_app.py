@@ -2034,7 +2034,10 @@ def n7_reset(x_fixture_token: str = Header(default="")) -> dict:
     """Remove the accounts, the fake X API and the X app's switch."""
     predecessor._authorize(x_fixture_token)
     from row_bot import x_accounts
+    from row_bot.tools import x_posting
 
+    for post in x_posting.scheduled_posts():
+        x_posting.cancel_scheduled(post["id"])
     for account in x_accounts.listed():
         x_accounts.remove(account.id)
     x_accounts.transport = None
@@ -2068,11 +2071,15 @@ def _n7_stream(text: str, config: dict):
         else:
             args = {"action": "post", "text": _N7_LAUNCH, "account": "@rowbot_ai",
                     "media_paths": [str(_N7["folder"] / "launch-card.png")]}
+        if "later" in text:  # A time slot three hours ahead (G3).
+            from datetime import datetime, timedelta
+            args["post_at"] = (datetime.now() + timedelta(hours=3)).isoformat(timespec="minutes")
         _N7["lose_answer"] = "unsure" in text
         account = x_accounts.resolve(args["account"], required=True)
         x_posting.text_limit(account)  # The card says how long a post the account may send (G1).
         media = x_posting.media_facts(args.get("media_paths"))
-        payload = x_posting.approval_payload(account, args["action"], args["text"], args.get("tweet_id", ""), media)
+        payload = x_posting.approval_payload(account, args["action"], args["text"], args.get("tweet_id", ""), media,
+                                             post_at=x_posting.slot(args.get("post_at")))
         tool_id = fixture_id(identity + ":tool")
         append_checkpoint_messages(thread, [AIMessage(id=fixture_id(identity + ":tool-call"), content="",
             tool_calls=[{"id": tool_id, "name": "x_post", "args": args}])])
@@ -2112,6 +2119,19 @@ def _n7_resume(enabled_tools: list[str], config: dict, approved: bool, *, interr
         account = x_accounts.resolve(args["account"], required=True)
         if _N7.pop("lose_answer", False):
             _N7["api"].after_send = "timeout"  # X posts it, and its answer is lost on the way back.
+        if args.get("post_at"):  # Approved for its time slot: kept for the scheduler, as the tool does (G3).
+            when = x_posting.slot(args["post_at"])
+            kept = x_posting.schedule(account, args["action"], args.get("text", ""), args.get("tweet_id", ""),
+                                      x_posting.media_facts(args.get("media_paths")), when)
+            content = with_approval(APPROVAL_GIVEN, f"Approved for its time: it goes out as @rowbot_ai at {when:%H:%M} "
+                                    f"on {when:%a %d %b} (scheduled post {kept['id']}).")
+            append_checkpoint_messages(thread, [ToolMessage(id=result_id, tool_call_id=asked["id"], name="x_post",
+                                                            content=content)])
+            yield "tool_done", {"tool_call_id": asked["id"], "message_id": result_id, "name": "x_post",
+                                "args": args, "content": content}
+            yield from _natural_final(call, thread, f"Scheduled: it goes out on @rowbot_ai at {when:%H:%M}.",
+                                      "n7-scheduled")
+            return
         sent = x_posting.post_as(account, args["action"], args.get("text", ""), args.get("tweet_id", ""),
                                  x_posting.media_facts(args.get("media_paths")))
         content = with_approval(APPROVAL_GIVEN, sent.text if not edited else (  # As the tool says it (G2).

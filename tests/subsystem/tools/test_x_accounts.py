@@ -599,3 +599,92 @@ def test_a_subscribed_account_posts_a_long_post(x, person):
     sent = tool._x_post("post", text="A longer post about Row-Bot. " * 20, account="@rowbot_ai")
 
     assert "https://x.com/rowbot_ai/status/" in sent and _creates(fake) == 1
+
+
+
+# ── Time slots and scheduled posts (5.3.1 G3) ────────────────────────────────
+
+
+@pytest.fixture
+def notices(monkeypatch):
+    from row_bot import notifications
+    said: list[tuple[str, str]] = []
+    monkeypatch.setattr(notifications, "notify", lambda title, message, *a, **k: said.append((title, message)))
+    return said
+
+
+def test_a_slot_is_a_local_time_ahead_and_within_a_week():
+    from datetime import datetime
+    now = datetime(2026, 10, 28, 9, 0)
+
+    assert x_posting.slot("13:00", now) == datetime(2026, 10, 28, 13, 0)
+    assert x_posting.slot("08:30", now) == datetime(2026, 10, 29, 8, 30), "a time already past today is tomorrow's"
+    assert x_posting.slot("2026-11-01T09:30", now) == datetime(2026, 11, 1, 9, 30)
+    assert x_posting.slot("", now) is None
+    for refused, words in (("2026-10-27T10:00", "has passed"), ("2026-11-05T09:01", "up to 7 days ahead"),
+                           ("tomorrow", "a local time like 13:00")):
+        with pytest.raises(x_posting.XPostError, match=words):
+            x_posting.slot(refused, now)
+
+
+def test_an_approved_post_with_a_slot_goes_out_at_its_time_once(x, person, notices, tmp_path):
+    from datetime import datetime, timedelta
+    fake, tool = x
+    asked, _ = person
+    x_accounts.add(fake.sign_in(*ROWBOT))
+    picture = _picture(tmp_path / "chart.png")
+    when = (datetime.now() + timedelta(hours=2)).replace(second=0, microsecond=0)
+
+    result = tool._x_post("post", text="Tonight's chart", media_paths=[str(picture)], account="@rowbot_ai",
+                          post_at=when.isoformat(timespec="minutes"))
+
+    [card] = asked
+    assert card["x_post"]["post_at"] == when.isoformat(timespec="minutes")
+    assert card["binding"].endswith("@" + when.isoformat(timespec="minutes")), "the approval is for that time"
+    assert f"Approved for its time: it goes out as @rowbot_ai at {when:%H:%M}" in result
+    assert _creates(fake) == 0, "nothing is on X before its time"
+    [waiting] = x_posting.scheduled_posts()
+    assert (waiting["username"], waiting["text"], waiting["post_at"]) == ("rowbot_ai", "Tonight's chart",
+                                                                          when.isoformat(timespec="minutes"))
+    assert waiting["media"][0]["name"] == "chart.png" and str(tmp_path) not in str(waiting)
+
+    assert x_posting.send_due(when - timedelta(minutes=1)) == []
+    [sent] = x_posting.send_due(when)
+    assert sent["status"] == "posted" and sent["url"].startswith("https://x.com/rowbot_ai/status/")
+    assert x_posting.send_due(when + timedelta(minutes=1)) == [] and _creates(fake) == 1
+    assert x_posting.scheduled_posts() == []
+    assert notices == [("Posted on X as @rowbot_ai", sent["url"])]
+
+
+def test_a_scheduled_post_never_goes_out_cancelled_changed_or_long_missed(x, person, notices, tmp_path):
+    from datetime import datetime, timedelta
+    fake, tool = x
+    x_accounts.add(fake.sign_in(*ROWBOT))
+    picture = _picture(tmp_path / "chart.png")
+    when = (datetime.now() + timedelta(hours=1)).replace(second=0, microsecond=0)
+    for text in ("Cancelled", "Changed file", "Missed"):
+        tool._x_post("post", text=text, media_paths=[str(picture)] if text == "Changed file" else None,
+                     account="@rowbot_ai", post_at=when.isoformat(timespec="minutes"))
+    cancelled, changed, missed = x_posting.scheduled_posts()
+
+    assert x_posting.cancel_scheduled(cancelled["id"]) and not x_posting.cancel_scheduled(cancelled["id"])
+    _picture(picture, "navy")
+    done = {item["id"]: item for item in x_posting.send_due(when)}
+    assert done[changed["id"]]["status"] == "failed"
+    assert done[changed["id"]]["result"] == "A file changed after you approved the post, so it wasn't posted."
+    assert done[missed["id"]]["status"] == "posted"  # On time.
+
+    tool._x_post("post", text="Late", account="@rowbot_ai", post_at=when.isoformat(timespec="minutes"))
+    [late] = x_posting.send_due(when + timedelta(hours=13))
+    assert late["status"] == "missed" and "wasn't posted. Approve it again to post it." in late["result"]
+    assert cancelled["id"] not in done and _creates(fake) == 1
+    assert [title for title, _ in notices] == ["A scheduled post as @rowbot_ai didn't go out", "Posted on X as @rowbot_ai",
+                                               "A scheduled post as @rowbot_ai didn't go out"]
+
+
+def test_a_delete_has_no_time_slot(x, person):
+    fake, tool = x
+    asked, _ = person
+    x_accounts.add(fake.sign_in(*ROWBOT))
+    refused = tool._x_post("delete", tweet_id="123", account="@rowbot_ai", post_at="13:00")
+    assert refused == "A delete happens at once; leave post_at out." and asked == []

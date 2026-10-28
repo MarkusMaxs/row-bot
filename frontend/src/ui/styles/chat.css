@@ -1248,6 +1248,16 @@
 .x-post-media abbr {
   text-decoration: none;
 }
+.x-post-slot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: var(--text-13);
+}
+.x-post-slot svg {
+  flex: none;
+}
 .x-post-media-remove {
   margin-inline-start: auto;
 }

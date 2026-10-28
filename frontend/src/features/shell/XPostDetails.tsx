@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Film, X } from 'lucide-react';
+import { Clock, Film, X } from 'lucide-react';
 import type { XPostApproval, XPostEdit } from '../../api/types';
 import { Button, IconButton } from '../../ui/primitives';
 import { formatBytes } from './MediaPreview';
@@ -44,7 +44,30 @@ export default function XPostDetails({ post }: { post: XPost }) {
         )
       )}
       <MediaList media={post.media ?? []} />
+      {post.post_at && <Slot at={post.post_at} />}
     </div>
+  );
+}
+
+/** "Goes out at 1:00 PM on Wed 29 Oct": approving schedules it for then (G3). */
+export function Slot({ at }: { at: string }) {
+  const when = new Date(at);
+  if (Number.isNaN(when.getTime())) return null;
+  return (
+    <p className="x-post-slot">
+      <Clock size={14} aria-hidden />
+      Goes out at{' '}
+      {when.toLocaleTimeString(undefined, {
+        hour: 'numeric',
+        minute: '2-digit',
+      })}{' '}
+      on{' '}
+      {when.toLocaleDateString(undefined, {
+        weekday: 'short',
+        day: 'numeric',
+        month: 'short',
+      })}
+    </p>
   );
 }
 
@@ -202,6 +225,7 @@ export function XPostEditor({
           setMedia((items) => items.filter((kept) => kept !== item))
         }
       />
+      {post.post_at && <Slot at={post.post_at} />}
       <div className="x-post-edit-actions">
         <Button variant="ghost" disabled={busy} onClick={onCancel}>
           Cancel

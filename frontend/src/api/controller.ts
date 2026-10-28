@@ -2782,6 +2782,11 @@ export class ClientController {
   /** Every approval waiting for the person, wherever it was raised (B255). */
   pendingApprovals = (signal?: AbortSignal) =>
     this.query(() => this.transport.pendingApprovals?.(signal));
+  /** Posts approved for a time slot, waiting for it (G3). */
+  scheduledPosts = (signal?: AbortSignal) =>
+    this.query(() => this.transport.scheduledPosts?.(signal));
+  cancelScheduledPost = (id: string) =>
+    this.query(() => this.transport.cancelScheduledPost?.(id));
   monitorLogs = (limit = 200, signal?: AbortSignal) =>
     this.query(() => this.transport.monitorLogs?.(limit, signal));
   systemDiagnosis = (signal?: AbortSignal) =>

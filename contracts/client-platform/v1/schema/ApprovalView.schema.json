@@ -223,6 +223,13 @@
           "title": "Name",
           "type": "string"
         },
+        "post_at": {
+          "default": "",
+          "maxLength": 16,
+          "pattern": "^(\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d)?$",
+          "title": "Post At",
+          "type": "string"
+        },
         "target_id": {
           "default": "",
           "pattern": "^[0-9]{0,20}$",

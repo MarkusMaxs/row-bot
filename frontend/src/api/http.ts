@@ -416,6 +416,12 @@ export class HttpTransport implements ClientTransport {
   pendingApprovals(signal?: AbortSignal) {
     return wire.getPendingApprovals(this.base, this.session(), signal);
   }
+  scheduledPosts(signal?: AbortSignal) {
+    return wire.getScheduledPosts(this.base, this.session(), signal);
+  }
+  cancelScheduledPost(id: string) {
+    return wire.cancelScheduledPost(this.base, this.session(), id);
+  }
   monitorLogs(limit = 200, signal?: AbortSignal) {
     return wire.getMonitorLogs(this.base, this.session(), limit, signal);
   }
