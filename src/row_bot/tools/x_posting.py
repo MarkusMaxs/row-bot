@@ -536,6 +536,63 @@ def read_text(account: XAccount, target: str) -> str:
         return ""
 
 
+# X counts a post's length by weight (5.3.1 G1): each link is 23, and characters outside the Latin and common
+# punctuation ranges count 2. Without a subscription a post is 280; with one, 25,000.
+_LINK = re.compile(r"https?://\S+", re.IGNORECASE)
+LINK_LENGTH = 23
+SHORT_POST, LONG_POST = 280, 25_000
+_LIMITS: dict[str, int] = {}
+MEDIA_LIMITS = "up to 4 pictures (5 MB each) or one GIF (15 MB) or one video (512 MB)"
+
+
+def _weigh(text: str) -> int:
+    import unicodedata
+
+    return sum(1 if (code <= 4351 or 8192 <= code <= 8205 or 8208 <= code <= 8223 or 8242 <= code <= 8247) else 2
+               for code in map(ord, unicodedata.normalize("NFC", text)))
+
+
+def weighted_length(text: str) -> int:
+    """The post's length as X counts it."""
+    total, position = 0, 0
+    for match in _LINK.finditer(text):
+        total += _weigh(text[position:match.start()]) + LINK_LENGTH
+        position = match.end()
+    return total + _weigh(text[position:])
+
+
+def text_limit(account: XAccount) -> int | None:
+    """How long a post the account may send: 280, or 25,000 with an X subscription; None when X doesn't say."""
+    if account.id in _LIMITS:
+        return _LIMITS[account.id]
+    token = x_accounts.valid_token(account)
+    if token is None:
+        return None
+    try:
+        response = x_accounts.send("GET", f"{x_accounts.API_BASE}/users/me", headers=x_accounts.bearer(token),
+                                   params={"user.fields": "subscription_type"}, timeout=10)
+        if response.status_code != 200:
+            return None
+        kind = str((response.json().get("data") or {}).get("subscription_type") or "None")
+    except Exception:
+        return None
+    _LIMITS[account.id] = LONG_POST if kind in {"Basic", "Premium", "PremiumPlus"} else SHORT_POST
+    return _LIMITS[account.id]
+
+
+def check_length(account: XAccount, action: str, text: str) -> None:
+    """Refuse, before the card, a post longer than the account may send (X would refuse it after approval)."""
+    if action == "delete" or not text:
+        return
+    limit = text_limit(account)
+    length = weighted_length(text)
+    if limit is not None and length > limit:
+        what = "with its X subscription" if limit == LONG_POST else "without an X subscription"
+        raise XPostError(f"That post is {length:,} characters as X counts them (each link counts {LINK_LENGTH}); "
+                         f"@{account.username} can post up to {limit:,} {what}. Shorten it by {length - limit:,}, "
+                         "or post the rest as a reply to it.")
+
+
 def check_text(action: str, text: str | None, target: str | None) -> tuple[str, str]:
     """The text and target an action needs, cleaned; raises XPostError when one is missing."""
     words = str(text or "")

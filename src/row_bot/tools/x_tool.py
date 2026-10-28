@@ -761,11 +761,15 @@ class XTool(BaseTool):
                 lines.append(f"- The X account from before (its handle shows once Row-Bot reaches X): {state}")
             else:
                 name = f" · {row['name']}" if row["name"] else ""
-                lines.append(f"- @{row['username']}{name} (ID {row['id']}): {state}")
+                limit = x_posting.text_limit(XAccount(row["id"], row["username"], row["name"])) \
+                    if row["state"] in {"connected", "saved_unchecked"} else None
+                posts = f"; posts up to {limit:,} characters" if limit else ""
+                lines.append(f"- @{row['username']}{name} (ID {row['id']}): {state}{posts}")
         more = ("" if len(rows) < 2 else
                 "\nWith several accounts, every post, reply, quote, delete, like, repost or bookmark must say "
                 "which with account; ask the person if they haven't said.")
-        return f"Connected X accounts ({len(rows)}):\n" + "\n".join(lines) + more
+        return (f"Connected X accounts ({len(rows)}):\n" + "\n".join(lines) + more
+                + f"\nMedia: {x_posting.MEDIA_LIMITS} per post. Links count {x_posting.LINK_LENGTH} characters.")
 
     # ── Read operations ──────────────────────────────────────────────────────
 
@@ -943,6 +947,7 @@ class XTool(BaseTool):
         try:
             words, target = x_posting.check_text(action, text, tweet_id)
             chosen = x_accounts.resolve(account, required=True)
+            x_posting.check_length(chosen, action, words)
             media = x_posting.media_facts(media_paths) if action != "delete" else []
         except (x_posting.XPostError, XAccountChoice) as exc:
             return str(exc)

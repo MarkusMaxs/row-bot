@@ -191,7 +191,7 @@ def test_the_card_names_the_account_and_shows_everything_that_goes_out(x, person
 
     fake, tool = x
     asked, _ = person
-    x_accounts.add(fake.sign_in(*ROWBOT))
+    x_accounts.add(fake.sign_in(*ROWBOT, subscription="Premium"))  # Posts up to 25,000 characters.
     picture = _picture(tmp_path / "launch.png")
     text = "Row-Bot 5.3 is out. " + "Every post names its account. " * 60  # Far past the reason's 1,024.
 
@@ -511,3 +511,38 @@ def test_an_old_slot_the_keychain_cannot_delete_yet_leaves_the_account_usable(x,
     monkeypatch.setattr(keyring, "delete_password", real_delete)
     assert x_accounts.migrate().handle == "@rowbot_ai"  # The next check removes it.
     assert account_tokens.read("x") is None and [a.handle for a in x_accounts.listed()] == ["@rowbot_ai"]
+
+
+
+# ── Post length (5.3.1 G1) ───────────────────────────────────────────────────
+
+
+def test_x_counts_a_posts_length_by_weight():
+    assert x_posting.weighted_length("Row-Bot 5.3 is out") == 18
+    assert x_posting.weighted_length("Read it: https://row-bot.ai/docs/a-very-long-path?with=query") == 9 + 23
+    assert x_posting.weighted_length("東京") == 4 and x_posting.weighted_length("café — ok") == 9
+
+
+def test_a_post_too_long_for_the_account_is_refused_before_the_card(x, person):
+    fake, tool = x
+    asked, _ = person
+    x_accounts.add(fake.sign_in(*ROWBOT))  # No X subscription: 280 characters.
+    text = "Row-Bot runs on your computer. " * 10  # 310 characters.
+
+    refused = tool._x_post("post", text=text, account="@rowbot_ai")
+
+    assert refused.startswith("That post is 310 characters as X counts them (each link counts 23); @rowbot_ai can "
+                              "post up to 280 without an X subscription. Shorten it by 30")
+    assert asked == [] and _creates(fake) == 0, "no card for a post X would refuse"
+    listed = tool._x_accounts()
+    assert "@rowbot_ai · Row-Bot (ID 111): signed in; posts up to 280 characters" in listed
+    assert "Media: up to 4 pictures (5 MB each) or one GIF (15 MB) or one video (512 MB) per post." in listed
+
+
+def test_a_subscribed_account_posts_a_long_post(x, person):
+    fake, tool = x
+    x_accounts.add(fake.sign_in(*ROWBOT, subscription="Premium"))
+
+    sent = tool._x_post("post", text="A longer post about Row-Bot. " * 20, account="@rowbot_ai")
+
+    assert "https://x.com/rowbot_ai/status/" in sent and _creates(fake) == 1

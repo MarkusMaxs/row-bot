@@ -39,6 +39,8 @@ def test_the_approval_view_shows_the_post_and_approving_sends_exactly_it(service
     monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "profile"))
     fake = FakeXApi()
     install(monkeypatch, fake, ROWBOT, PERSONAL)
+    for user in fake.users.values():  # Both accounts post long posts (an X subscription).
+        user["subscription_type"] = "Premium"
     monkeypatch.setattr(approval_gate, "current_approval_mode", lambda: "ask")
     tool = XTool()
     monkeypatch.setattr(tool, "get_config", lambda key, default=None: default)
