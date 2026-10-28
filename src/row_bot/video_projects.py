@@ -565,6 +565,40 @@ def _iso(value: float) -> str:
     return datetime.fromtimestamp(value, tz=timezone.utc).isoformat()
 
 
+class _Refs:
+    """The files a version's live preview plays (5.3.1 B3): each scene's video and its voice line, by reference.
+    A video in the workspace has none, so its scene previews as a still card until the version is made."""
+
+    def __init__(self, conversation_id: str) -> None:
+        self.conversation_id = conversation_id
+        self._sources: dict[str, str | None] = {}
+        self._files: dict[str, str] | None = None
+
+    def source(self, value: str) -> str | None:
+        if value not in self._sources:
+            from row_bot.media_sources import SourceError, resolve
+
+            try:
+                found = resolve(value, self.conversation_id)
+            except (SourceError, ValueError, OSError):
+                found = []
+            self._sources[value] = found[0].ref or None if len(found) == 1 and found[0].kind == "video" else None
+        return self._sources[value]
+
+    def voice(self, name: str) -> str | None:
+        if self._files is None:
+            from row_bot.application.attachments import AttachmentError, list_conversation_files
+
+            try:
+                files = list_conversation_files(self.conversation_id)
+            except (AttachmentError, OSError, ValueError):
+                files = []
+            self._files = {}
+            for item in reversed(files):  # The newest of a name wins.
+                self._files[str(item["name"]).casefold()] = str(item["attachment_ref"])
+        return self._files.get(name.casefold())
+
+
 def view(project: Project, number: int | None = None) -> dict[str, Any]:
     """The client's view of a project at one version (the latest by default)."""
     from row_bot import video_edits
@@ -572,6 +606,7 @@ def view(project: Project, number: int | None = None) -> dict[str, Any]:
     version = project.version(number) or project.latest
     edit = video_edits.get(version.edit_id) if version.edit_id else None
     marks = list(edit.marks) if edit is not None and len(edit.marks) == len(version.scenes) + 1 else []
+    refs = _Refs(project.conversation_id)
     return {
         "project_id": project.project_id,
         "conversation_id": project.conversation_id,
@@ -584,7 +619,9 @@ def view(project: Project, number: int | None = None) -> dict[str, Any]:
                     "speed": scene.speed, "zoom": scene.zoom, "card": scene.card, "line": scene.line,
                     "voiced": bool(scene.voice) and scene.voiced == scene.line,
                     "at": marks[index] if marks else None,
-                    "length": round(marks[index + 1] - marks[index], 3) if marks else None}
+                    "length": round(marks[index + 1] - marks[index], 3) if marks else None,
+                    "source_ref": refs.source(scene.source),
+                    "voice_ref": refs.voice(scene.voice) if scene.voice and scene.voiced == scene.line else None}
                    for index, scene in enumerate(version.scenes)],
         "changed": changed_scenes(project, version),
         "music": version.music,

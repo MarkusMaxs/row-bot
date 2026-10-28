@@ -203,6 +203,29 @@ def test_a_recordings_beats_become_its_scenes_live_as_it_is_work_sped_up_and_cut
         video_projects.scenes_from_beats("rec-0a0b0c0d", "conversation-b")
 
 
+def test_the_live_preview_gets_each_scenes_video_and_its_voice_while_its_line_is_unchanged(studio):
+    from row_bot import video_projects
+    from row_bot.application.attachments import list_conversation_files
+
+    project = video_projects.create("conversation-a", "Launch demo", SCENES)
+    files = {item["name"]: item["attachment_ref"] for item in list_conversation_files("conversation-a")}
+    before = video_projects.view(video_projects.get(project.project_id))["scenes"]
+    assert [scene["source_ref"] for scene in before] == [files["signup.mp4"], files["pricing.mp4"]]
+    assert [scene["voice_ref"] for scene in before] == [None, None], "nothing voiced yet"
+
+    video_projects.make(project, 1)
+    made = _wait(project.project_id, 1)
+    voices = {item["name"]: item["attachment_ref"] for item in list_conversation_files("conversation-a")}
+    after = video_projects.view(video_projects.get(project.project_id))["scenes"]
+    assert [scene["voice_ref"] for scene in after] == [voices[scene.voice] for scene in made.scenes]
+
+    edited = [dict(SCENES[0], scene_id=made.scenes[0].scene_id, line="A new first line."),
+              dict(SCENES[1], scene_id=made.scenes[1].scene_id)]
+    changed = video_projects.change(project, by="you", scenes=edited)
+    scenes = video_projects.view(video_projects.get(project.project_id), changed.number)["scenes"]
+    assert scenes[0]["voice_ref"] is None and scenes[1]["voice_ref"] == after[1]["voice_ref"]
+
+
 def test_scenes_that_cannot_be_used_are_refused_plainly(studio):
     from row_bot import video_projects
 

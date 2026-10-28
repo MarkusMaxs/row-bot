@@ -317,6 +317,19 @@
           "title": "Source",
           "type": "string"
         },
+        "source_ref": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Ref"
+        },
         "speed": {
           "maximum": 4,
           "minimum": 0.25,
@@ -327,6 +340,19 @@
           "minimum": 0,
           "title": "Start",
           "type": "number"
+        },
+        "voice_ref": {
+          "anyOf": [
+            {
+              "maxLength": 512,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Voice Ref"
         },
         "voiced": {
           "title": "Voiced",

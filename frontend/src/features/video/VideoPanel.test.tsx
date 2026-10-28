@@ -349,3 +349,36 @@ it('a made version offers its other shapes, says where each fits, and downloads 
     '9:16',
   );
 });
+
+it('while edited, the player previews the edits live from each scene’s own video, without making anything', async () => {
+  const shown = view();
+  shown.scenes = shown.scenes.map((scene, index) => ({
+    ...scene,
+    source_ref: `conversation-a:${scene.source}`,
+    voice_ref: index === 0 ? 'conversation-a:line-1.wav' : null,
+  }));
+  const { controller } = setup(shown);
+  await screen.findByLabelText('Launch demo, version 2');
+  await userEvent.type(await screen.findByLabelText('Scene 1 card'), '!');
+  const preview = await screen.findByLabelText('Preview of your edits');
+  expect(
+    screen.queryByLabelText('Launch demo, version 2'),
+  ).not.toBeInTheDocument();
+  expect(within(preview).getByLabelText('Scene 1')).toHaveAttribute(
+    'src',
+    'blob:launch',
+  );
+  expect(preview).toHaveTextContent('Sign up!');
+  expect(preview).toHaveTextContent('Scene 1 of 2');
+  await waitFor(() =>
+    expect(controller.download).toHaveBeenCalledWith(
+      'conversation-a:signup.mp4',
+      expect.anything(),
+    ),
+  );
+  expect(controller.download).toHaveBeenCalledWith(
+    'conversation-a:line-1.wav',
+    expect.anything(),
+  );
+  expect(controller.changeVideoProject).not.toHaveBeenCalled();
+});
