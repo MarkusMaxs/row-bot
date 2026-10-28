@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
@@ -113,14 +114,24 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Bump Row-Bot release version files.")
     parser.add_argument("version", help="New version, e.g. 5.0.0")
     parser.add_argument("--root", type=Path, default=ROOT, help=argparse.SUPPRESS)
+    parser.add_argument("--no-docs", action="store_true",
+                        help="Don't publish the docs site now (run scripts/docs/publish.py before the release-prep PR)")
     args = parser.parse_args(argv)
     version = args.version
     bump(args.root, version)
+    if not args.no_docs:
+        # The docs site is published once per release, with the version it documents; the landing page isn't
+        # touched (it changes by hand, after the release).
+        import subprocess
+
+        subprocess.run([sys.executable, str(args.root / "scripts" / "docs" / "publish.py")],  # noqa: S603
+                       cwd=args.root, check=True)
 
     print(f"Prepared release version {version}")
     print("Next steps (docs/RELEASING.md):")
-    print("1. Update RELEASE_NOTES.md")
-    print("2. Run `uv run python scripts/run_test_matrix.py pr` and open the release-prep PR")
+    print("1. Update RELEASE_NOTES.md" + ("" if not args.no_docs else
+                                         ", and run `python scripts/docs/publish.py` to publish the docs"))
+    print("2. Run `uv run python scripts/run_test_matrix.py pr` and open the release-prep PR (with the docs)")
     print(f"3. After it merges and CI / ci-ok is green on the merge commit, tag it v{version},")
     print(f"   push the tag and run release.yml with version {version}")
 
