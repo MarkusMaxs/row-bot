@@ -27,11 +27,12 @@ TraceGroupKind = Literal["generic", "browser", "computer"]
 TraceSpecializationKind = Literal[
     "skill_load", "delegated_agent", "media", "resource_created", "resource_bound", "setup_needed", "connect_apps",
     "background_process", "recording", "video_edit", "delivery", "sandbox_job", "sandbox_unprepared",
-    "question_answered", "page", "request_corrected",
+    "question_answered", "page", "request_corrected", "linked_conversation",
 ]
 CARD_SPECIALIZATIONS = frozenset({
     "resource_created", "resource_bound", "setup_needed", "connect_apps", "background_process", "recording",
     "video_edit", "delivery", "sandbox_job", "sandbox_unprepared", "question_answered", "page",
+    "linked_conversation",
 })
 # A recording of Row-Bot's browser or of the screen a step started or stopped (F2): the result's
 # first line after its approval line names it, and the card follows it by that id.
@@ -622,6 +623,13 @@ def _card_specialization(name: str, payload: dict[str, Any] | None) -> TraceSpec
         apps = tuple({**card, "allow_changes": True} if item in allow else card
                      for item in payload["apps"][:MAX_SUGGESTIONS] if (card := app_card(item)) is not None)
         return TraceSpecialization(kind="connect_apps", apps=apps) if apps else None
+    if name == "conversation_start" and payload.get("kind") == "linked_conversation":
+        # A conversation this one started or proposed (5.3.1 C): the card follows it by its link id.
+        link_id = _clean_text(payload.get("link_id"), 32)
+        title = _clean_text(payload.get("title"), 160)
+        if not re.fullmatch(r"[0-9a-f]{32}", link_id) or not title:
+            return None
+        return TraceSpecialization(kind="linked_conversation", display_name=title, link_id=link_id)
     if name == "request_connection" and payload.get("kind") == "setup_needed":  # Chats from before Phase 5.
         target = _clean_text(payload.get("target"), 64)
         page = _CONNECTION_PAGES.get(target, "")

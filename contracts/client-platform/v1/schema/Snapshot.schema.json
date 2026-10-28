@@ -214,6 +214,39 @@
       "title": "GenerationState",
       "type": "object"
     },
+    "LinkedFrom": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9:_-]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "default": "message",
+          "enum": [
+            "message",
+            "reply"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title"
+      ],
+      "title": "LinkedFrom",
+      "type": "object"
+    },
     "MarkdownBlock": {
       "additionalProperties": false,
       "properties": {
@@ -514,9 +547,17 @@
             "sandbox_unprepared",
             "question_answered",
             "page",
-            "request_corrected"
+            "request_corrected",
+            "linked_conversation"
           ],
           "title": "Kind",
+          "type": "string"
+        },
+        "link_id": {
+          "default": "",
+          "maxLength": 32,
+          "pattern": "^([0-9a-f]{32})?$",
+          "title": "Link Id",
           "type": "string"
         },
         "media": {
@@ -736,6 +777,17 @@
           "title": "Id",
           "type": "string"
         },
+        "linked_from": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LinkedFrom"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "message_id": {
           "anyOf": [
             {
@@ -757,7 +809,8 @@
                 "agent_task",
                 "agent_guidance",
                 "page",
-                "personal_model_fallback"
+                "personal_model_fallback",
+                "linked"
               ],
               "type": "string"
             },
