@@ -4,7 +4,7 @@ display_name: Task Automation
 icon: "⚙️"
 description: Design effective automated workflows using scheduled tasks, clear messages, and delivery channels.
 enabled_by_default: true
-version: "4.1"
+version: "4.2"
 tags:
   - automation
   - productivity
@@ -64,6 +64,12 @@ There are three kinds:
 
 6. **One workflow** when the work belongs together — research that searches, reads sources and writes a brief is one message.
 7. **Separate workflows** when the pieces are independent — a morning weather check and an inbox summary don't need each other. Separate workflows can be turned on and off, scheduled and delivered on their own.
+
+## Handing Work On
+
+- **Send, don't search** — when one workflow's result is another's input (a trends brief for a publisher), the first ends with `conversation_send` to the second workflow's conversation, by name. It arrives as a message from that conversation and starts a turn there; never leave a result for the next one to search for.
+- **Share pictures, clips and voice lines through Library › Media** — `media_find` finds them by words, kind or tag, `media_tag` tags them ("x post", "launch"), and `media_bring` copies one into the conversation or workflow that needs it.
+- **Real screenshots and clips** — a `sandbox` is a second Row-Bot on made-up data. Open it in Row-Bot's browser, then take a `browser_screenshot`, or `browser_record` a few steps and mark beats, and make the clip with `video`, `recording=rec-…`. Never film or capture the person's own Row-Bot.
 
 ## Scheduling
 

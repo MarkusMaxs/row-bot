@@ -24,11 +24,11 @@ def _conversation() -> str:
     return str(current_thread_id() or "")
 
 
-def _save(name: str, data: bytes) -> str:
+def _save(name: str, data: bytes, conversation: str = "") -> str:
     """Save to the chat's files; the name it's saved as (or why it wasn't)."""
     from row_bot.application.attachments import AttachmentError, register_attachment
 
-    conversation = _conversation()
+    conversation = conversation or _conversation()
     if not conversation:
         raise ValueError("This works in a conversation.")
     try:
@@ -93,12 +93,12 @@ class _TranscribeInput(BaseModel):
     name: str = Field(default="", description="The subtitles file's name.")
 
 
-def _source(value: str) -> tuple[str, Path | None, bytes | None, str]:
+def _source(value: str, conversation: str = "") -> tuple[str, Path | None, bytes | None, str]:
     """(label, path, bytes, suffix) of an audio or video file the person can see."""
     from row_bot import media_sources
     from row_bot.application.attachments import AttachmentError, list_conversation_files, read_attachment
 
-    conversation = _conversation()
+    conversation = conversation or _conversation()
     text = str(value or "").strip()
     for item in list_conversation_files(conversation):
         if str(item["name"]).casefold() == text.casefold():

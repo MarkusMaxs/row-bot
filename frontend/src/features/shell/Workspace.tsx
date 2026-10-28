@@ -19,6 +19,7 @@ import {
   BookOpen,
   Brain,
   ChevronLeft,
+  Clapperboard,
   Code2,
   Columns3,
   Compass,
@@ -112,6 +113,13 @@ import { designCommandSets } from '../panels/design-commands';
 import BrowserPane from '../browser/BrowserPane';
 import { BROWSER_PANEL, onBrowserPaneRequest } from '../browser/open-pane';
 import PagePanel from '../pages/PagePanel';
+import VideoPanel from '../video/VideoPanel';
+import {
+  VIDEO_PANEL_KIND,
+  onVideoRequest,
+  takeWaitingVideo,
+  type VideoRequest,
+} from '../video/open-video';
 import {
   PAGE_PANEL_KIND,
   onPageRequest,
@@ -145,7 +153,9 @@ function panelIcon(descriptor: PanelDescriptor): LucideIcon {
         ? Globe
         : descriptor.panel_kind === PAGE_PANEL_KIND
           ? LayoutTemplate
-          : BookOpen;
+          : descriptor.panel_kind === VIDEO_PANEL_KIND
+            ? Clapperboard
+            : BookOpen;
 }
 
 /** The sheet header names the kind; the panel itself shows the resource. */
@@ -176,6 +186,28 @@ function PagePanelContent({
     <PagePanel
       conversationId={conversationId}
       pageId={pageId}
+      visible={visible}
+    />
+  );
+}
+
+/** A video project beside its chat (5.3.1 B3); its id is the subresource key. */
+function VideoPanelContent({
+  panel,
+  visible,
+}: {
+  panel: PanelInstance;
+  visible: boolean;
+}) {
+  const conversationId = useClientSelector(
+    (value) => value.selectedConversationId,
+  );
+  const projectId = panel.descriptor.subresource_key ?? '';
+  if (!conversationId || !projectId) return null;
+  return (
+    <VideoPanel
+      conversationId={conversationId}
+      projectId={projectId}
       visible={visible}
     />
   );
@@ -296,6 +328,8 @@ function PanelContent({
     <BrowserPanel visible={visible} />
   ) : panel.descriptor.panel_kind === PAGE_PANEL_KIND ? (
     <PagePanelContent panel={panel} visible={visible} />
+  ) : panel.descriptor.panel_kind === VIDEO_PANEL_KIND ? (
+    <VideoPanelContent panel={panel} visible={visible} />
   ) : import.meta.env.VITE_ENABLE_FIXTURES === '1' ? (
     <SamplePanel panel={panel} visible={visible} />
   ) : (
@@ -499,6 +533,26 @@ export default function Workspace() {
   useEffect(() => {
     const waiting = conversationId ? takeWaitingPage(conversationId) : null;
     if (waiting) openPage(waiting);
+  }, [conversationId]);
+  // A video project's card opens the Video panel beside its chat (5.3.1 B3).
+  const openVideo = useEffectEvent((request: VideoRequest) => {
+    if (request.conversationId !== conversationId) return false;
+    showPanel(
+      {
+        panel_kind: VIDEO_PANEL_KIND,
+        title: request.title,
+        subresource_key: request.projectId,
+      },
+      undefined,
+      undefined,
+      { wide: true },
+    );
+    return true;
+  });
+  useEffect(() => onVideoRequest(openVideo), []);
+  useEffect(() => {
+    const waiting = conversationId ? takeWaitingVideo(conversationId) : null;
+    if (waiting) openVideo(waiting);
   }, [conversationId]);
   const presentationScope = useRef({
     conversationId,
@@ -2149,7 +2203,8 @@ export default function Workspace() {
         {conversationId &&
           railPanels.length > 0 &&
           // A page full screen on a phone has Back and × at the top: no third way out (N5).
-          compact?.descriptor.panel_kind !== PAGE_PANEL_KIND && (
+          compact?.descriptor.panel_kind !== PAGE_PANEL_KIND &&
+          compact?.descriptor.panel_kind !== VIDEO_PANEL_KIND && (
             <aside
               className={`panel-rail ${desktop ? 'panel-rail-docked' : ''}`}
               aria-label="Panel rail"

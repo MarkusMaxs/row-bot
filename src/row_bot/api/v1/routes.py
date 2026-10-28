@@ -1030,6 +1030,14 @@ _STATUS.update(
         "recording_unavailable": 404,
         "local_address_unavailable": 404,
         "video_edit_unavailable": 404,
+        "video_project_unavailable": 404,
+        "video_project_stale": 409,
+        "video_project_invalid": 422,
+        "video_project_needs_ffmpeg": 409,
+        "video_project_not_made": 409,
+        "video_brand_invalid": 422,
+        "row_bot_sandbox_unavailable": 404,
+        "row_bot_sandbox_refused": 409,
         "sent_file_unavailable": 404,
         "sent_file_expired": 410,
         "sent_files_gone": 409,
@@ -1086,6 +1094,7 @@ _STATUS['upload_too_large'] = 413
 # An answer that doesn't fit Row-Bot's question, or answers sent for an approval (N4).
 _STATUS['question_answer_invalid'] = 422
 _STATUS['approval_edit_invalid'] = 422
+_STATUS['media_unavailable'] = 404
 _STATUS['scheduled_post_unavailable'] = 404
 _STATUS['app_not_connected'] = 409  # A workflow template whose app is not connected yet.
 # Pages (N5): gone, not valid, too big, written to too often, or nothing to send.
@@ -1155,6 +1164,12 @@ class ProtocolRoute(APIRoute):
                 return problem(exc)
 
         return safe_handler
+
+
+def _is_sandbox() -> bool:
+    from row_bot.sandboxes import is_sandbox
+
+    return is_sandbox()
 
 
 def problem(exc: Exception) -> JSONResponse:
@@ -1568,6 +1583,7 @@ def create_router(
                 ),
                 # A new schedule keeps its times in this zone unless another is chosen (N9).
                 "server_timezone": _schedule_zone_name(),
+                "sandbox": _is_sandbox(),
                 "native_adapter": {
                     "available": native_window,
                     "proof_required": True,
@@ -5470,6 +5486,160 @@ def create_router(
             raise ProtocolError("video_edit_unavailable", 404)
         return await respond(request, dto.VideoEditView, result)
 
+    # Video projects (5.3.1 B3): the Video panel reads a project and adds the person's versions.
+    def _project_id(value: str) -> str:
+        from row_bot.video_projects import PROJECT_ID
+
+        if not PROJECT_ID.fullmatch(str(value or "")):
+            raise ProtocolError("video_project_unavailable", 404)
+        return value
+
+    async def _project_call(function: Any, *args: Any) -> Any:
+        from row_bot.application.video_project_views import ProjectRefused
+
+        try:
+            result = await call(function, *args)
+        except ProjectRefused as error:
+            raise ProtocolError(str(error), _STATUS[str(error)]) from None
+        if result is None:
+            raise ProtocolError("video_project_unavailable", 404)
+        return result
+
+    @router.get("/video-projects/{project_id}")
+    async def video_project(request: Request, project_id: str, version: int | None = None) -> JSONResponse:
+        await session(request)
+        from row_bot.application.video_project_views import read_video_project
+
+        result = await _project_call(read_video_project, _project_id(project_id), version)
+        return await respond(request, dto.VideoProjectView, result)
+
+    @router.put("/video-projects/{project_id}")
+    async def change_video_project_route(request: Request, project_id: str) -> JSONResponse:
+        await session(request, lane="mutation")
+        from row_bot.application.video_project_views import change_video_project
+
+        body = await _body(request, dto.VideoProjectChange, 256 * 1024)
+        result = await _project_call(change_video_project, _project_id(project_id), body.model_dump())
+        return await respond(request, dto.VideoProjectView, result)
+
+    @router.post("/video-projects/{project_id}/restore")
+    async def restore_video_project_route(request: Request, project_id: str) -> JSONResponse:
+        await session(request, lane="mutation")
+        from row_bot.application.video_project_views import restore_video_project
+
+        body = await _body(request, dto.VideoProjectRestore, 4 * 1024)
+        result = await _project_call(restore_video_project, _project_id(project_id), body.number)
+        return await respond(request, dto.VideoProjectView, result)
+
+    # Sandboxes (5.3.1 B4): second Row-Bots on made-up data, started, stopped and opened from Settings › Data.
+    def _row_bot_sandbox_id(value: str) -> str:
+        from row_bot.sandboxes import SANDBOX_ID
+
+        if not SANDBOX_ID.fullmatch(str(value or "")):
+            raise ProtocolError("row_bot_sandbox_unavailable", 404)
+        return value
+
+    async def _sandbox_call(function: Any, *args: Any) -> Any:
+        from row_bot import sandboxes
+
+        if sandboxes.is_sandbox():
+            raise ProtocolError("row_bot_sandbox_refused", 409)
+        try:
+            return await call(function, *args)
+        except sandboxes.SandboxError as error:
+            gone = "no longer here" in str(error)
+            raise ProtocolError("row_bot_sandbox_unavailable" if gone else "row_bot_sandbox_refused",
+                                404 if gone else 409) from None
+
+    def _sandbox_page() -> dict[str, Any]:
+        from row_bot import sandboxes
+        from row_bot.sandbox_packs import PACKS
+
+        inside = sandboxes.is_sandbox()
+        return {"items": [] if inside else [sandboxes.view(item) for item in sandboxes.list_sandboxes()],
+                "packs": [{"pack": pack, "name": name} for pack, name in PACKS.items()], "available": not inside}
+
+    @router.get("/row-bot-sandboxes")
+    async def row_bot_sandboxes(request: Request) -> JSONResponse:
+        await session(request)
+        return await respond(request, dto.RowBotSandboxPage, await call(_sandbox_page))
+
+    @router.post("/row-bot-sandboxes")
+    async def create_row_bot_sandbox(request: Request) -> JSONResponse:
+        await session(request, lane="mutation")
+        from row_bot import sandboxes
+
+        body = await _body(request, dto.RowBotSandboxCreate, 4 * 1024)
+        created = await _sandbox_call(sandboxes.create, body.name, body.pack)
+        return await respond(request, dto.RowBotSandboxView, sandboxes.view(created))
+
+    @router.post("/row-bot-sandboxes/{sandbox_id}/link")
+    async def row_bot_sandbox_link(request: Request, sandbox_id: str) -> JSONResponse:
+        await session(request, lane="mutation")
+        from row_bot import sandboxes
+
+        url = await _sandbox_call(sandboxes.sign_in_url, _row_bot_sandbox_id(sandbox_id))
+        return await respond(request, dto.RowBotSandboxLink, {"url": url})
+
+    @router.post("/row-bot-sandboxes/{sandbox_id}/{action}")
+    async def act_on_row_bot_sandbox(request: Request, sandbox_id: str, action: str) -> JSONResponse:
+        await session(request, lane="mutation")
+        from row_bot import sandboxes
+
+        run = {"start": sandboxes.start, "stop": sandboxes.stop, "reset": sandboxes.reset}.get(action)
+        if run is None:
+            raise ProtocolError("row_bot_sandbox_unavailable", 404)
+        result = await _sandbox_call(run, _row_bot_sandbox_id(sandbox_id))
+        return await respond(request, dto.RowBotSandboxView, sandboxes.view(result))
+
+    @router.delete("/row-bot-sandboxes/{sandbox_id}")
+    async def delete_row_bot_sandbox(request: Request, sandbox_id: str) -> JSONResponse:
+        await session(request, lane="mutation")
+        from row_bot import sandboxes
+
+        await _sandbox_call(sandboxes.delete, _row_bot_sandbox_id(sandbox_id))
+        return await respond(request, dto.RowBotSandboxPage, await call(_sandbox_page))
+
+    @router.get("/video-brand")
+    async def video_brand_route(request: Request) -> JSONResponse:
+        await session(request)
+        from dataclasses import asdict
+
+        from row_bot import video_brand
+
+        return await respond(request, dto.VideoBrand, asdict(await call(video_brand.load)))
+
+    @router.put("/video-brand")
+    async def save_video_brand(request: Request) -> JSONResponse:
+        await session(request, lane="mutation")
+        from dataclasses import asdict
+
+        from row_bot import video_brand
+
+        body = await _body(request, dto.VideoBrand, 8 * 1024)
+        try:
+            saved = await call(video_brand.save, body.model_dump())
+        except video_brand.BrandError:
+            raise ProtocolError("video_brand_invalid", 422) from None
+        return await respond(request, dto.VideoBrand, asdict(saved))
+
+    @router.post("/video-projects/{project_id}/export")
+    async def export_video_project_route(request: Request, project_id: str) -> JSONResponse:
+        await session(request, lane="mutation")
+        from row_bot.application.video_project_views import export_video_project
+
+        body = await _body(request, dto.VideoProjectExport, 4 * 1024)
+        result = await _project_call(export_video_project, _project_id(project_id), body.shape)
+        return await respond(request, dto.VideoProjectView, result)
+
+    @router.post("/video-projects/{project_id}/make")
+    async def make_video_project_route(request: Request, project_id: str) -> JSONResponse:
+        await session(request, lane="mutation")
+        from row_bot.application.video_project_views import make_video_project
+
+        result = await _project_call(make_video_project, _project_id(project_id))
+        return await respond(request, dto.VideoProjectView, result)
+
     # Files sent to the person's devices or a chat app (F7). Every signed-in device is the owner's,
     # so each sees every delivery; a download needs the session and ends when its copy expires.
     def _delivery(value: str, index: str | None = None) -> tuple[str, int]:
@@ -5600,6 +5770,28 @@ def create_router(
         from row_bot.pages import views
 
         return await respond(request, dto.PagePage, await call(views, (conversation_id or "")[:256] or None))
+
+    @router.get("/media")
+    async def media_list(request: Request, query: str = "", kind: str = "") -> JSONResponse:
+        # Library › Media (5.3.1 B3): every picture, video and sound in the chats, newest first.
+        await session(request)
+        from row_bot import media_library
+
+        items = await call(media_library.items, query=query[:200],
+                           kind=kind if kind in {"image", "video", "audio"} else "", limit=500)
+        return await respond(request, dto.MediaPage, {"items": items})
+
+    @router.put("/media/tags")
+    async def media_tags(request: Request) -> JSONResponse:
+        await session(request, lane="mutation")
+        body = await _body(request, dto.MediaTagsWrite, 16 * 1024)
+        from row_bot import media_library
+
+        try:
+            tags = await call(media_library.set_tags, body.ref, body.tags)
+        except media_library.MediaError:
+            raise ProtocolError("media_unavailable", 404) from None
+        return await respond(request, dto.MediaTags, {"ref": body.ref, "tags": tags})
 
     @router.get("/pages/{page_id}")
     async def page_read(request: Request, page_id: str) -> JSONResponse:

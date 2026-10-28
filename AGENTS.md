@@ -163,11 +163,18 @@ tiers.
   (performance budgets and Windows pixel baselines) needs a quiet local machine.
 - Nightly (`.github/workflows/nightly.yml`): the whole deterministic suite with
   the slow tests on Linux (with coverage), Windows and macOS, the browser
-  nightly set at desktop and phone, a Linux package smoke and the docs reference
-  check; weekly, installer-verify on Windows and macOS and the browser smoke on
-  Firefox and WebKit. Locally: `uv run python scripts/run_test_matrix.py nightly`.
+  nightly set at desktop and phone and a Linux package smoke; weekly,
+  installer-verify on Windows and macOS and the browser smoke on Firefox and
+  WebKit. Locally: `uv run python scripts/run_test_matrix.py nightly`.
 - `tests/docs` and `tests/marketing` belong to `.github/workflows/docs.yml`
   (`run_test_matrix.py docs` locally).
+- The published docs site in `docs/` (its `docs/`, `assets/`, `pagefind/`,
+  `search/` and LLM exports) and the generated reference pages are rebuilt only
+  when a release is prepared: `scripts/cut_release.py` runs
+  `scripts/docs/publish.py`. Pull requests change the docs' sources in
+  `docs-site/docs` and never rebuild or commit the built site. The landing page
+  (the rest of `docs/`'s root) changes by hand, after a release, in a pull
+  request labelled `landing`; the Docs workflow refuses any other change to it.
 - The required check on `main` is `CI / ci-ok`. Never add Ollama or another
   live service to a deterministic lane.
 

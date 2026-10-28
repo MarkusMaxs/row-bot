@@ -71,6 +71,10 @@ class VideoEdit:
     frame_refs: list[str] = field(default_factory=list)
     frame_times: list[float] = field(default_factory=list)
     ffmpeg: str = ""
+    checks: list[str] = field(default_factory=list)
+    checks_passed: bool | None = None
+    # A video project's scene starts on the video, then its end (5.3.1 B3).
+    marks: list[float] = field(default_factory=list)
     done: threading.Event = field(default_factory=threading.Event)
     stop_event: threading.Event = field(default_factory=threading.Event)
 
@@ -97,6 +101,10 @@ class Request:
     download: bool = False
     # Voice and music files a sound step names (5.3.1 B): name -> (path, or the chat file's bytes and suffix).
     sounds: dict[str, tuple[Any, bytes, str]] = field(default_factory=dict)
+    # Read the finished video's sound, black and still stretches (a video project's review card).
+    check: bool = False
+    # Make a looping GIF of the one source video instead (a video project's export).
+    gif: bool = False
 
 
 _LOCK = threading.RLock()
@@ -130,7 +138,7 @@ def _iso(value: float | None) -> str | None:
 
 _SAVED_FIELDS = ("edit_id", "conversation_id", "kind", "summary", "output_name", "started_at", "status",
                  "expected_seconds", "process_id", "ended_at", "stopped_by", "problem", "detail", "media_ref",
-                 "mime_type", "size_bytes", "frame_refs", "frame_times", "ffmpeg")
+                 "mime_type", "size_bytes", "frame_refs", "frame_times", "ffmpeg", "checks", "checks_passed", "marks")
 
 
 def _save(edit: VideoEdit) -> None:
@@ -162,6 +170,9 @@ def _load(path: Path) -> VideoEdit | None:
         edit.size_bytes = int(data.get("size_bytes") or 0)
         edit.frame_refs = [str(item) for item in data.get("frame_refs") or []][:64]
         edit.frame_times = [float(item) for item in data.get("frame_times") or []][:64]
+        edit.checks = [str(item)[:300] for item in data.get("checks") or []][:12]
+        edit.checks_passed = None if data.get("checks_passed") is None else bool(data["checks_passed"])
+        edit.marks = [float(item) for item in data.get("marks") or []][:61]
         return edit
     except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
         return None
@@ -255,6 +266,8 @@ def start(request: Request) -> VideoEdit:
 
 
 def _summary(request: Request) -> str:
+    if request.gif:
+        return f"A GIF of {request.sources[0].label}"
     if request.kind == "frames":
         count = len(request.times) if request.times else max(1, request.count)
         return f"{count} still{'s' if count != 1 else ''} from {request.sources[0].label}"
@@ -383,6 +396,25 @@ def _measure(edit: VideoEdit, ffmpeg: Any, folder: Path) -> None:
     _set(edit, expected_seconds=round(info.duration, 2))
 
 
+def _save_gif(edit: VideoEdit, output: Path) -> None:
+    from row_bot.application.attachments import AttachmentError, register_attachment
+    from row_bot.video_editing import EditError
+
+    _set(edit, status="saving")
+    data = output.read_bytes() if output.is_file() else b""
+    if not data:
+        raise EditError("ffmpeg finished but made no GIF.")
+    try:
+        saved = register_attachment(edit.conversation_id, edit.output_name, data)
+    except AttachmentError:
+        edit.problem = "not_saved"
+        raise EditError("The GIF couldn't be saved to this chat: make the video shorter first.") from None
+    if saved.get("mime_type") != "image/gif":
+        edit.problem = "not_saved"
+        raise EditError("ffmpeg didn't make a GIF.")
+    _set(edit, media_ref=str(saved["attachment_ref"]), mime_type="image/gif", size_bytes=len(data))
+
+
 def _save_video(edit: VideoEdit, output: Path) -> None:
     from row_bot.application.attachments import MAX_ATTACHMENT_BYTES, AttachmentError, register_attachment
     from row_bot.video_editing import EditError
@@ -441,6 +473,30 @@ def _save_frames(edit: VideoEdit, folder: Path, names: list[str], times: list[fl
          mime_type=str(saved["mime_type"]), size_bytes=len(sheet))
 
 
+def check_file(ffmpeg: Any, path: Path, folder: Path) -> Any:
+    """Read a finished video for its sound level, black stretches and still stretches (``Checks``)."""
+    from row_bot.video_editing import check_arguments, read_checks
+
+    info = probe_video(ffmpeg, str(path), folder)
+    try:
+        done = subprocess.run(  # noqa: S603 - the resolved ffmpeg, arguments built by video_editing
+            ffmpeg.command(*check_arguments(path, has_audio=info.has_audio)), cwd=folder, capture_output=True,
+            text=True, timeout=1800, check=False, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            encoding="utf-8", errors="replace",
+        )
+    except subprocess.TimeoutExpired:
+        from row_bot.video_editing import EditError
+
+        raise EditError("Checking took too long: check a shorter part (trim it first).") from None
+    return read_checks(done.stderr or "", info)
+
+
+def _check_video(edit: VideoEdit, ffmpeg: Any, folder: Path) -> None:
+    _check(edit)
+    checks = check_file(ffmpeg, folder / "output.mp4", folder)
+    _set(edit, checks=list(checks.lines), checks_passed=bool(checks.passed))
+
+
 def _run(edit: VideoEdit, request: Request) -> None:
     from row_bot import ffmpeg_runtime
     from row_bot.media_sources import SourceError
@@ -456,7 +512,13 @@ def _run(edit: VideoEdit, request: Request) -> None:
         folder.mkdir(parents=True, exist_ok=True)
         inputs = _inputs(edit, request, ffmpeg, folder)
         _check(edit)
-        if request.kind == "video":
+        if request.gif:
+            from row_bot.video_editing import gif_arguments
+
+            _set(edit, expected_seconds=round(inputs[0].info.duration, 2))
+            _run_process(edit, ffmpeg, gif_arguments(inputs[0].path, "output.gif"), folder, "Video GIF")
+            _save_gif(edit, folder / "output.gif")
+        elif request.kind == "video":
             sounds: dict[str, str] = {}
             for number, (name, (path, data, suffix)) in enumerate(request.sounds.items(), start=1):
                 if path is None:  # A chat file: copied in, so ffmpeg reads only the edit's own folder.
@@ -471,9 +533,11 @@ def _run(edit: VideoEdit, request: Request) -> None:
             (folder / "graph.txt").write_text(plan.graph, encoding="utf-8", newline="\n")
             for name, data in plan.overlays:
                 (folder / name).write_bytes(data)
-            _set(edit, expected_seconds=round(plan.duration, 2))
+            _set(edit, expected_seconds=round(plan.duration, 2), marks=list(plan.marks))
             _run_process(edit, ffmpeg, plan.args, folder, "Video edit")
             _measure(edit, ffmpeg, folder)
+            if request.check:
+                _check_video(edit, ffmpeg, folder)
             _save_video(edit, folder / "output.mp4")
         else:
             info = inputs[0].info

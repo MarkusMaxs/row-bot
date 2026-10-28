@@ -28,3 +28,25 @@ def test_every_chat_gets_a_short_self_description_that_points_to_features(tmp_pa
     assert "Core capabilities:" not in block
     assert "~/Documents" not in block
     assert len(block) < 600
+
+
+
+def test_the_turns_state_leaves_out_counts_that_change_every_turn_and_status_says_them(tmp_path, monkeypatch):
+    """G9: a new memory or a Dream Cycle doesn't send the whole state block again; row_bot_status answers both."""
+    from row_bot import dream_cycle, knowledge_graph, self_knowledge
+    from row_bot.tools import row_bot_status_tool as status
+
+    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path))
+    entities = [658]
+    monkeypatch.setattr(knowledge_graph, "count_entities", lambda: entities[0])
+    monkeypatch.setattr(knowledge_graph, "count_relations", lambda: 1200)
+    monkeypatch.setattr(dream_cycle, "get_dream_status", lambda: {"last_summary": "2 insight(s), in 92s"})
+
+    before = self_knowledge.get_dynamic_state()
+    entities[0] += 1  # A memory saved during the turn.
+    after = self_knowledge.get_dynamic_state()
+
+    assert before == after, "the state is the same after one more memory"
+    assert "Knowledge graph" not in before and "dream cycle" not in before.lower()
+    memory = status._row_bot_status("memory")
+    assert "- Entities: 659" in memory and "- Last Dream Cycle: 2 insight(s), in 92s" in memory

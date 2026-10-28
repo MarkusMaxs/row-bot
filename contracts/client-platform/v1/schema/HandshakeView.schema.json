@@ -364,6 +364,11 @@
       "title": "Protocol Version",
       "type": "string"
     },
+    "sandbox": {
+      "default": false,
+      "title": "Sandbox",
+      "type": "boolean"
+    },
     "server_epoch": {
       "maxLength": 128,
       "minLength": 1,
