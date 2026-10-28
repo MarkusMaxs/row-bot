@@ -1,5 +1,6 @@
-"""read_url opens public web pages only: a page the agent reads can't steer it to this computer, the local
-network or a cloud metadata service, directly, through a redirect or through a name that rebinds."""
+"""read_url opens public web pages, and an address on this computer or the person's network once the chat
+allows it (5.3.1 A2, shared with the browser). A page the agent reads can't steer it to an address the chat
+hasn't allowed or to a cloud metadata service, directly, through a redirect or through a name that rebinds."""
 
 from __future__ import annotations
 
@@ -25,6 +26,25 @@ def web(monkeypatch):
         yield site
 
 
+@pytest.fixture
+def asked(monkeypatch):
+    """The person's answers to approvals (True allows), and the approvals asked."""
+    from row_bot.browser.service import BrowserSessionManager
+    from row_bot.tools import approval_gate, browser_tool
+
+    manager = BrowserSessionManager()
+    monkeypatch.setattr(browser_tool, "_session_manager", manager)
+    monkeypatch.setattr(approval_gate, "current_approval_mode", lambda: "approve")
+    questions: list[dict] = []
+    answers: list[bool] = []
+    monkeypatch.setattr("langgraph.types.interrupt",
+                        lambda payload: questions.append(payload) or (answers.pop(0) if answers else False))
+    yield questions, answers, manager
+    engine = manager.engine()
+    if engine is not None:
+        engine._closed = True
+
+
 def _read(url: str) -> str:
     from row_bot.tools.url_reader_tool import _read_url
 
@@ -44,36 +64,59 @@ def test_a_public_page_is_read_over_a_connection_to_its_checked_address(web):
 
 
 @pytest.mark.parametrize("url", [
-    "http://localhost/",
-    "http://app.localhost/",
-    "http://printer.local/",
     "http://metadata.google.internal/computeMetadata/v1/",
     "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
     "http://[fd00:ec2::254]/latest/meta-data/",
     "http://168.63.129.16/machine?comp=goalstate",
     "http://100.100.100.200/latest/meta-data/",
-    "http://10.0.0.5/admin",
-    "http://192.168.1.1/",
-    "http://[::1]/",
-    "http://[::ffff:127.0.0.1]/",
     "http://rebind.example/",
     "http://intranet.example/",
     "http://cloud.example/latest/meta-data/",
     "http://mixed.example/",
 ])
-def test_links_to_this_computer_the_network_or_metadata_are_refused_before_connecting(web, url):
+def test_metadata_and_public_names_reaching_private_addresses_are_refused_without_asking(web, asked, url):
     from row_bot.tools.url_reader_tool import NOT_PUBLIC_MESSAGE
 
+    questions, _answers, _manager = asked
     assert _read(url) == NOT_PUBLIC_MESSAGE
-    assert web.connected == []
-    assert web.served == []
+    assert questions == [] and web.connected == [] and web.served == []
 
 
-def test_the_loopback_server_itself_is_refused(web):
-    from row_bot.tools.url_reader_tool import NOT_PUBLIC_MESSAGE
+@pytest.mark.parametrize("url", [
+    "http://localhost/",
+    "http://app.localhost/",
+    "http://10.0.0.5/admin",
+    "http://192.168.1.1/",
+    "http://[::1]/",
+    "http://[::ffff:127.0.0.1]/",
+])
+def test_an_address_on_this_computer_or_the_network_asks_and_a_no_reads_nothing(web, asked, url):
+    questions, _answers, manager = asked
 
-    assert _read(f"http://127.0.0.1:{web.loopback_port}/") == NOT_PUBLIC_MESSAGE
-    assert web.served == []
+    assert "wasn't read" in _read(url)
+    assert questions[0]["tool"] == "read_url" and questions[0]["question"].startswith("Allow Row-Bot to read ")
+    assert web.connected == [] and manager.local_address_grants("default") == []
+
+
+def test_an_allowed_address_is_read_and_the_browser_shares_the_grant(web, asked):
+    questions, answers, manager = asked
+    origin = f"http://127.0.0.1:{web.loopback_port}"
+    web.page(f"{origin}/notes", PAGE)
+    answers.append(True)
+
+    assert "Rent rises to 1,250." in _read(f"{origin}/notes")
+    assert "Rent rises to 1,250." in _read(f"{origin}/notes")  # Allowed in this chat: not asked again.
+
+    assert len(questions) == 1
+    assert [(grant.origin, grant.source) for grant in manager.local_address_grants("default")] == [(origin, "you")]
+
+
+def test_row_bot_itself_is_never_read(web, asked, monkeypatch):
+    questions, _answers, _manager = asked
+    monkeypatch.setattr("row_bot.app_port.get_app_port", lambda: 8080)
+
+    assert "is Row-Bot itself" in _read("http://localhost:8080/api/v1/settings")
+    assert questions == [] and web.connected == []
 
 
 @pytest.mark.parametrize("location", [
