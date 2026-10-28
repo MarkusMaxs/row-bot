@@ -2488,6 +2488,9 @@ def _n11_resume(enabled_tools: list[str], config: dict, approved: bool, *, inter
 
 def stream(text: str, enabled_tools: list[str], config: dict, *, stop_event=None):
     """Script real tools/media projection and a durable final behind a barrier."""
+    if text.startswith(("Notes this workflow kept", "This workflow has no notes")):
+        # A workflow run's first message leads with its notes (G4); the script follows its own message.
+        text = text.rsplit("\n\n---\n\n", 1)[-1]
     if text.startswith("l1a ") and text.rstrip().endswith("fixture"):
         # Learning (L1a): a reply to Teach on, after a step that failed.
         yield from _l1a_stream(text, config)

@@ -63,10 +63,7 @@ def person_rules(conversation_id: str) -> dict | None:
 
 def _notes_conn() -> Any:
     from row_bot import tasks
-    conn = tasks._get_conn()
-    conn.execute("CREATE TABLE IF NOT EXISTS workflow_notes (task_id TEXT PRIMARY KEY, text TEXT NOT NULL, "
-                 "updated_at TEXT NOT NULL)")
-    return conn
+    return tasks._get_conn()
 
 
 def notes(task_id: str) -> str:
