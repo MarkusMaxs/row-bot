@@ -4999,6 +4999,8 @@ class PendingApproval(WireModel):
     # A helper's approval: the conversation that started it, which shows it too (B348).
     parent_conversation_id: OpaqueId | None = None
     task_id: OpaqueId | None
+    # It sends a post or an email: Home's Review shows it in full (G3).
+    goes_out: Literal["post", "email"] | None = None
 
 
 class PendingApprovalPage(WireModel):
@@ -8503,6 +8505,30 @@ class XPostApproval(WireModel):
     media: list[XPostMedia] = Field(default_factory=list, max_length=4)
     # How long a post the account may send (280, or 25,000 with an X subscription); 0 when X didn't say.
     limit: int = Field(default=0, ge=0, le=25000)
+    # Its time slot (G3), local "YYYY-MM-DDTHH:MM": approving schedules it for then. "" posts at once.
+    post_at: str = Field(default="", max_length=16, pattern=r"^(\d{4}-\d\d-\d\dT\d\d:\d\d)?$")
+
+
+class ScheduledPost(WireModel):
+    """A post approved for a time slot, waiting for it (G3); Cancel stops it."""
+
+    id: str = Field(pattern=r"^xs-[0-9a-f]{12}$")
+    account_id: str = Field(pattern=r"^[0-9]{1,20}$")
+    username: str = Field(default="", pattern=r"^[A-Za-z0-9_]{0,50}$")
+    action: Literal["post", "reply", "quote"]
+    text: str = Field(default="", max_length=25000)
+    target_url: str = Field(default="", max_length=256, pattern=r"^(https://x\.com/[A-Za-z0-9_]+/status/[0-9]+)?$")
+    post_at: str = Field(pattern=r"^\d{4}-\d\d-\d\dT\d\d:\d\d$")
+    media: list[XPostMedia] = Field(default_factory=list, max_length=4)
+
+
+class ScheduledPostPage(WireModel):
+    schema_version: Literal[1]
+    items: list[ScheduledPost] = Field(max_length=200)
+
+
+class ScheduledPostCancelled(WireModel):
+    cancelled: Literal[True]
 
 
 class ApprovalView(WireModel):

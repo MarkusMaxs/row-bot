@@ -639,6 +639,10 @@ const CATALOG: Record<string, Entry> = {
     'This approval expired. Close this and answer the current approval.',
     'review',
   ],
+  scheduled_post_unavailable: [
+    'That post already went out or was cancelled.',
+    'none',
+  ],
   approval_edit_invalid: [
     "That edit can't be used for this post. Close it and edit the post on its current card.",
     'review',

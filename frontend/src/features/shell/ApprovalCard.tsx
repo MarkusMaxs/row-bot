@@ -251,6 +251,8 @@ export default function ApprovalCard({
   onAllowInChat,
   onResolved,
   notice = false,
+  shortcut = true,
+  onLater,
 }: {
   id: string;
   hint?: Hint_;
@@ -264,6 +266,10 @@ export default function ApprovalCard({
    * (B162): no keyboard shortcut, and one quiet line once it was answered.
    */
   notice?: boolean;
+  /** False where several cards share a page (Home's Review): Ctrl+Enter answers none of them. */
+  shortcut?: boolean;
+  /** Not now: Home's Review sets the card aside; it keeps waiting. */
+  onLater?: () => void;
 }) {
   const { controller } = useRuntime();
   const overlay = useOverlay();
@@ -371,6 +377,7 @@ export default function ApprovalCard({
     !busy &&
     !resolution &&
     !notice &&
+    shortcut &&
     !editing &&
     !folderCard &&
     !questions.length;
@@ -607,6 +614,15 @@ export default function ApprovalCard({
             )}
           </div>
           <div className="approval-card-actions" hidden={editing}>
+            {onLater && (
+              <Button
+                variant="ghost"
+                disabled={busy || Boolean(resolution)}
+                onClick={onLater}
+              >
+                Not now
+              </Button>
+            )}
             {post && post.action !== 'delete' && !notice && (
               <IconButton
                 label="Edit the post"
@@ -637,15 +653,15 @@ export default function ApprovalCard({
             </Button>
             <Button
               variant="primary"
-              aria-label="Approve"
+              aria-label={post?.post_at ? 'Approve for then' : 'Approve'}
               aria-keyshortcuts={
-                notice ? undefined : 'Control+Enter Meta+Enter'
+                notice || !shortcut ? undefined : 'Control+Enter Meta+Enter'
               }
               disabled={busy || Boolean(resolution)}
               onClick={() => void resolve('approve')}
             >
-              Approve
-              {!notice && keyboard && (
+              {post?.post_at ? 'Approve for then' : 'Approve'}
+              {!notice && shortcut && keyboard && (
                 <span aria-hidden className="approval-card-kbd">
                   <Kbd keys="Mod+Enter" />
                 </span>

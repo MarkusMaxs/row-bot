@@ -4794,6 +4794,11 @@ def start_approval_monitor() -> None:
                 send_due_digests()
             except Exception:
                 logger.warning("Could not send the workflows' daily digests", exc_info=True)
+            try:
+                from row_bot.tools import x_posting
+                x_posting.send_due()  # Posts approved for a time slot (G3).
+            except Exception:
+                logger.warning("Could not send the scheduled X posts", exc_info=True)
             time.sleep(60)  # check every 60 seconds
 
     t = threading.Thread(target=_monitor, daemon=True, name="approval-monitor")

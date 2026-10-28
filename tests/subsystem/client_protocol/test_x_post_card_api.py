@@ -190,3 +190,70 @@ def test_an_edit_on_the_card_resumes_the_post_with_the_edit_and_approves_nothing
     assert resumed == [(False, ["x-card"], {"x-card": {"x_post_edit": {"text": "Row-Bot 5.3.1 is out.",
                                                                         "media": [shown["sha256"]]}}})]
     assert fake.posts == []
+
+
+
+def test_review_lists_what_goes_out_and_the_scheduled_posts_and_cancel_stops_one(service, tmp_path, monkeypatch):  # noqa: F811
+    """G3: the approvals feed marks a waiting post as one Review shows in full; scheduled posts list and cancel."""
+    from datetime import datetime, timedelta
+
+    from row_bot.api.v1.routes import create_client_platform_app
+    from row_bot.tools import approval_gate, x_posting
+    from row_bot.tools.x_tool import XTool
+    from row_bot import x_accounts
+
+    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "profile"))
+    fake = FakeXApi()
+    install(monkeypatch, fake, ROWBOT)
+    monkeypatch.setattr(approval_gate, "current_approval_mode", lambda: "ask")
+    tool = XTool()
+    monkeypatch.setattr(tool, "get_config", lambda key, default=None: default)
+    when = (datetime.now() + timedelta(hours=3)).replace(second=0, microsecond=0)
+
+    class Paused(Exception):
+        pass
+
+    def stream(_text, _enabled, _config, *, stop_event):
+        card: dict = {}
+
+        def pause(payload):
+            card.update(payload)
+            raise Paused
+        with monkeypatch.context() as patch:
+            patch.setattr(x_posting, "_ask", pause)
+            with pytest.raises(Paused):
+                tool._x_post("post", text="Evening post", account="@rowbot_ai",
+                             post_at=when.isoformat(timespec="minutes"))
+        yield "interrupt", [{"__interrupt_id": "x-card", **card}]
+
+    service.stream_factory = stream
+    account = x_accounts.resolve("@rowbot_ai", required=True)
+    kept = x_posting.schedule(account, "post", "Morning post", "", [], when - timedelta(hours=1))
+    app = create_client_platform_app(service, choices=lambda: {"models": [], "capabilities": []}, session_authenticator=person_window)
+    with TestClient(app, base_url="http://localhost", client=("127.0.0.1", 12345)) as client:
+        _, headers = bootstrap(client)
+        created = client.post("/api/v1/conversations/commands", headers={**headers, "Idempotency-Key": str(uuid4())},
+                              json={"command_id": str(uuid4()), "client_session_id": headers["X-Client-Session"],
+                                    "type": "conversation.create", "expected_revision": "0",
+                                    "payload": {"title": "Evening post"}})
+        conversation = created.json()["conversation_id"]
+        submitted = _post(client, headers, conversation, "conversation.submit", {
+            "submission_id": str(uuid4()), "text": "Post this evening",
+            "model_selection": {"provider_id": "fixture", "model_ref": "fixture::model"}})
+        handle = service.registry.get(submitted.json()["execution_id"])
+        assert handle.producer_done.wait(5)
+        feed = client.get("/api/v1/monitor/approvals", headers=headers).json()
+        view = client.get(f"/api/v1/approvals/{handle.approval_id}", headers=headers).json()
+        listed = client.get("/api/v1/monitor/scheduled-posts", headers=headers).json()
+        cancelled = client.delete(f"/api/v1/monitor/scheduled-posts/{kept['id']}", headers=headers)
+        again = client.delete(f"/api/v1/monitor/scheduled-posts/{kept['id']}", headers=headers)
+        after = client.get("/api/v1/monitor/scheduled-posts", headers=headers).json()
+
+    [waiting] = feed["items"]
+    assert (waiting["id"], waiting["goes_out"]) == (handle.approval_id, "post")
+    assert view["x_post"]["post_at"] == when.isoformat(timespec="minutes")
+    assert [(item["id"], item["username"], item["text"]) for item in listed["items"]] == [
+        (kept["id"], "rowbot_ai", "Morning post")]
+    assert cancelled.json() == {"cancelled": True}
+    assert (again.status_code, again.json()["code"]) == (404, "scheduled_post_unavailable")
+    assert after["items"] == [] and fake.posts == []

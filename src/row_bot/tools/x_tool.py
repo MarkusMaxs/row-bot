@@ -353,6 +353,11 @@ class _XPostInput(BaseModel):
         ),
     )
     account: Optional[str] = _account_field(True)
+    post_at: Optional[str] = Field(
+        default=None,
+        description=("When it goes out, if not now: a local time like '13:00' or '2026-10-29T09:30', up to 7 days "
+                     "ahead. The person approves it now; Row-Bot posts it then."),
+    )
 
 
 class _XEngageInput(BaseModel):
@@ -936,8 +941,10 @@ class XTool(BaseTool):
 
     def _x_post(self, action: str, text: str | None = None,
                 tweet_id: str | None = None,
-                media_paths: list[str] | None = None, *, account: str | None = None) -> str:
-        """Post, reply, quote or delete as the named account, once the person approves exactly that."""
+                media_paths: list[str] | None = None, *, account: str | None = None,
+                post_at: str | None = None) -> str:
+        """Post, reply, quote or delete as the named account, once the person approves exactly that; at its
+        time slot (post_at) when it has one."""
         operation = {"post": "x_post_tweet", "reply": "x_reply", "quote": "x_quote",
                      "delete": "x_delete_tweet"}.get(action)
         if operation is None:
@@ -949,13 +956,17 @@ class XTool(BaseTool):
             chosen = x_accounts.resolve(account, required=True)
             x_posting.check_length(chosen, action, words)
             media = x_posting.media_facts(media_paths) if action != "delete" else []
+            if post_at and action == "delete":
+                raise x_posting.XPostError("A delete happens at once; leave post_at out.")
+            when = x_posting.slot(post_at)
         except (x_posting.XPostError, XAccountChoice) as exc:
             return str(exc)
         target_text = x_posting.read_text(chosen, target) if action == "delete" else ""
         edited = False
         while True:
             try:
-                refusal, line = x_posting.approve(chosen, action, words, target, media, target_text=target_text)
+                refusal, line = x_posting.approve(chosen, action, words, target, media, target_text=target_text,
+                                                  post_at=when)
                 break
             except x_posting.PostEdited as edit:
                 # The person changed the post on its card (G2): a new card, bound to the edited post.
@@ -969,10 +980,16 @@ class XTool(BaseTool):
             return refusal
         from row_bot.tools.approval_gate import with_approval
 
-        try:
-            sent = x_posting.post_as(chosen, action, words, target, media).text
-        except x_posting.XPostError as exc:
-            sent = str(exc)
+        if when is not None:
+            kept = x_posting.schedule(chosen, action, words, target, media, when)
+            sent = (f"Approved for its time: it goes out as {chosen.handle} at {when:%H:%M} on {when:%a %d %b} "
+                    f"(scheduled post {kept['id']}). Nothing is on X yet; the person can cancel it in Home › "
+                    "Review until then.")
+        else:
+            try:
+                sent = x_posting.post_as(chosen, action, words, target, media).text
+            except x_posting.XPostError as exc:
+                sent = str(exc)
         if edited:
             sent = f"The person edited the post on its card, then approved it as edited:\n{words}\n\n{sent}"
         return with_approval(line, sent) if line else sent
@@ -1114,10 +1131,10 @@ class XTool(BaseTool):
             def _run_post(action: str, text: str | None = None,
                           tweet_id: str | None = None,
                           media_paths: list[str] | None = None,
-                          account: str | None = None) -> str:
+                          account: str | None = None, post_at: str | None = None) -> str:
                 try:
                     return tool_instance._x_post(
-                        action, text, tweet_id, media_paths, account=account
+                        action, text, tweet_id, media_paths, account=account, post_at=post_at
                     )
                 except GraphBubbleUp:
                     raise  # The approval card: the conversation waits for the person.
