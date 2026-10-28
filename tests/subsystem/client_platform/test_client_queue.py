@@ -322,7 +322,8 @@ def test_preparation_failure_has_no_receipt_and_prepared_ids_ack_exactly(platfor
         update = agent._pre_model_trim({"messages": []})
         # The running turn reads what was sent while it works (5.3.1), as the person's own words, once.
         assert [item.state for item in settle(platform).items] == ["consumed", "steered"]
-        assert [(m.type, m.id) for m in update["messages"]] == [("human", two["submission_id"])]
+        assert [(m.type, m.id, m.additional_kwargs) for m in update["messages"]] == [
+            ("human", two["submission_id"], {"mid_turn": True})], "marked as arrived mid-turn, for Learning"
         assert client_queue._staged("conversation-a")[1]["messages"] == []
         assert "messages" not in agent._pre_model_trim({"messages": []}), "taken once"
         listed = client_queue.read_queue(platform, "conversation-a", waiting=True).items

@@ -337,8 +337,10 @@ def waiting_for(handle: Any) -> list[tuple[str, int, Any]]:
         return []
     _, values = _staged(handle.conversation_id)
     staged = {str(message.id): message for message in values.get("messages", [])}
+    # Marked as arrived mid-turn: Learning reads it as the next message for the steps before it.
     return [(row["pass_id"], int(row["queue_revision"]),
-             HumanMessage(content=staged[row["submission_id"]].content, id=row["submission_id"]))
+             HumanMessage(content=staged[row["submission_id"]].content, id=row["submission_id"],
+                          additional_kwargs={"mid_turn": True}))
             for row in rows if row["submission_id"] in staged]
 
 
