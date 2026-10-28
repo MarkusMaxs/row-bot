@@ -530,6 +530,10 @@ class Comparer:
         except Exception as error:
             if isinstance(error, CompareError):
                 raise
+            if stop.is_set():
+                # Stop ends the worker mid-task, so its run has no result: that is a stop, never a failure (C1).
+                self._progress(version, state="stopped", reason="stopped")
+                raise CompareError("stopped") from None
             self._progress(version, state="failed", reason=getattr(error, "code", type(error).__name__)[:64])
             raise
         finally:

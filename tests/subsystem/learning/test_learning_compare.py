@@ -7,6 +7,7 @@ stop at the monthly limit; plain verdicts, including no clear difference and wor
 from __future__ import annotations
 
 import json
+import threading
 
 import pytest
 
@@ -485,3 +486,23 @@ def test_models_that_cant_stay_loaded_together_run_one_after_the_other_with_the_
     else:
         assert local == [arm for arm in interleaved if arm != "main"] and switches > 3
     assert result["rows"] == reference["rows"] and result["overall"] == reference["overall"]
+
+
+def test_stop_ends_the_worker_mid_task_and_reads_as_stopped_never_failed(ready, monkeypatch):
+    """C1, 28 Oct: Stop ended the worker mid-task, its run had no result, and the version said "Row-Bot couldn't
+    compare v25. It tries again later." """
+
+    stop = threading.Event()
+
+    def run(self, task, arm, *, budget, timeout=0):
+        stop.set()  # the person clicked Stop: the worker is ended while this task runs
+        raise RuntimeError("no_result")
+
+    monkeypatch.setattr(FakeWorker, "run", run)
+
+    with pytest.raises(model_compare.CompareError) as stopped:
+        _comparer(ready).run(1, stop=stop)
+
+    assert stopped.value.code == "stopped"
+    assert model_compare.read_progress(1, ready)["state"] == "stopped"
+
