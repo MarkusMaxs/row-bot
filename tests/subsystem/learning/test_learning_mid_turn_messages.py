@@ -14,7 +14,7 @@ from dataclasses import dataclass
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
-from row_bot.learning import corrections, evaluation
+from row_bot.learning import capture, corrections, evaluation
 from row_bot.learning.evaluation import Arm
 from row_bot.learning.store import LearningStore
 from row_bot.learning.training import dataset, recipes
@@ -223,6 +223,146 @@ def test_a_message_read_mid_turn_starts_the_next_episode_after_the_step_before_i
     assert {decisions[item].episode_id for item in ids[1:]} == {second.id}
     tools = [item for item in decisions.values() if item.kind == "tool_call"]
     assert sorted(item.episode_id == first.id for item in tools) == [False, True]  # each step's tool with it
+
+
+def _step(writer, turn, sent: list, number: int, *, status: str = "ok", retry_of: str | None = None):
+    call = {"id": f"call-{number}", "name": "calculate", "args": {"expression": f"{number} + 1"}}
+    step = AIMessage(content="", id=f"a-{number}", tool_calls=[call])
+    decision = writer.model_call(turn, messages=sent, response=step if status == "ok" else None, tools=TOOLS,
+                                 model_ref=MODEL, provider_id="openai", status=status, retry_of=retry_of)
+    if status != "ok":
+        return decision, []
+    result = ToolMessage(content=f"{number + 1}", tool_call_id=call["id"], id=f"t-{number}")
+    writer.tool_call(turn, call=call, result=result)
+    return decision, [step, result]
+
+
+def _answer(writer, turn, sent: list, number: int) -> AIMessage:
+    reply = AIMessage(content=f"Done ({number}).", id=f"r-{number}")
+    writer.model_call(turn, messages=sent, response=reply, tools=TOOLS, model_ref=MODEL, provider_id="openai")
+    return reply
+
+
+def ordinary_turns(writer, chats, clock) -> int:
+    """Turns of every ordinary kind, none with a message read mid-turn, through Capture's seams as the agent
+    sends them. Returns how many turns there were."""
+
+    from row_bot.learning.scope import ThreadInfo
+
+    def folded(message: HumanMessage, context: str = CONTEXT) -> HumanMessage:
+        # turn_context.merge_into_preceding: a new copy each call, the same id, the content changed.
+        return message.model_copy(update={"content": f"{message.content}{context}"})
+
+    def context_alone(turn_id: str) -> HumanMessage:
+        # turn_context.provider_message: a context that follows no message of the person's, sent unmarked.
+        return HumanMessage(content=f"<row_bot_turn_context>\nNow: 10:0{len(turn_id)}\n</row_bot_turn_context>",
+                            id=f"row-bot-turn-context-{turn_id}")
+
+    system = Chat.SYSTEM
+    chats.chat("chat-1").chat("chat-2").child("agent-1", "chat-1")
+    chats.threads["workflow-1"] = ThreadInfo(exists=True, is_workflow=True)
+    history: list = []
+
+    # 1. A chat turn: the context folded into its message on every call, a refused call retried, a progress
+    #    note on the last call.
+    turn = writer.begin_turn(thread_id="chat-1", surface="normal_chat", person_message=True)
+    opening = HumanMessage(content="Add up the March invoices.", id="h-1")
+    _first, done = _step(writer, turn, [system, folded(opening)], 1)
+    refused, _ = _step(writer, turn, [system, folded(opening), *done], 2, status="error")
+    _second, more = _step(writer, turn, [system, folded(opening), *done], 2, retry_of=refused)
+    note = HumanMessage(content="Row-Bot note, not from the person: say what you found.",
+                        additional_kwargs={"ephemeral": True, "row_bot_note": "progress"})
+    reply = _answer(writer, turn, [system, folded(opening), *done, *more, note], 3)
+    writer.end_turn(turn, "completed")
+    history += [opening, *done, *more, reply]
+    clock.advance(60)
+
+    # 2. A compaction mid-turn: the summary, then the context again on its own after the latest message.
+    turn = writer.begin_turn(thread_id="chat-1", surface="normal_chat", person_message=True)
+    opening = HumanMessage(content="Now April.", id="h-2")
+    _first, done = _step(writer, turn, [system, *history, folded(opening)], 4)
+    summary = HumanMessage(content='<HISTORICAL_CONTEXT untrusted="true">\nMarch: 3.\n</HISTORICAL_CONTEXT>')
+    guidance = SystemMessage(content="The summary is background.")
+    reply = _answer(writer, turn, [system, guidance, summary, folded(opening), *done, context_alone("t2-1")], 5)
+    writer.end_turn(turn, "completed")
+    history += [opening, *done, reply]
+    clock.advance(60)
+
+    # 3. A browser step: the page's picture after it (no id).
+    turn = writer.begin_turn(thread_id="chat-1", surface="normal_chat", person_message=True)
+    opening = HumanMessage(content="Open the settings page.", id="h-3")
+    _first, done = _step(writer, turn, [system, *history, folded(opening)], 6)
+    picture = HumanMessage(content=[{"type": "text", "text": "The browser page after that action."},
+                                    {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,/9j/AAAA"}}])
+    reply = _answer(writer, turn, [system, *history, folded(opening), *done, picture], 7)
+    writer.end_turn(turn, "completed")
+    history += [opening, *done, reply]
+    clock.advance(60)
+
+    # 4. A delegated agent: its task, then its parent's guidance while it works.
+    turn = writer.begin_turn(thread_id="agent-1", surface="agent_child", agent_run_id="run-1")
+    task = HumanMessage(content="Find the April invoices.", id="task-1",
+                        additional_kwargs={"platform_note": "agent_task", "platform_public_content": "Find them"})
+    _first, done = _step(writer, turn, [system, task, context_alone("t4")], 8)
+    guide = HumanMessage(content="Only the paid ones.", id="guide-1", additional_kwargs={"platform_note": "agent_guidance"})
+    _answer(writer, turn, [system, task, context_alone("t4"), *done, guide], 9)
+    writer.end_turn(turn, "completed")
+    clock.advance(60)
+
+    # 5. A goal run Row-Bot started: its event, then the context on its own.
+    turn = writer.begin_turn(thread_id="chat-1", surface="goal", goal=True)
+    event = HumanMessage(content="Carry on with the goal.", id="event-1",
+                         additional_kwargs={"row_bot_ui": {"thread_event": True}})
+    _first, done = _step(writer, turn, [system, *history, event, context_alone("t5")], 10)
+    reply = _answer(writer, turn, [system, *history, event, context_alone("t5"), *done], 11)
+    writer.end_turn(turn, "completed")
+    history += [event, *done, reply]
+    clock.advance(60)
+
+    # 6. A workflow run: its first message is the workflow's own.
+    turn = writer.begin_turn(thread_id="workflow-1", surface="workflow")
+    prompt = HumanMessage(content="Send the weekly summary.", id="workflow-message-1")
+    _first, done = _step(writer, turn, [system, folded(prompt)], 12)
+    _answer(writer, turn, [system, folded(prompt), *done], 13)
+    writer.end_turn(turn, "completed")
+    clock.advance(60)
+
+    # 7. A turn that waits at an approval and carries on once it is given.
+    turn = writer.begin_turn(thread_id="chat-2", surface="normal_chat", person_message=True)
+    opening = HumanMessage(content="Archive the newsletter.", id="h-7")
+    _first, done = _step(writer, turn, [system, folded(opening)], 14)
+    writer.end_turn(turn, "waiting")
+    clock.advance(30)
+    turn = writer.begin_turn(thread_id="chat-2", surface="normal_chat", resumed=True)
+    reply = _answer(writer, turn, [system, folded(opening), *done], 15)
+    writer.end_turn(turn, "completed")
+    clock.advance(60)
+
+    # 8. Retry: the same turn again in place, its message the same.
+    writer.retry("chat-2", [reply.id])
+    turn = writer.begin_turn(thread_id="chat-2", surface="normal_chat", person_message=True)
+    _first, done = _step(writer, turn, [system, folded(opening)], 16)
+    _answer(writer, turn, [system, folded(opening), *done], 17)
+    writer.end_turn(turn, "completed")
+    writer.drain()
+    return 8
+
+
+def test_ordinary_turns_are_captured_one_episode_each(writer, chats, learning_on, clock):
+    # A turn with no message read mid-turn is captured as before 5.3.1: one episode, holding all it did.
+    turns = ordinary_turns(writer, chats, clock)
+    store = LearningStore(learning_on, clock=clock)
+
+    episodes = store.find("episode")
+    decisions = store.find("decision")
+    assert len(episodes) == turns
+    assert {item.episode_id for item in decisions} == {item.id for item in episodes}
+    by_thread = sorted((item for item in episodes if item.thread_id == "chat-1"), key=lambda item: item.started_at)
+    assert [item.follows_decision_id is not None for item in by_thread] == [False, True, True, False]
+    book = corrections.Book(store)
+    for episode in episodes:  # what each started with reads as it did
+        first = book.calls[episode.id][0]
+        assert book.text_of(episode) == corrections.person_text(capture.read_request(store, first))
 
 
 def test_only_the_persons_own_messages_start_the_next_episode(writer, chats, learning_on, clock):

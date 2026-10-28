@@ -128,13 +128,17 @@ def _is_untrusted(message: Any) -> bool:
 
 
 def _persons_id(message: Any) -> str | None:
-    """The id of a message the person sent, as the agent sends it: not Row-Bot's turn context, a note to the
-    model, the page's picture (it has no id), an event Row-Bot added or a delegated agent's task."""
+    """The id of a message the person sent, as the agent sends it: not Row-Bot's turn context (marked, or sent
+    on its own without the mark, ``turn_context.provider_message``: known by its id), a note to the model, the
+    page's picture or a compaction summary (they have no id), an event Row-Bot added or a delegated agent's
+    task."""
 
     from row_bot.learning.corrections import is_row_bot_note
-    from row_bot.turn_context import is_person_message
+    from row_bot.turn_context import MESSAGE_ID_PREFIX, is_person_message
 
-    if not is_person_message(message) or is_row_bot_note(message):
+    message_id = str(getattr(message, "id", "") or "")
+    if (not message_id or message_id.startswith(MESSAGE_ID_PREFIX) or not is_person_message(message)
+            or is_row_bot_note(message)):
         return None
     extra = getattr(message, "additional_kwargs", None)
     extra = extra if isinstance(extra, Mapping) else {}
@@ -142,7 +146,7 @@ def _persons_id(message: Any) -> str | None:
     if extra.get("row_bot_internal_event") or extra.get("platform_note") or (
             isinstance(ui, Mapping) and ui.get("thread_event")):
         return None
-    return str(getattr(message, "id", "") or "") or None
+    return message_id
 
 
 def _valid_id(value: Any) -> str | None:
