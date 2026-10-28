@@ -75,4 +75,19 @@ test('a video Row-Bot made opens beside the chat as scenes, and an edit there is
     'First, sign up in a few seconds.',
   );
   await page.setViewportSize(DESKTOP);
+
+  // The timeline is one click away on a desktop: scenes as blocks on tracks.
+  await panel.getByRole('radio', { name: 'Timeline' }).click();
+  const timeline = panel.getByRole('application', { name: /^Timeline/ });
+  await expect(timeline.getByRole('button')).toHaveCount(2);
+  await expect(timeline.getByLabel('Voice')).toContainText('First, sign up');
+  await expect(timeline.getByLabel('Cards')).toContainText('Sign up');
+  await views(page, info, 'video-panel-timeline', timeline);
+  // Delete removes the selected scene; Ctrl+Z brings it back.
+  await timeline.getByRole('button', { name: /^Scene 2,/ }).click();
+  await timeline.focus();
+  await page.keyboard.press('Delete');
+  await expect(timeline.getByRole('button')).toHaveCount(1);
+  await page.keyboard.press('Control+z');
+  await expect(timeline.getByRole('button')).toHaveCount(2);
 });

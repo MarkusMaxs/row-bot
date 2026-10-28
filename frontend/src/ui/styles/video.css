@@ -121,6 +121,7 @@
 .video-scene-thumb {
   position: relative;
   flex: none;
+  align-self: flex-start;
   width: 112px;
   aspect-ratio: 16 / 9;
   overflow: hidden;
@@ -262,6 +263,132 @@
   margin: 0;
   color: var(--text-muted);
   font-size: var(--type-size-metadata);
+}
+
+/* The timeline (desktop): tracks of blocks sized by their length. */
+.video-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.video-timeline-tools {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--text-muted);
+  font-size: var(--type-size-metadata);
+}
+.video-timeline-zoom {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.video-timeline-scroll {
+  overflow-x: auto;
+  padding: var(--space-2) 0;
+  border: 1px solid var(--border-hairline);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+}
+.video-timeline-scroll:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.video-timeline-tracks {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 100%;
+  padding-left: 64px;
+}
+.video-track {
+  position: relative;
+  height: 28px;
+}
+.video-track:first-of-type {
+  height: 56px;
+}
+.video-track-name {
+  position: absolute;
+  top: 50%;
+  left: -60px;
+  width: 52px;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  font-size: var(--type-size-metadata);
+}
+.video-block,
+.video-line-block,
+.video-card-block,
+.video-music-block {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+  font-size: var(--type-size-metadata);
+  line-height: 26px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  padding: 0 var(--space-1);
+  background: var(--surface-sunken);
+}
+.video-block {
+  padding: 0;
+  cursor: grab;
+  touch-action: none;
+}
+.video-block[data-selected='true'] {
+  border-color: var(--status-info-text);
+  box-shadow: 0 0 0 1px var(--status-info-text);
+}
+.video-block video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+}
+.video-block-label {
+  position: absolute;
+  bottom: 2px;
+  left: 4px;
+  padding: 0 4px;
+  border-radius: var(--radius-control);
+  color: var(--text-primary);
+  background: var(--surface);
+  line-height: 1.4;
+}
+.video-block-edge {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: ew-resize;
+}
+.video-block-edge[data-edge='start'] {
+  left: 0;
+}
+.video-block-edge[data-edge='end'] {
+  right: 0;
+}
+.video-block-edge:hover {
+  background: var(--status-info-background);
+}
+.video-line-block {
+  background: var(--status-info-background);
+}
+.video-timeline-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 1;
+  width: 2px;
+  margin-left: 64px;
+  background: var(--status-danger-text);
+  pointer-events: none;
 }
 
 /* On a phone the panel is the whole editor: thumb-sized scenes, one under another. */

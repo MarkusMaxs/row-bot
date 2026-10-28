@@ -13,7 +13,7 @@ from row_bot import video_edits
 from tests.subsystem.client_protocol.test_protocol_application import _client, service  # noqa: F401
 from tests.subsystem.client_protocol.test_protocol_security import bootstrap
 
-pytestmark = pytest.mark.subsystem
+pytestmark = [pytest.mark.subsystem, pytest.mark.platform]
 
 _MP4 = b"\x00\x00\x00\x18ftypisom" + b"\x00" * 64
 

@@ -25,12 +25,14 @@ import {
   Disclosure,
   ErrorState,
   IconButton,
+  Segmented,
   Select,
   Skeleton,
   StatusDot,
   Toggle,
 } from '../../ui/primitives';
 import { shortTime } from '../shell/conversation-groups';
+import { VideoTimeline } from './VideoTimeline';
 import {
   SPEEDS,
   draftOf,
@@ -47,6 +49,22 @@ const POLL_MS = 1500;
 type Draft = { scenes: VideoSceneWrite[]; captions: boolean };
 /** Unsaved edits per project and version, so they outlive the panel moving between side and full screen. */
 const drafts = new Map<string, Draft>();
+const WIDE = '(min-width: 768px)';
+
+/** True on a desktop-sized window: the timeline is one click away there; a phone edits by scenes. */
+function useWide(): boolean {
+  const [wide, setWide] = useState(
+    () => window.matchMedia?.(WIDE).matches ?? true,
+  );
+  useEffect(() => {
+    const query = window.matchMedia?.(WIDE);
+    if (!query) return;
+    const update = () => setWide(query.matches);
+    query.addEventListener('change', update);
+    return () => query.removeEventListener('change', update);
+  }, []);
+  return wide;
+}
 
 function SceneThumb({
   url,
@@ -113,6 +131,10 @@ export default function VideoPanel({
   const [attempt, setAttempt] = useState(0);
   const [url, setUrl] = useState('');
   const [loop, setLoop] = useState(false);
+  const [mode, setMode] = useState<'scenes' | 'timeline'>('scenes');
+  const [time, setTime] = useState(0);
+  const history = useRef<Draft[]>([]);
+  const wide = useWide();
   const player = useRef<HTMLVideoElement>(null);
 
   const draftKey = view ? `${projectId}:${view.number}` : '';
@@ -120,6 +142,7 @@ export default function VideoPanel({
     if (draftKey) setStoredDraft(drafts.get(draftKey) ?? null);
   }, [draftKey]);
   function setDraft(next: Draft | null) {
+    if (!next) history.current = [];
     if (draftKey) {
       if (next) drafts.set(draftKey, next);
       else drafts.delete(draftKey);
@@ -179,9 +202,18 @@ export default function VideoPanel({
   const changed = useMemo(() => new Set(view?.changed ?? []), [view]);
   const latest = view ? view.number === view.latest : true;
 
+  /** An edit, kept so Ctrl+Z on the timeline can take it back. */
+  function edit(next: Draft) {
+    if (edited) history.current.push(edited);
+    setDraft(next);
+  }
+  function undo() {
+    const previous = history.current.pop();
+    if (previous) setDraft(previous);
+  }
   function change(index: number, patch: Partial<VideoSceneWrite>) {
     if (!view || !edited) return;
-    setDraft({
+    edit({
       ...edited,
       scenes: edited.scenes.map((scene, at) =>
         at === index ? { ...scene, ...patch } : scene,
@@ -193,11 +225,11 @@ export default function VideoPanel({
     const next = [...edited.scenes];
     const [scene] = next.splice(index, 1);
     next.splice(index + by, 0, scene);
-    setDraft({ ...edited, scenes: next });
+    edit({ ...edited, scenes: next });
   }
   function remove(index: number) {
     if (!edited || edited.scenes.length < 2) return;
-    setDraft({
+    edit({
       ...edited,
       scenes: edited.scenes.filter((_, at) => at !== index),
     });
@@ -375,6 +407,8 @@ export default function VideoPanel({
           <video
             ref={player}
             src={url}
+            onTimeUpdate={(event) => setTime(event.currentTarget.currentTime)}
+            onSeeked={(event) => setTime(event.currentTarget.currentTime)}
             controls
             playsInline
             loop={loop}
@@ -444,20 +478,61 @@ export default function VideoPanel({
       )}
 
       <div className="video-scenes-head">
-        <h3>Scenes</h3>
+        {wide ? (
+          <Segmented
+            size="sm"
+            label="Edit the video as"
+            value={mode}
+            onChange={setMode}
+            options={[
+              { value: 'scenes', label: 'Scenes' },
+              { value: 'timeline', label: 'Timeline' },
+            ]}
+          />
+        ) : (
+          <h3>Scenes</h3>
+        )}
         <label className="video-captions">
           <Toggle
             label="Captions"
             checked={edited.captions}
             disabled={!latest}
             onChange={(event) =>
-              setDraft({ ...edited, captions: event.target.checked })
+              edit({ ...edited, captions: event.target.checked })
             }
           />
           <span aria-hidden>Captions</span>
         </label>
       </div>
-      <ol className="video-scenes" aria-label="Scenes">
+      {wide && mode === 'timeline' && (
+        <VideoTimeline
+          scenes={edited.scenes}
+          made={scenes}
+          music={view.music}
+          url={url}
+          playhead={url && !dirty ? time : null}
+          disabled={!latest}
+          onChange={(next) => edit({ ...edited, scenes: next })}
+          onUndo={undo}
+          onSeek={(at) => {
+            const video = player.current;
+            if (video) video.currentTime = at;
+          }}
+          onPlay={() => {
+            const video = player.current;
+            if (video)
+              void (video.paused
+                ? video.play().catch(() => undefined)
+                : video.pause());
+          }}
+          onPause={() => player.current?.pause()}
+        />
+      )}
+      <ol
+        className="video-scenes"
+        aria-label="Scenes"
+        hidden={wide && mode === 'timeline'}
+      >
         {edited.scenes.map((scene, index) => {
           const number = index + 1;
           const shownScene = scenes.find(

@@ -9,7 +9,7 @@ import pytest
 
 from tests.contracts.client_platform.test_headless_lifecycle import platform  # noqa: F401
 
-pytestmark = pytest.mark.subsystem
+pytestmark = [pytest.mark.subsystem, pytest.mark.platform]
 
 MP4 = b"\x00\x00\x00\x18ftypmp42" + b"0" * 64
 

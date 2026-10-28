@@ -1,4 +1,10 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { ClientController } from '../../api/controller';
@@ -260,4 +266,43 @@ it("the chat's card says how the video stands and opens it beside the chat", asy
     },
   ]);
   stop();
+});
+
+it('the timeline trims, splits at the playhead, removes and undoes with the keys', async () => {
+  vi.spyOn(window, 'matchMedia').mockImplementation(
+    (query: string) =>
+      ({
+        matches: query === '(min-width: 768px)',
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }) as unknown as MediaQueryList,
+  );
+  setup();
+  await userEvent.click(await screen.findByRole('radio', { name: 'Timeline' }));
+  const timeline = screen.getByRole('application', { name: /^Timeline/ });
+  const video = await screen.findByLabelText('Launch demo, version 2');
+  // The playhead 1 s into the first scene: its own video's 2 s (it starts at 1 s).
+  Object.defineProperty(video, 'currentTime', {
+    value: 1,
+    configurable: true,
+    writable: true,
+  });
+  fireEvent.timeUpdate(video);
+  await userEvent.click(
+    within(timeline).getByRole('button', { name: 'Scene 1, 3.0 s' }),
+  );
+  timeline.focus();
+  await userEvent.keyboard('s');
+  expect(
+    within(timeline).getByRole('button', { name: 'Scene 1, 1.0 s' }),
+  ).toBeVisible();
+  expect(
+    within(timeline).getByRole('button', { name: 'Scene 2, 2.0 s' }),
+  ).toBeVisible();
+  await userEvent.keyboard('{Delete}');
+  expect(within(timeline).getAllByRole('button')).toHaveLength(2);
+  await userEvent.keyboard('{Control>}z{/Control}');
+  expect(within(timeline).getAllByRole('button')).toHaveLength(3);
+  expect(screen.getByRole('group', { name: 'Unsaved changes' })).toBeVisible();
 });
