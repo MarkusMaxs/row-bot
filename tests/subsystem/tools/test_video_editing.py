@@ -272,6 +272,18 @@ def test_a_project_in_another_shape_reframes_each_scene_on_its_zoom_and_keeps_th
     assert "palettegen" in " ".join(gif) and gif[-1] == "file:output.gif" and "file:input-1.mp4" in gif
 
 
+def test_a_caption_reads_the_same_in_a_square_or_tall_cut_as_in_a_wide_one():
+    from row_bot.video_editing import render_text
+
+    line = ("First, let's see who's coming back for another cup. We ask Row-Bot to check the October "
+            "orders file and show customers who ordered more than once.")
+    wide = render_text(line, "caption", 1280, 720)
+    # The same lines at the same size, nothing cut short, whatever the shape of a picture this wide.
+    assert render_text(line, "caption", 1280, 1280)[1:] == wide[1:]
+    assert render_text(line, "caption", 1280, 2276)[1:] == wide[1:]
+    assert render_text(line, "caption", 720, 1280)[1] <= 720
+
+
 def test_the_brand_kit_puts_an_intro_and_outro_on_its_colour_and_its_logo_in_a_corner():
     from row_bot.video_editing import Look, SceneCut, Step
 

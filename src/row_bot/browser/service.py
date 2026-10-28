@@ -75,6 +75,8 @@ MAX_SCREENSHOT_BYTES = 15 * 1024 * 1024
 # The live picture: the pane's size is honoured up to this, a thumbnail is small.
 MAX_PANE_WIDTH = 1600
 THUMB_WIDTH = 480
+# A recording's width, whoever else watches the page.
+RECORD_WIDTH = 1280
 # The page follows the Browser pane's size (CSS pixels and device scale), so sites lay out
 # for it and the picture shows 1:1. Narrower than this, the page keeps this width and the
 # picture scales down; with no pane showing, the page is an ordinary desktop window.
@@ -1768,13 +1770,13 @@ class BrowserEngine:
             raise RuntimeError("already_recording")
         if not self.running or chat is None or chat.active is None or str(chat.active.page.url) in _BLANK_URLS:
             raise LookupError("no_page")
-        recorder = PageRecorder(path, max_seconds=max_seconds, size_limit=size_limit,
+        recorder = PageRecorder(path, max_seconds=max_seconds, size_limit=size_limit, width=RECORD_WIDTH,
                                 on_end=lambda reason, video: self._recording_ended(thread_id, on_end, reason, video))
         self._recorders[thread_id] = recorder
         frame = self.latest_frame(thread_id)
         if frame is not None:
             recorder.offer_frame(base64.b64decode(frame.data))
-        recorder.watch = self.watch(thread_id, kind="record", width=1280)
+        recorder.watch = self.watch(thread_id, kind="record", width=RECORD_WIDTH)
         recorder.start()
         self._publish(thread_id)
         return recorder

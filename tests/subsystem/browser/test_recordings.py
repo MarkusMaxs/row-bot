@@ -184,6 +184,23 @@ def test_a_recording_stops_at_its_time_limit_with_a_playable_video(tmp_path):
 
 
 @needs_encoder
+def test_a_recording_that_starts_on_the_small_live_thumbnail_is_still_made_full_size(tmp_path):
+    ended: list[tuple[str, Path | None]] = []
+    recorder = PageRecorder(tmp_path / "rec.mp4", max_seconds=1, size_limit=10_000_000, width=1280,
+                            on_end=lambda reason, video: ended.append((reason, video)), clock=_Clock(0.25), tick=0.001)
+    recorder.offer_frame(_jpeg((200, 30, 30)))  # 320×200, like the 480-wide thumbnail someone watching sees
+    recorder.start()
+    assert recorder.join(10)
+
+    [(_reason, video)] = ended
+    import av
+
+    with av.open(str(video)) as container:
+        stream = container.streams.video[0]
+        assert (stream.codec_context.width, stream.codec_context.height) == (1280, 800)
+
+
+@needs_encoder
 def test_a_recording_stops_before_its_video_outgrows_the_chat(tmp_path):
     ended: list[str] = []
     recorder = PageRecorder(tmp_path / "rec.mp4", max_seconds=600, size_limit=1,

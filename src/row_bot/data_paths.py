@@ -46,14 +46,29 @@ def private_data_dirs() -> list[Path]:
     return folders
 
 
+def sandbox_workspace() -> Path | None:
+    """In a sandbox (5.3.1 B4), its own workspace: it lies inside the data folder the sandbox was started
+    from, which is otherwise private to it."""
+    from row_bot.brand import APP_WORKSPACE_ENV
+
+    configured = str(os.environ.get(APP_WORKSPACE_ENV) or "").strip()
+    if not configured or not str(os.environ.get("ROW_BOT_SANDBOX_OF") or "").strip():
+        return None
+    return Path(configured).expanduser().resolve()
+
+
 def is_private_data_path(path: str | os.PathLike[str]) -> bool:
-    """True when *path* is Row-Bot's data folder or the server secrets folder, or inside one of them."""
+    """True when *path* is Row-Bot's data folder or the server secrets folder, or inside one of them; a
+    sandbox's own workspace, inside the folder it was started from, is not."""
     try:
         resolved = Path(path).expanduser().resolve()
         folders = [folder.expanduser().resolve() for folder in private_data_dirs()]
+        workspace = sandbox_workspace()
     except (OSError, ValueError):
         return False
-    return any(resolved == folder or folder in resolved.parents for folder in folders)
+    own = workspace is not None and (resolved == workspace or workspace in resolved.parents)
+    return any((resolved == folder or folder in resolved.parents) and not (own and folder in workspace.parents)
+               for folder in folders)
 
 
 # Parts of the data folder that hold tools Row-Bot downloaded and results it made, not conversations,
