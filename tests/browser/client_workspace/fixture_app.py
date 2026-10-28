@@ -5593,7 +5593,8 @@ def c1_learning(action: str, name: str = "", x_fixture_token: str = Header(defau
         trainer = remote_training.RemoteTrainer(
             jobs=runner.supervisor.jobs, hub=hub, sign_in=sign_in, fetcher=FakeFetcher(hub),
             card_mib=lambda: card, start_threads=False,
-            flavors=lambda: [hub_module.Flavor("l40sx1", "Nvidia L40S", 48, 0.03)])
+            flavors=lambda: [hub_module.Flavor("a100-large", "Nvidia A100", 80, 2.5 / 60),
+                             hub_module.Flavor("l40sx1", "Nvidia L40S", 48, 0.03)])
         trainer.dataset = runner.remote.dataset if runner.remote is not None else None
         _c1.setdefault("remote", runner.remote)
         _c1.update(hub=hub, sign_in=sign_in, trainer=trainer)

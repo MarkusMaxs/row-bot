@@ -632,7 +632,7 @@ class _Exploratory:
 
         self.trainer = RemoteTrainer(copy, jobs=jobs_module.TrainingJobs(copy), hub=self.hub, sign_in=FakeSignIn(),
                                      fetcher=FakeFetcher(self.hub), card_mib=lambda: 32_607, start_threads=False,
-                                     flavors=lambda: [hub_module.Flavor("l40sx1", "Nvidia L40S", 48, 0.03)])
+                                     flavors=lambda: [hub_module.Flavor("a100-large", "1x Nvidia A100", 80, 2.5 / 60), hub_module.Flavor("l40sx1", "1x Nvidia L40S", 48, 0.03)])
         return self.trainer
 
     def sleep(self, _seconds: float) -> None:
@@ -691,7 +691,7 @@ def test_the_exploratory_27b_trains_on_exactly_v2s_rows_after_a_typed_upload_and
     found = written["exploratory_27b"]
     assert (found["state"], found["model"], found["recipe"]) == ("run", "qwen3.8-27b", "hf-27b-v1")
     assert found["rows"] == {"examples": rows, "validation": validation, "matched": True} and found["upload_bytes"] > 0
-    assert (found["uploads_deleted"], found["minutes"], found["cost_usd"]) == (True, 90, 2.7)  # 90 min at $1.80/h
+    assert (found["uploads_deleted"], found["minutes"], found["cost_usd"]) == (True, 90, 3.75)  # 90 min at $2.50/h
     assert set(found["contrasts"]) == {"personal27 vs start27", "personal27 vs personal"}
     assert set(found["arms"]) == {"start27", "personal27", "personal"}
     # Apart from the confirmatory family: Holm still covers H1 and H2 only.

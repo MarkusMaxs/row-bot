@@ -191,7 +191,7 @@ test('the first run shows its quote, with the monthly cap, before anything is up
   const sheet = page.getByRole('dialog', {
     name: /^Train v\d+ on Hugging Face\?$/,
   });
-  await expect(sheet).toContainText('Nvidia L40S (48 GB) · $1.80 an hour');
+  await expect(sheet).toContainText('Nvidia A100 (80 GB) · $2.50 an hour');
   await expect(sheet).toContainText(
     /about \$\d+\.\d\d · at most \$\d+\.\d\d \(Hugging Face stops the run there\)/,
   );
