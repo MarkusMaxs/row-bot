@@ -169,6 +169,8 @@ class TraceSpecialization:
     answers: tuple[dict, ...] = ()
     # page: the page a step made or changed (N5), opened by id (its title and decisions are re-read).
     page_id: str = ""
+    # linked_conversation (5.3.1 C): the link a card reads the conversation's state by.
+    link_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -913,6 +915,7 @@ def _public_specialization(
             **({"delivery_id": specialization.delivery_id} if specialization.delivery_id else {}),
             **({"job_id": specialization.job_id} if specialization.job_id else {}),
             **({"page_id": specialization.page_id} if specialization.page_id else {}),
+            **({"link_id": specialization.link_id} if specialization.link_id else {}),
             **({"outcome": specialization.outcome,
                 "answers": [dict(answer) for answer in specialization.answers]}
                if specialization.kind == "question_answered" else {}),

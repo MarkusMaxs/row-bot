@@ -3126,7 +3126,8 @@ def create_router(
         await call(service._metadata, conversation_id)
         from row_bot.linked_conversations import links
 
-        items = await call(links, conversation_id)
+        cards = await call(links, conversation_id)
+        items = [{key: value for key, value in card.items() if key != "kind"} for card in cards]
         return await respond(request, dto.ConversationLinkPage, {"schema_version": 1, "items": items})
 
     @router.get("/conversations/{conversation_id}/steering")
