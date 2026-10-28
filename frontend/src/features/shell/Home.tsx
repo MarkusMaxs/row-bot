@@ -573,6 +573,10 @@ export default function Home({
                   identity ? controller.pendingApprovals : undefined
                 }
                 loadAttention={identity ? controller.attention : undefined}
+                loadScheduledPosts={
+                  identity ? controller.scheduledPosts : undefined
+                }
+                onCancelScheduledPost={controller.cancelScheduledPost}
                 buddy={<BuddyPortrait />}
                 onAsk={onAsk}
                 asking={asking}

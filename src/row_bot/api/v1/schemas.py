@@ -4999,6 +4999,8 @@ class PendingApproval(WireModel):
     # A helper's approval: the conversation that started it, which shows it too (B348).
     parent_conversation_id: OpaqueId | None = None
     task_id: OpaqueId | None
+    # It sends a post or an email: Home's Review shows it in full (G3).
+    goes_out: Literal["post", "email"] | None = None
 
 
 class PendingApprovalPage(WireModel):
@@ -5903,8 +5905,17 @@ class ApprovalAnswer(WireModel):
     other: str = Field(default="", max_length=500)
 
 
+class XPostEdit(WireModel):
+    """The person's edit of an X post on its card (G2): the new text, and the files kept by their SHA-256 start."""
+
+    text: str = Field(max_length=25000)
+    media: list[Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{12}$")]] = Field(default_factory=list,
+                                                                                       max_length=4)
+
+
 class ApprovalPayload(WireModel):
-    decision: Literal["approve", "reject"]
+    # "edit" changes an X post on its card (G2): never an approval, the post asks again as edited.
+    decision: Literal["approve", "reject", "edit"]
     nonce: Annotated[str, StringConstraints(min_length=32, max_length=256)]
     # "turn" also approves later actions of the same kind until the turn ends (F21), "chat" until the
     # conversation ends ("Allow in this chat", 5.3.1 B2); only kinds the view marks repeatable take them,
@@ -5913,6 +5924,7 @@ class ApprovalPayload(WireModel):
     # A question card (N4): "approve" answers it with these, one per question; "reject" skips it. An answer is the
     # person's input, never an approval of an action.
     answers: list[ApprovalAnswer] | None = Field(default=None, max_length=4)
+    edit: XPostEdit | None = None
 
 
 class DeckSetupPayload(WireModel):
@@ -6456,6 +6468,8 @@ class TaskSettingsFields(WireModel):
     always_ask: list[Annotated[str, StringConstraints(min_length=1, max_length=512)]] = Field(
         default_factory=list, max_length=16
     )
+    # When its results go to its channels: after every run, only when a run needs the person, or a daily digest.
+    send_results: Literal["every_run", "needs_me", "digest"] = "every_run"
 
 
 class TaskSettingsSnapshot(WireModel):
@@ -8530,6 +8544,32 @@ class XPostApproval(WireModel):
     # The text of the post a delete removes, when X said it.
     target_text: str = Field(default="", max_length=25000)
     media: list[XPostMedia] = Field(default_factory=list, max_length=4)
+    # How long a post the account may send (280, or 25,000 with an X subscription); 0 when X didn't say.
+    limit: int = Field(default=0, ge=0, le=25000)
+    # Its time slot (G3), local "YYYY-MM-DDTHH:MM": approving schedules it for then. "" posts at once.
+    post_at: str = Field(default="", max_length=16, pattern=r"^(\d{4}-\d\d-\d\dT\d\d:\d\d)?$")
+
+
+class ScheduledPost(WireModel):
+    """A post approved for a time slot, waiting for it (G3); Cancel stops it."""
+
+    id: str = Field(pattern=r"^xs-[0-9a-f]{12}$")
+    account_id: str = Field(pattern=r"^[0-9]{1,20}$")
+    username: str = Field(default="", pattern=r"^[A-Za-z0-9_]{0,50}$")
+    action: Literal["post", "reply", "quote"]
+    text: str = Field(default="", max_length=25000)
+    target_url: str = Field(default="", max_length=256, pattern=r"^(https://x\.com/[A-Za-z0-9_]+/status/[0-9]+)?$")
+    post_at: str = Field(pattern=r"^\d{4}-\d\d-\d\dT\d\d:\d\d$")
+    media: list[XPostMedia] = Field(default_factory=list, max_length=4)
+
+
+class ScheduledPostPage(WireModel):
+    schema_version: Literal[1]
+    items: list[ScheduledPost] = Field(max_length=200)
+
+
+class ScheduledPostCancelled(WireModel):
+    cancelled: Literal[True]
 
 
 class ApprovalView(WireModel):

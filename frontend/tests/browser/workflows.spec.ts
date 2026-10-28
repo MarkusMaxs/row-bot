@@ -177,6 +177,15 @@ test('Phase 4 workflow settings save in one reviewed step and preserve saved con
       exact: true,
     })
     .selectOption('run_once');
+  // Results go once a day, each run a line saying what it did (G8).
+  await editor
+    .getByRole('combobox', { name: 'Send results', exact: true })
+    .selectOption('digest');
+  await expect(
+    editor.getByText(
+      'One message from 6 PM with a line for each run that day.',
+    ),
+  ).toBeVisible();
   await editor
     .getByRole('combobox', { name: 'Trigger', exact: true })
     .selectOption('webhook');
@@ -204,6 +213,18 @@ test('Phase 4 workflow settings save in one reviewed step and preserve saved con
     await screenshot(page, info, `workflow-settings-${appearance}`);
     await accessibility(page, info, `workflow-settings-${appearance}`);
   }
+  const size = page.viewportSize();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await editor
+    .getByRole('combobox', { name: 'Send results', exact: true })
+    .scrollIntoViewIfNeeded();
+  for (const appearance of ['light', 'dark'] as const) {
+    await page.emulateMedia({ colorScheme: appearance });
+    await assertNoOverflow(page);
+    await screenshot(page, info, `workflow-settings-phone-${appearance}`);
+  }
+  await page.emulateMedia({ colorScheme: 'light' });
+  if (size) await page.setViewportSize(size);
   await editor
     .getByRole('button', { name: 'Save settings', exact: true })
     .click();
@@ -224,6 +245,9 @@ test('Phase 4 workflow settings save in one reviewed step and preserve saved con
       exact: true,
     }),
   ).toHaveValue('run_once');
+  await expect(
+    editor.getByRole('combobox', { name: 'Send results', exact: true }),
+  ).toHaveValue('digest');
   await expect(
     editor.getByRole('combobox', { name: 'Trigger', exact: true }),
   ).toHaveValue('webhook');
