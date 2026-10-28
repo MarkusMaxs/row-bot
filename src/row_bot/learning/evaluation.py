@@ -2116,7 +2116,7 @@ def freeze_check(arms: Sequence[Arm], *, as_of: float, asked_by: str, contrasts:
                  store: Any | None = None, runner: PackRunner | None = None, cache: ArmCache | None = None,
                  packs: Iterable[str] | None = None, verifiers: Iterable[str] | None = None, repeats: int = 3,
                  seed: int = ANALYSIS_SEED, on_progress: Callable[[int, int], None] | None = None,
-                 clock: Callable[[], float] = time.time) -> dict[str, Any]:
+                 clock: Callable[[], float] = time.time, order: str = "interleaved") -> dict[str, Any]:
     """The pre-registered freeze evaluation (§7): the arms on every hidden problem the vault holds from
     before ``as_of`` (real work, by its captured time) and the packs' hidden tasks, ``repeats`` runs per arm,
     one budget, this module's checker. Returns aggregates only: per arm and split, counts, mean scores, run
@@ -2154,7 +2154,7 @@ def freeze_check(arms: Sequence[Arm], *, as_of: float, asked_by: str, contrasts:
     comparison = _compare(arms, tasks, replay, client=client, judge=None, calibration=None, budget=budget,
                           meter=meter, store=saved, save=False, clock=clock, backend="auto", suite="audit",
                           aggregate_only=True, runner=runner, cache=cache, on_case=counted, repeats=repeats,
-                          seed=seed, inspect=inspect)
+                          seed=seed, inspect=inspect, order=order)
     for item in comparison.arms:
         found["arms"][item.arm.name].update({
             "tokens": int(item.measured_tokens), "cloud_tokens": int(item.measured_cloud_tokens),

@@ -77,6 +77,8 @@ CLOUD_CAP = 5_000_000
 #: participant types to agree to the upload.
 EXPLORATORY_MODEL = "qwen3.8-27b"
 UPLOAD_WORD = "upload"
+#: A10's three local arms run model by model (``evaluation.freeze_check(order=...)``); the results are the same.
+EXPLORATORY_ORDER = "model"
 #: How often the run on Hugging Face is read while the confirmatory evaluation and then the wait go on.
 POLL_SECONDS = 60.0
 #: The product code whose SHA-256 is printed before every run (with this script).
@@ -1178,12 +1180,15 @@ def finish_exploratory(copy: Path, found: Exploratory, *, as_of: float, hooks: H
                                    serve_context=local.serve_context)]
             with (contextlib.nullcontext(hooks.runner(arms)) if hooks.runner is not None
                   else _worker_runner(arms, copy)) as runner:
+                # Model by model: two 27Bs and the 9B can't stay loaded together on a 32 GB card, so interleaved
+                # runs would load a model for every run (28 Oct: about 16 s a run). The same runs, budget,
+                # checker, repeats and pairing; local models spend no tokens, so no limit can stop it midway.
                 result = evaluation.freeze_check(
                     arms, as_of=as_of, asked_by="the paper's exploratory 27B (A10)",
                     contrasts=[("start27", "personal27"), ("personal", "personal27")], client=client,
                     budget=budget, meter=meter, store=LearningStore(copy), runner=runner,
                     cache=evaluation.ArmCache(copy), packs=packs, verifiers=verifiers, repeats=repeats,
-                    on_progress=_Progress(time.monotonic()))
+                    on_progress=_Progress(time.monotonic()), order=EXPLORATORY_ORDER)
         finally:
             local.cleanup()
     finally:
