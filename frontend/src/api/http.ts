@@ -1,5 +1,5 @@
 import * as wire from '../../../contracts/client-platform/v1/typescript/client';
-import type { ClientTransport } from './types';
+import type { ClientTransport, VideoProjectChange } from './types';
 import { sha256Hex } from '../platform/crypto';
 import { ATTACHMENT_LIMITS } from './limits';
 
@@ -426,6 +426,31 @@ export class HttpTransport implements ClientTransport {
   }
   setMediaTags(ref: string, tags: string[]) {
     return wire.setMediaTags(this.base, this.session(), { ref, tags });
+  }
+  videoProject(projectId: string, version?: number, signal?: AbortSignal) {
+    return wire.getVideoProject(
+      this.base,
+      this.session(),
+      projectId,
+      version,
+      signal,
+    );
+  }
+  changeVideoProject(projectId: string, change: VideoProjectChange) {
+    return wire.changeVideoProject(
+      this.base,
+      this.session(),
+      projectId,
+      change,
+    );
+  }
+  restoreVideoProject(projectId: string, number: number) {
+    return wire.restoreVideoProject(this.base, this.session(), projectId, {
+      number,
+    });
+  }
+  makeVideoProject(projectId: string) {
+    return wire.makeVideoProject(this.base, this.session(), projectId);
   }
   pendingApprovals(signal?: AbortSignal) {
     return wire.getPendingApprovals(this.base, this.session(), signal);

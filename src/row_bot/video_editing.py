@@ -137,6 +137,25 @@ class Step:
     role: str = ""
     volume: float | None = None
     duck: bool = True
+    # scenes (a video project's, 5.3.1 B3; never the agent's own step): the pieces, in order.
+    scenes: list["SceneCut"] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class SceneCut:
+    """One scene of a video project: a piece of an input, its speed, a zoom, a card, its line and voice."""
+
+    input: int
+    start: float = 0.0
+    end: float | None = None
+    speed: float = 1.0
+    zoom: tuple[float, float, float, float] | None = None
+    card: str = ""
+    line: str = ""
+    voice: str = ""
+
+
+CARD_SECONDS = 3.0
 
 
 def _number(value: Any, name: str) -> float | None:
@@ -233,7 +252,9 @@ def parse_steps(raw: Iterable[Any] | None) -> list[Step]:
 
 def sound_sources(steps: list[Step]) -> list[str]:
     """The sound files an edit lays, each once, in the order the steps name them."""
-    return list(dict.fromkeys(step.source for step in steps if step.op == "sound" and step.source))
+    names = [step.source for step in steps if step.op == "sound" and step.source]
+    names += [scene.voice for step in steps if step.op == "scenes" for scene in step.scenes if scene.voice]
+    return list(dict.fromkeys(names))
 
 
 def speed_words(factor: float) -> str:
@@ -257,6 +278,7 @@ def describe(steps: list[Step], inputs: int = 1) -> str:
             "crop": "cropped",
             "captions": "captioned",
             "sound": {"voice": "added a voice", "music": "added music"}.get(step.role, "set the sound level"),
+            "scenes": f"cut {len(step.scenes)} scene{'s' if len(step.scenes) != 1 else ''}",
         }[step.op]
         if word not in words:
             words.append(word)
@@ -447,6 +469,8 @@ class Plan:
     has_audio: bool
     summary: str
     outputs: list[str] = field(default_factory=list)
+    # A project's scenes: where each starts on the finished video, then where it ends.
+    marks: list[float] = field(default_factory=list)
 
 
 def _even(value: float) -> int:
@@ -485,6 +509,10 @@ class _Builder:
         self.duration = sum(item.info.duration for item in inputs)
         self.video = ""
         self.audio: str | None = None
+        self.lengths = [item.info.duration for item in inputs]
+        # Voice lines a project's scenes lay: (when on the finished video, the file).
+        self.voice_cues: list[tuple[float, str]] = []
+        self.marks: list[float] = []
 
     def label(self, kind: str) -> str:
         self.count += 1
@@ -691,6 +719,53 @@ class _Builder:
     def sound(self, step: Step) -> None:
         """Laid on the finished timeline once every picture step is done (``mix``)."""
 
+    def scenes(self, step: Step) -> None:
+        """A video project's scenes in order: each piece cut from its input, at its speed, with its zoom,
+        its card for the first seconds and its line as a caption (``style="caption"``); its voice line
+        is laid at the scene's start on the finished video."""
+        if not step.scenes:
+            raise EditError("A video needs at least one scene.")
+        offsets = [sum(self.lengths[:index]) for index in range(len(self.lengths))]
+        cuts: list[tuple[float, float]] = []
+        for number, scene in enumerate(step.scenes, 1):
+            if not 0 <= scene.input < len(self.lengths):
+                raise EditError(f"Scene {number}: its video isn't one of the inputs.")
+            length = self.lengths[scene.input]
+            start = min(max(0.0, scene.start), length)
+            end = length if scene.end is None else min(scene.end, length)
+            if end - start < 0.05:
+                raise EditError(f"Scene {number}: {_seconds_text(start)}–{_seconds_text(end)} s is outside its "
+                                f"video, which is {_seconds_text(length)} s long.")
+            cuts.append((offsets[scene.input] + start, offsets[scene.input] + end))
+        videos, sounds = self._pieces(cuts, audio=True)
+        self._join(videos, sounds)
+        lengths = [end - start for start, end in cuts]
+        self.duration = sum(lengths)
+        # Speeds from the last scene back, so each one's times are still those of the cut timeline.
+        for index in range(len(step.scenes) - 1, -1, -1):
+            factor = step.scenes[index].speed
+            if abs(factor - 1) > 1e-3:
+                begin = sum(lengths[:index])
+                self.speed(Step(op="speed", start=begin, end=begin + lengths[index], factor=factor))
+        finals = [length / scene.speed for length, scene in zip(lengths, step.scenes)]
+        self.marks = [round(sum(finals[:index]), 3) for index in range(len(finals) + 1)]
+        for index, scene in enumerate(step.scenes):
+            begin = sum(finals[:index])
+            end = begin + finals[index]
+            if scene.zoom:
+                x, y, width, height = scene.zoom
+                self.zoom(Step(op="zoom", start=begin, end=end, x=x, y=y, width=width, height=height))
+            if scene.card:
+                card = Step(op="text", text=scene.card, style="title", position="center")
+                self.video = self.lay(self.video, text_overlay(card, self.width, self.height),
+                                      start=begin, end=min(end, begin + CARD_SECONDS))
+            if scene.line and step.style == "caption":
+                caption = Step(op="text", text=scene.line, style="caption", position="bottom")
+                self.video = self.lay(self.video, text_overlay(caption, self.width, self.height),
+                                      start=begin, end=end)
+            if scene.voice:
+                self.voice_cues.append((begin, scene.voice))
+
     def _amix(self, labels: list[str]) -> str:
         if len(labels) == 1:
             return labels[0]
@@ -702,6 +777,7 @@ class _Builder:
         """Voice lines at their times, music under them (ducked while a voice speaks) and the video's own sound,
         mixed and brought to one loudness: the narrated video's sound in one pass."""
         sounds = [step for step in steps if step.op == "sound"]
+        sounds += [Step(op="sound", source=voice, role="voice", start=moment) for moment, voice in self.voice_cues]
         if not sounds:
             return
         total = _seconds_text(self.duration)
@@ -803,7 +879,8 @@ def build_plan(
     args += ["-progress", "pipe:1", "-nostats", file_argument(output)]
     return Plan(args=args, graph=";\n".join(builder.lines), overlays=builder.overlays,
                 duration=builder.duration, width=builder.width, height=builder.height,
-                has_audio=bool(builder.audio), summary=describe(steps, len(inputs)), outputs=[output])
+                has_audio=bool(builder.audio), summary=describe(steps, len(inputs)), outputs=[output],
+                marks=builder.marks)
 
 
 def graph_option_for(version: str) -> str:

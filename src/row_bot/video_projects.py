@@ -1,0 +1,527 @@
+"""Video projects (5.3.1 B3): a video as scenes, versioned, shared by the Video panel and Row-Bot.
+
+A project is its scenes in order. Each scene is a piece of a source (a recording, a video edit,
+or a video in the chat's files or the workspace) from its start to its end, with its speed, a
+zoom on a region, a card laid over its first seconds, and its line: the words said over it,
+voiced in the person's chosen voice (or a voice file made with ``speak``) and, with captions on,
+shown under it. Music (``make_music``, or the person's own file) plays under the whole video
+and dips while a line is said.
+
+Every change is a new version, by the person or by Row-Bot with a note of what changed. Going
+back is a new version too, so nothing is lost. Making a version's video voices each line whose
+voice is missing or says other words, then renders the whole version as one video edit that
+also reads the checks (sound, black and still stretches) for the review card. The video is
+saved to the conversation's files like any edit.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import re
+import threading
+import time
+import uuid
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Literal
+
+logger = logging.getLogger(__name__)
+
+PROJECT_ID = re.compile(r"vid-[0-9a-f]{8}")
+SCENE_ID = re.compile(r"s[0-9a-f]{6}")
+By = Literal["you", "row-bot"]
+MAX_SCENES = 60
+MAX_VERSIONS = 50
+MAX_TITLE = 80
+MAX_CARD = 120
+MAX_LINE = 300
+MAX_NOTE = 200
+SPEEDS = (0.25, 4.0)
+_FOLDER = "video-projects"
+_LOCK = threading.RLock()
+
+
+class ProjectError(ValueError):
+    """The change can't be made as asked; the message says why in plain words."""
+
+    def __init__(self, message: str, *, stale: bool = False) -> None:
+        super().__init__(message)
+        self.stale = stale
+
+
+@dataclass
+class Scene:
+    scene_id: str
+    source: str
+    start: float = 0.0
+    end: float | None = None
+    speed: float = 1.0
+    zoom: list[float] | None = None
+    card: str = ""
+    line: str = ""
+    # The voice file said over it (a file in the chat's files) and the words that file says.
+    voice: str = ""
+    voiced: str = ""
+
+
+@dataclass
+class Version:
+    number: int
+    at: float
+    by: str
+    note: str
+    scenes: list[Scene]
+    music: str = ""
+    music_volume: float = 0.3
+    captions: bool = False
+    voice_lines: bool = True
+    # Making its video: "" (not yet), "voicing", "rendering" (edit_id follows the edit) or "failed".
+    status: str = ""
+    edit_id: str = ""
+    problem: str = ""
+
+
+@dataclass
+class Project:
+    project_id: str
+    conversation_id: str
+    title: str
+    created_at: float
+    versions: list[Version] = field(default_factory=list)
+
+    @property
+    def latest(self) -> Version:
+        return self.versions[-1]
+
+    def version(self, number: int | None) -> Version | None:
+        if number is None:
+            return self.latest
+        return next((item for item in self.versions if item.number == number), None)
+
+
+def projects_root() -> Path:
+    from row_bot.data_paths import get_row_bot_data_dir
+
+    return get_row_bot_data_dir() / _FOLDER
+
+
+def _path(conversation_id: str, project_id: str) -> Path:
+    from row_bot.tool_outputs import thread_folder_name
+
+    return projects_root() / thread_folder_name(conversation_id) / f"{project_id}.json"
+
+
+def _save(project: Project) -> None:
+    path = _path(project.conversation_id, project.project_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    partial = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex[:6]}.part")
+    partial.write_text(json.dumps(asdict(project)), encoding="utf-8", newline="\n")
+    os.replace(partial, path)
+
+
+def _scene_from(data: dict[str, Any]) -> Scene:
+    zoom = data.get("zoom")
+    return Scene(
+        scene_id=str(data["scene_id"]), source=str(data["source"]), start=float(data.get("start") or 0),
+        end=None if data.get("end") is None else float(data["end"]), speed=float(data.get("speed") or 1),
+        zoom=[float(value) for value in zoom][:4] if zoom else None, card=str(data.get("card") or ""),
+        line=str(data.get("line") or ""), voice=str(data.get("voice") or ""), voiced=str(data.get("voiced") or ""),
+    )
+
+
+def _load(path: Path) -> Project | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not PROJECT_ID.fullmatch(str(data.get("project_id") or "")):
+            return None
+        versions = []
+        for item in data.get("versions") or []:
+            scenes = [_scene_from(scene) for scene in item.get("scenes") or []]
+            versions.append(Version(
+                number=int(item["number"]), at=float(item["at"]), by=str(item.get("by") or "row-bot"),
+                note=str(item.get("note") or ""), scenes=scenes, music=str(item.get("music") or ""),
+                music_volume=float(item.get("music_volume", 0.3)), captions=bool(item.get("captions")),
+                voice_lines=bool(item.get("voice_lines", True)), status=str(item.get("status") or ""),
+                edit_id=str(item.get("edit_id") or ""), problem=str(item.get("problem") or ""),
+            ))
+        if not versions:
+            return None
+        return Project(project_id=data["project_id"], conversation_id=str(data["conversation_id"]),
+                       title=str(data.get("title") or "Video"), created_at=float(data["created_at"]),
+                       versions=versions)
+    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+        return None
+
+
+def get(project_id: str, conversation_id: str | None = None) -> Project | None:
+    """A project by id (in that conversation when one is named)."""
+    if not PROJECT_ID.fullmatch(str(project_id or "")):
+        return None
+    root = projects_root()
+    if conversation_id is not None:
+        candidates = [_path(conversation_id, project_id)]
+    else:
+        candidates = list(root.glob(f"*/{project_id}.json")) if root.is_dir() else []
+    for path in candidates:
+        if path.is_file():
+            project = _load(path)
+            if project is not None and (conversation_id is None or project.conversation_id == conversation_id):
+                return project
+    return None
+
+
+def list_projects(conversation_id: str) -> list[Project]:
+    """A conversation's projects, the most recently changed first."""
+    folder = _path(conversation_id, "x").parent
+    found = [project for path in folder.glob("vid-*.json") if (project := _load(path)) is not None] \
+        if folder.is_dir() else []
+    return sorted(found, key=lambda project: -project.latest.at)
+
+
+def delete_conversation(conversation_id: str) -> int:
+    """Forget a deleted conversation's projects (their videos are its files and go with it)."""
+    import shutil
+
+    folder = _path(conversation_id, "x").parent
+    if not folder.is_dir():
+        return 0
+    shutil.rmtree(folder, ignore_errors=True)
+    return 1
+
+
+# ── Changing a project ──────────────────────────────────────────────────────
+
+
+def _text(value: Any, limit: int) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()[:limit]
+
+
+def _number(value: Any, name: str, number: int) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        raise ProjectError(f"Scene {number}: {name} must be a number of seconds.") from None
+    if result != result or result < 0:
+        raise ProjectError(f"Scene {number}: {name} must be 0 or more.")
+    return round(result, 3)
+
+
+def _check_source(value: str, conversation_id: str, number: int) -> None:
+    from row_bot.media_sources import SourceError, resolve
+
+    try:
+        found = resolve(value, conversation_id)
+    except SourceError as error:
+        raise ProjectError(f"Scene {number}: {error}") from None
+    if len(found) != 1 or found[0].kind != "video":
+        raise ProjectError(f"Scene {number}: {value} isn't a video.")
+
+
+def _clean_scenes(raw: list[Any], conversation_id: str, before: list[Scene]) -> list[Scene]:
+    """The scenes as given, checked; a scene that keeps its id keeps its voice while its line is the same."""
+    if not raw:
+        raise ProjectError("A video needs at least one scene.")
+    if len(raw) > MAX_SCENES:
+        raise ProjectError(f"At most {MAX_SCENES} scenes fit in one video: join some.")
+    known = {scene.scene_id: scene for scene in before}
+    checked: dict[str, None] = {}
+    scenes: list[Scene] = []
+    for number, item in enumerate(raw, start=1):
+        data = item if isinstance(item, dict) else dict(item)
+        scene_id = str(data.get("scene_id") or "")
+        if not SCENE_ID.fullmatch(scene_id) or any(scene.scene_id == scene_id for scene in scenes):
+            scene_id = f"s{uuid.uuid4().hex[:6]}"
+        source = _text(data.get("source"), 512)
+        if not source:
+            raise ProjectError(f"Scene {number}: name its video (a recording rec-…, an edit edit-…, a file in "
+                               "this chat or a workspace path).")
+        if source not in checked:
+            _check_source(source, conversation_id, number)
+            checked[source] = None
+        start = _number(data.get("start"), "start", number) or 0.0
+        end = _number(data.get("end"), "end", number)
+        if end is not None and end - start < 0.1:
+            raise ProjectError(f"Scene {number}: it ends before it starts.")
+        speed = float(data.get("speed") or 1)
+        if not SPEEDS[0] <= speed <= SPEEDS[1]:
+            raise ProjectError(f"Scene {number}: speed is {SPEEDS[0]:g} to {SPEEDS[1]:g} (2 = twice as fast).")
+        zoom = data.get("zoom")
+        if zoom:
+            try:
+                x, y, width, height = (min(1.0, max(0.0, float(value))) for value in zoom)
+            except (TypeError, ValueError):
+                raise ProjectError(f"Scene {number}: zoom is [x, y, width, height], each 0 to 1.") from None
+            zoom = None if width >= 0.999 and height >= 0.999 else [x, y, max(width, 0.05), max(height, 0.05)]
+        line = _text(data.get("line"), MAX_LINE)
+        voice = _text(data.get("voice"), 200)
+        old = known.get(scene_id)
+        if voice and (old is None or voice != old.voice):
+            voiced = line  # A voice file Row-Bot made for this line with speak.
+        elif old is not None and old.voice and old.voiced == line:
+            voice, voiced = old.voice, old.voiced
+        else:
+            voice, voiced = "", ""
+        scenes.append(Scene(scene_id=scene_id, source=source, start=start, end=end, speed=round(speed, 3),
+                            zoom=zoom or None, card=_text(data.get("card"), MAX_CARD), line=line, voice=voice,
+                            voiced=voiced))
+    from row_bot.video_editing import MAX_INPUTS
+
+    if len({scene.source for scene in scenes}) > MAX_INPUTS:
+        raise ProjectError(f"A video can use at most {MAX_INPUTS} different sources: join some first.")
+    return scenes
+
+
+def _add_version(project: Project, version: Version) -> Version:
+    project.versions.append(version)
+    del project.versions[:-MAX_VERSIONS]
+    _save(project)
+    return version
+
+
+def create(conversation_id: str, title: str, scenes: list[Any], *, music: str = "", music_volume: float = 0.3,
+           captions: bool = False, voice_lines: bool = True, by: By = "row-bot", note: str = "") -> Project:
+    """A new project with its first version."""
+    conversation = str(conversation_id or "").strip()
+    if not conversation:
+        raise ProjectError("Video projects belong to a conversation.")
+    with _LOCK:
+        project = Project(project_id=f"vid-{uuid.uuid4().hex[:8]}", conversation_id=conversation,
+                          title=_text(title, MAX_TITLE) or "Video", created_at=time.time())
+        version = Version(number=1, at=time.time(), by=by, note=_text(note, MAX_NOTE) or "First version",
+                          scenes=_clean_scenes(scenes, conversation, []), music=_text(music, 200),
+                          music_volume=_volume(music_volume), captions=bool(captions), voice_lines=bool(voice_lines))
+        _add_version(project, version)
+    logger.info("Video project created (%d scenes)", len(version.scenes))
+    return project
+
+
+def _volume(value: Any) -> float:
+    try:
+        return round(min(1.0, max(0.0, float(value))), 3)
+    except (TypeError, ValueError):
+        return 0.3
+
+
+def change(project: Project, *, by: By, note: str = "", base: int | None = None, scenes: list[Any] | None = None,
+           title: str | None = None, music: str | None = None, music_volume: float | None = None,
+           captions: bool | None = None, voice_lines: bool | None = None) -> Version:
+    """A new version with these changes; ``base`` is the version they were made on (refused when it isn't the
+    latest, so two editors never overwrite each other)."""
+    with _LOCK:
+        fresh = get(project.project_id, project.conversation_id)
+        if fresh is None:
+            raise ProjectError("This video project is no longer here.")
+        latest = fresh.latest
+        if base is not None and base != latest.number:
+            raise ProjectError(f"The video changed meanwhile (now version {latest.number}): look again, then change "
+                               "it.", stale=True)
+        if title is not None and _text(title, MAX_TITLE):
+            fresh.title = _text(title, MAX_TITLE)
+        version = Version(
+            number=latest.number + 1, at=time.time(), by=by, note=_text(note, MAX_NOTE) or "Changed",
+            scenes=(_clean_scenes(scenes, fresh.conversation_id, latest.scenes) if scenes is not None
+                    else [Scene(**asdict(scene)) for scene in latest.scenes]),
+            music=latest.music if music is None else _text(music, 200),
+            music_volume=latest.music_volume if music_volume is None else _volume(music_volume),
+            captions=latest.captions if captions is None else bool(captions),
+            voice_lines=latest.voice_lines if voice_lines is None else bool(voice_lines),
+        )
+        _add_version(fresh, version)
+        project.title, project.versions = fresh.title, fresh.versions
+    return version
+
+
+def restore(project: Project, number: int, *, by: By) -> Version:
+    """Back to an earlier version, as a new version (so going back can be undone too)."""
+    old = project.version(number)
+    if old is None:
+        raise ProjectError(f"Version {number} isn't kept any more.")
+    with _LOCK:
+        fresh = get(project.project_id, project.conversation_id) or project
+        version = Version(number=fresh.latest.number + 1, at=time.time(), by=by, note=f"Back to version {number}",
+                          scenes=[Scene(**asdict(scene)) for scene in old.scenes], music=old.music,
+                          music_volume=old.music_volume, captions=old.captions, voice_lines=old.voice_lines,
+                          status="rendering" if old.edit_id else "", edit_id=old.edit_id)
+        _add_version(fresh, version)
+        project.versions = fresh.versions
+    return version
+
+
+def changed_scenes(project: Project, version: Version) -> list[str]:
+    """The scenes this version added or changed against the one before it (the panel highlights them)."""
+    before = project.version(version.number - 1)
+    if before is None:
+        return []
+    old = {scene.scene_id: scene for scene in before.scenes}
+    keys = ("source", "start", "end", "speed", "zoom", "card", "line")
+    return [scene.scene_id for scene in version.scenes
+            if scene.scene_id not in old or any(getattr(scene, key) != getattr(old[scene.scene_id], key)
+                                                for key in keys)]
+
+
+# ── Making the video ────────────────────────────────────────────────────────
+
+
+def _update(project: Project, number: int, **changes: Any) -> None:
+    with _LOCK:
+        fresh = get(project.project_id, project.conversation_id)
+        if fresh is None:
+            return
+        version = fresh.version(number)
+        if version is None:
+            return
+        for name, value in changes.items():
+            setattr(version, name, value)
+        _save(fresh)
+
+
+def needs_voice(version: Version) -> list[Scene]:
+    return [scene for scene in version.scenes
+            if version.voice_lines and scene.line and (not scene.voice or scene.voiced != scene.line)]
+
+
+def make(project: Project, number: int | None = None, *, download: bool = False) -> Version:
+    """Make a version's video in the background: voice the lines that need it, then one edit with the checks."""
+    version = project.version(number)
+    if version is None:
+        raise ProjectError("That version isn't kept any more.")
+    _update(project, version.number, status="voicing" if needs_voice(version) else "rendering", edit_id="",
+            problem="")
+    thread = threading.Thread(target=_make, args=(project.project_id, project.conversation_id, version.number,
+                                                  download), daemon=True, name=f"row-bot-{project.project_id}")
+    thread.start()
+    return project.version(version.number) or version
+
+
+def _file_name(title: str, suffix: str) -> str:
+    from row_bot.tools.video_editing_tool import output_name
+
+    return output_name(title, default="video", suffix=suffix)
+
+
+def _make(project_id: str, conversation_id: str, number: int, download: bool) -> None:
+    from row_bot import sound, video_edits
+    from row_bot.media_sources import SourceError, resolve
+    from row_bot.tools.sound_tool import _save as save_sound
+    from row_bot.tools.sound_tool import _source as sound_source
+    from row_bot.video_editing import SceneCut, Step
+
+    project = get(project_id, conversation_id)
+    version = project.version(number) if project is not None else None
+    if project is None or version is None:
+        return
+    try:
+        for scene in needs_voice(version):
+            speech = sound.speak(scene.line)
+            scene.voice = save_sound(_file_name(f"{project.title} {scene.scene_id}", ".wav"), speech.wav,
+                                     conversation_id)
+            scene.voiced = scene.line
+        if version.voice_lines:
+            _update(project, number, scenes=version.scenes, status="rendering")
+        sources = list(dict.fromkeys(scene.source for scene in version.scenes))
+        media = []
+        for value in sources:
+            found = resolve(value, conversation_id)
+            if len(found) != 1 or found[0].kind != "video":
+                raise SourceError(f"{value} isn't a video any more.")
+            media.append(found[0])
+        cuts = [SceneCut(input=sources.index(scene.source), start=scene.start, end=scene.end, speed=scene.speed,
+                         zoom=tuple(scene.zoom) if scene.zoom else None, card=scene.card, line=scene.line,
+                         voice=scene.voice if version.voice_lines else "") for scene in version.scenes]
+        steps = [Step(op="scenes", scenes=cuts, style="caption" if version.captions else "")]
+        sounds: dict[str, tuple[Any, bytes, str]] = {}
+        for name in [cut.voice for cut in cuts if cut.voice] + ([version.music] if version.music else []):
+            if name not in sounds:
+                _label, path, data, suffix = sound_source(name, conversation_id)
+                sounds[name] = (path, data or b"", suffix)
+        if version.music:
+            steps.append(Step(op="sound", source=version.music, role="music", volume=version.music_volume))
+        edit = video_edits.start(video_edits.Request(
+            conversation_id=conversation_id, kind="video", sources=media, steps=steps,
+            output_name=_file_name(f"{project.title} v{number}", ".mp4"), download=download, sounds=sounds,
+            check=True,
+        ))
+        _update(project, number, status="rendering", edit_id=edit.edit_id)
+    except (SourceError, ValueError) as error:
+        _update(project, number, status="failed", problem=str(error)[:300])
+    except Exception:
+        logger.warning("A video project's video couldn't be made", exc_info=True)
+        _update(project, number, status="failed", problem="Something went wrong while making the video.")
+
+
+# ── Reading ─────────────────────────────────────────────────────────────────
+
+
+def _iso(value: float) -> str:
+    return datetime.fromtimestamp(value, tz=timezone.utc).isoformat()
+
+
+def view(project: Project, number: int | None = None) -> dict[str, Any]:
+    """The client's view of a project at one version (the latest by default)."""
+    from row_bot import video_edits
+
+    version = project.version(number) or project.latest
+    edit = video_edits.get(version.edit_id) if version.edit_id else None
+    marks = list(edit.marks) if edit is not None and len(edit.marks) == len(version.scenes) + 1 else []
+    return {
+        "project_id": project.project_id,
+        "conversation_id": project.conversation_id,
+        "title": project.title,
+        "latest": project.latest.number,
+        "versions": [{"number": item.number, "at": _iso(item.at), "by": item.by if item.by in {"you", "row-bot"}
+                      else "row-bot", "note": item.note} for item in reversed(project.versions)],
+        "number": version.number,
+        "scenes": [{"scene_id": scene.scene_id, "source": scene.source, "start": scene.start, "end": scene.end,
+                    "speed": scene.speed, "zoom": scene.zoom, "card": scene.card, "line": scene.line,
+                    "voiced": bool(scene.voice) and scene.voiced == scene.line,
+                    "at": marks[index] if marks else None,
+                    "length": round(marks[index + 1] - marks[index], 3) if marks else None}
+                   for index, scene in enumerate(version.scenes)],
+        "changed": changed_scenes(project, version),
+        "music": version.music,
+        "music_volume": version.music_volume,
+        "captions": version.captions,
+        "voice_lines": version.voice_lines,
+        "status": _status(version, edit),
+        "problem": version.problem or (edit.detail if edit is not None and edit.status == "failed" else ""),
+        "edit": None if edit is None else video_edits.view(edit),
+        "checks": list(edit.checks) if edit is not None else [],
+        "checks_passed": edit.checks_passed if edit is not None else None,
+    }
+
+
+def _status(version: Version, edit: Any) -> str:
+    if version.status in {"voicing", "failed"}:
+        return version.status
+    if edit is None:
+        return "rendering" if version.status == "rendering" and not version.edit_id else "draft"
+    return {"saved": "made", "failed": "failed", "stopped": "stopped"}.get(edit.status, "rendering")
+
+
+def summary(project: Project, number: int | None = None) -> str:
+    """The tool result's first line, ``Video project vid-…: …`` (the chat's card follows it), then the scenes."""
+    data = view(project, number)
+    words = {"draft": "not made yet", "voicing": "voicing the lines", "rendering": "making the video",
+             "made": "made", "failed": "not made", "stopped": "stopped"}[data["status"]]
+    lines = [f"Video project {project.project_id}: \"{project.title}\", version {data['number']} of "
+             f"{data['latest']}, {len(data['scenes'])} scenes, {words}."]
+    if data["problem"]:
+        lines.append(f"Why: {data['problem']}")
+    for index, scene in enumerate(data["scenes"], start=1):
+        span = f"{scene['start']:g}–{'end' if scene['end'] is None else format(scene['end'], 'g')} s"
+        extras = [f"{scene['speed']:g}×" if scene["speed"] != 1 else "", "zoom" if scene["zoom"] else "",
+                  f"card \"{scene['card']}\"" if scene["card"] else ""]
+        extra = ", ".join(item for item in extras if item)
+        line = f" — \"{scene['line']}\"" if scene["line"] else ""
+        lines.append(f"{index}. [{scene['scene_id']}] {scene['source']} {span}{', ' + extra if extra else ''}{line}")
+    if data["edit"] and data["status"] == "made":
+        lines.append(f"Video: {data['edit']['output_name']} ({data['edit']['edit_id']}) in this chat's files.")
+    if data["checks"]:
+        verdict = "passed" if data["checks_passed"] else "NOT passed: fix these before saying it's done"
+        lines.append(f"Checks {verdict}:\n" + "\n".join(f"- {line}" for line in data["checks"]))
+    return "\n".join(lines)

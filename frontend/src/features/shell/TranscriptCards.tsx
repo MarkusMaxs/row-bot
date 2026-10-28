@@ -24,6 +24,7 @@ import { DeliveryCard } from './DeliveryCard';
 import { SandboxJobCard } from './SandboxJobCard';
 import { SandboxPrepareOffer } from './SandboxPrepare';
 import { PageCard } from '../pages/PageCard';
+import { VideoProjectCard } from '../video/VideoProjectCard';
 import { LinkedConversationCard } from './LinkedConversationCard';
 
 /**
@@ -69,6 +70,8 @@ export type TranscriptCard =
   | { kind: 'sandbox_offer'; reason: string }
   /** A page a step made or changed, with Open (N5). */
   | { kind: 'page'; pageId: string }
+  /** A video project a step made or changed, with Open (5.3.1 B3). */
+  | { kind: 'video_project'; projectId: string }
   /** A conversation this one started or proposed, followed by its link (5.3.1 C). */
   | { kind: 'linked'; linkId: string; title: string }
   /** Row-Bot's question, answered (or skipped), collapsed to what was chosen (N4). */
@@ -139,6 +142,11 @@ export function cardOf(value: Specialization | null | undefined, callId = '') {
     } satisfies TranscriptCard;
   if (value.kind === 'page' && value.page_id)
     return { kind: 'page', pageId: value.page_id } satisfies TranscriptCard;
+  if (value.kind === 'video_project' && value.project_id)
+    return {
+      kind: 'video_project',
+      projectId: value.project_id,
+    } satisfies TranscriptCard;
   if (value.kind === 'linked_conversation' && value.link_id)
     return {
       kind: 'linked',
@@ -182,13 +190,15 @@ export function cardKey(card: TranscriptCard) {
                   ? `answer:${card.callId}`
                   : card.kind === 'page'
                     ? `page:${card.pageId}`
-                    : card.kind === 'linked'
-                      ? `linked:${card.linkId}`
-                      : card.kind === 'sandbox_job'
-                        ? `sandbox_job:${card.jobId}`
-                        : card.kind === 'sandbox_offer'
-                          ? 'sandbox_offer'
-                          : `connect:${card.target}`;
+                    : card.kind === 'video_project'
+                      ? `video_project:${card.projectId}`
+                      : card.kind === 'linked'
+                        ? `linked:${card.linkId}`
+                        : card.kind === 'sandbox_job'
+                          ? `sandbox_job:${card.jobId}`
+                          : card.kind === 'sandbox_offer'
+                            ? 'sandbox_offer'
+                            : `connect:${card.target}`;
 }
 
 export function tracedCards(groups: TranscriptTraceGroup[]): TranscriptCard[] {
@@ -546,6 +556,12 @@ export function TranscriptCards({
           <PageCard
             key={cardKey(card)}
             pageId={card.pageId}
+            conversationId={conversation}
+          />
+        ) : card.kind === 'video_project' ? (
+          <VideoProjectCard
+            key={cardKey(card)}
+            projectId={card.projectId}
             conversationId={conversation}
           />
         ) : card.kind === 'linked' ? (
