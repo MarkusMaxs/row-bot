@@ -225,6 +225,30 @@ def test_voice_lines_and_ducked_music_are_laid_on_the_finished_video_at_one_loud
     assert plan.has_audio and describe(steps) == "Trimmed, added a voice, added music and set the sound level"
 
 
+def test_a_projects_scenes_are_cut_in_order_with_speed_zoom_card_caption_and_their_voice_at_each_start():
+    """5.3.1 B3: a video project renders in one run; each scene is a piece of one of the inputs."""
+    from row_bot.video_editing import SceneCut, Step
+
+    scenes = Step(op="scenes", style="caption", scenes=[
+        SceneCut(input=1, start=1, end=3, card="Sign up", line="First, sign up."),
+        SceneCut(input=0, start=0, end=4, speed=2, zoom=(0.5, 0.5, 0.5, 0.5), voice="line-2.wav"),
+    ])
+    plan = build_plan([InputVideo("input-1.mp4", HD), InputVideo("input-2.mp4", SILENT)], [scenes], "output.mp4",
+                      sounds={"line-2.wav": "sound-1.wav"})
+
+    # The second input starts 6 s into the joined inputs: its 1–3 s is 7–9 s there, and comes first.
+    assert plan.graph.index("trim=start=7:end=9") < plan.graph.index("trim=start=0:end=4")
+    assert "setpts=PTS/2" in plan.graph and "atempo=2" in plan.graph
+    assert "crop=" in plan.graph, "the second scene punches in"
+    assert len(plan.overlays) == 3, "the card, the first scene's caption and the 2× badge"
+    assert "file:sound-1.wav" in plan.args and "adelay=2000|2000" in plan.graph, "its line starts with it"
+    assert (plan.duration, plan.marks) == (4.0, [0.0, 2.0, 4.0])
+    assert plan.summary == "Joined 2 videos and cut 2 scenes"
+    with pytest.raises(EditError, match="Scene 1: .* outside its video"):
+        build_plan([InputVideo("input-1.mp4", HD)],
+                   [Step(op="scenes", scenes=[SceneCut(input=0, start=8)])], "output.mp4")
+
+
 def test_a_silent_video_gets_its_narration_and_sounds_are_checked():
     plan = build_plan([InputVideo(path="input-1.mp4", info=SILENT)],
                       parse_steps([{"op": "sound", "source": "line.wav"}]), "output.mp4",

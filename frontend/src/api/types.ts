@@ -954,6 +954,26 @@ export interface ClientTransport {
   ): Promise<Wire.ExportSaved>;
   attention?(signal?: AbortSignal): Promise<Wire.AttentionSnapshot>;
   pendingApprovals?(signal?: AbortSignal): Promise<Wire.PendingApprovalPage>;
+  media?(
+    filter: { query?: string; kind?: string },
+    signal?: AbortSignal,
+  ): Promise<Wire.MediaPage>;
+  setMediaTags?(ref: string, tags: string[]): Promise<Wire.MediaTags>;
+  /** A video project (5.3.1 B3) at one version, the latest by default. */
+  videoProject?(
+    projectId: string,
+    version?: number,
+    signal?: AbortSignal,
+  ): Promise<Wire.VideoProjectView>;
+  changeVideoProject?(
+    projectId: string,
+    change: Wire.VideoProjectChange,
+  ): Promise<Wire.VideoProjectView>;
+  restoreVideoProject?(
+    projectId: string,
+    number: number,
+  ): Promise<Wire.VideoProjectView>;
+  makeVideoProject?(projectId: string): Promise<Wire.VideoProjectView>;
   scheduledPosts?(signal?: AbortSignal): Promise<Wire.ScheduledPostPage>;
   cancelScheduledPost?(id: string): Promise<Wire.ScheduledPostCancelled>;
   monitorLogs?(limit?: number, signal?: AbortSignal): Promise<Wire.MonitorLogs>;

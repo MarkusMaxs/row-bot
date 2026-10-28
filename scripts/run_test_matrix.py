@@ -97,6 +97,8 @@ BROWSER_SMOKE_SPECS = (
     "question-cards",
     "workflow-review",
     "pages",
+    "library-media",
+    "video-panel",
     "x-accounts",
     "outlook",
     "incognito",

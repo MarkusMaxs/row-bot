@@ -68,6 +68,7 @@ _CORE_TOOL_MODULES = (
     "row_bot.tools.sound_tool",
     "row_bot.tools.file_delivery_tool",
     "row_bot.tools.pages_tool",
+    "row_bot.tools.media_tool",
     "row_bot.tools.wiki_tool",
     "row_bot.tools.x_tool",
     "row_bot.tools.row_bot_status_tool",

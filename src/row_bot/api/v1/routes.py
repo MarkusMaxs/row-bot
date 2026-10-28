@@ -1030,6 +1030,10 @@ _STATUS.update(
         "recording_unavailable": 404,
         "local_address_unavailable": 404,
         "video_edit_unavailable": 404,
+        "video_project_unavailable": 404,
+        "video_project_stale": 409,
+        "video_project_invalid": 422,
+        "video_project_needs_ffmpeg": 409,
         "sent_file_unavailable": 404,
         "sent_file_expired": 410,
         "sent_files_gone": 409,
@@ -1086,6 +1090,7 @@ _STATUS['upload_too_large'] = 413
 # An answer that doesn't fit Row-Bot's question, or answers sent for an approval (N4).
 _STATUS['question_answer_invalid'] = 422
 _STATUS['approval_edit_invalid'] = 422
+_STATUS['media_unavailable'] = 404
 _STATUS['scheduled_post_unavailable'] = 404
 _STATUS['app_not_connected'] = 409  # A workflow template whose app is not connected yet.
 # Pages (N5): gone, not valid, too big, written to too often, or nothing to send.
@@ -5470,6 +5475,59 @@ def create_router(
             raise ProtocolError("video_edit_unavailable", 404)
         return await respond(request, dto.VideoEditView, result)
 
+    # Video projects (5.3.1 B3): the Video panel reads a project and adds the person's versions.
+    def _project_id(value: str) -> str:
+        from row_bot.video_projects import PROJECT_ID
+
+        if not PROJECT_ID.fullmatch(str(value or "")):
+            raise ProtocolError("video_project_unavailable", 404)
+        return value
+
+    async def _project_call(function: Any, *args: Any) -> Any:
+        from row_bot.application.video_project_views import ProjectRefused
+
+        try:
+            result = await call(function, *args)
+        except ProjectRefused as error:
+            raise ProtocolError(str(error), _STATUS[str(error)]) from None
+        if result is None:
+            raise ProtocolError("video_project_unavailable", 404)
+        return result
+
+    @router.get("/video-projects/{project_id}")
+    async def video_project(request: Request, project_id: str, version: int | None = None) -> JSONResponse:
+        await session(request)
+        from row_bot.application.video_project_views import read_video_project
+
+        result = await _project_call(read_video_project, _project_id(project_id), version)
+        return await respond(request, dto.VideoProjectView, result)
+
+    @router.put("/video-projects/{project_id}")
+    async def change_video_project_route(request: Request, project_id: str) -> JSONResponse:
+        await session(request, lane="mutation")
+        from row_bot.application.video_project_views import change_video_project
+
+        body = await _body(request, dto.VideoProjectChange, 256 * 1024)
+        result = await _project_call(change_video_project, _project_id(project_id), body.model_dump())
+        return await respond(request, dto.VideoProjectView, result)
+
+    @router.post("/video-projects/{project_id}/restore")
+    async def restore_video_project_route(request: Request, project_id: str) -> JSONResponse:
+        await session(request, lane="mutation")
+        from row_bot.application.video_project_views import restore_video_project
+
+        body = await _body(request, dto.VideoProjectRestore, 4 * 1024)
+        result = await _project_call(restore_video_project, _project_id(project_id), body.number)
+        return await respond(request, dto.VideoProjectView, result)
+
+    @router.post("/video-projects/{project_id}/make")
+    async def make_video_project_route(request: Request, project_id: str) -> JSONResponse:
+        await session(request, lane="mutation")
+        from row_bot.application.video_project_views import make_video_project
+
+        result = await _project_call(make_video_project, _project_id(project_id))
+        return await respond(request, dto.VideoProjectView, result)
+
     # Files sent to the person's devices or a chat app (F7). Every signed-in device is the owner's,
     # so each sees every delivery; a download needs the session and ends when its copy expires.
     def _delivery(value: str, index: str | None = None) -> tuple[str, int]:
@@ -5600,6 +5658,28 @@ def create_router(
         from row_bot.pages import views
 
         return await respond(request, dto.PagePage, await call(views, (conversation_id or "")[:256] or None))
+
+    @router.get("/media")
+    async def media_list(request: Request, query: str = "", kind: str = "") -> JSONResponse:
+        # Library › Media (5.3.1 B3): every picture, video and sound in the chats, newest first.
+        await session(request)
+        from row_bot import media_library
+
+        items = await call(media_library.items, query=query[:200],
+                           kind=kind if kind in {"image", "video", "audio"} else "", limit=500)
+        return await respond(request, dto.MediaPage, {"items": items})
+
+    @router.put("/media/tags")
+    async def media_tags(request: Request) -> JSONResponse:
+        await session(request, lane="mutation")
+        body = await _body(request, dto.MediaTagsWrite, 16 * 1024)
+        from row_bot import media_library
+
+        try:
+            tags = await call(media_library.set_tags, body.ref, body.tags)
+        except media_library.MediaError:
+            raise ProtocolError("media_unavailable", 404) from None
+        return await respond(request, dto.MediaTags, {"ref": body.ref, "tags": tags})
 
     @router.get("/pages/{page_id}")
     async def page_read(request: Request, page_id: str) -> JSONResponse:
