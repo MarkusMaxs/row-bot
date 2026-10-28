@@ -455,3 +455,33 @@ def test_without_its_starting_model_the_verdict_never_claims_no_difference_from_
                        "line": "Row-Bot couldn't run the starting model, so it can't tell yet whether training "
                                "helped. Not used."}
 
+
+
+@pytest.mark.parametrize(("sizes", "card_mib", "order"), [
+    ((16_810_714_592, 16_810_714_592), 32_607, "model"),  # a 27B and its 27B starting model on a 32 GB card
+    ((9_786_060_672, 9_786_060_672), 32_607, "interleaved"),  # the 9B and its starting model fit together
+    ((16_810_714_592, 16_810_714_592), 81_920, "interleaved"),
+])
+def test_models_that_cant_stay_loaded_together_run_one_after_the_other_with_the_same_results(
+        ready, monkeypatch, sizes, card_mib, order):
+    """C1, 28 Oct: a 27B and its starting model swapped on the card task by task (about 16 s a task). Each model's
+    runs now come together when both can't stay loaded, and the results are exactly the interleaved ones."""
+
+    def compared(card: int):
+        FakeWorker.instances.clear()
+        comparer = _comparer(ready)
+        comparer._card_mib = lambda: card  # noqa: SLF001
+        monkeypatch.setattr(comparer, "_local_sizes", lambda version, state, base_key: list(sizes))
+        result = comparer.run(1)
+        return result, [arm for _task, arm, _budget in FakeWorker.instances[0].asked]
+
+    result, arms = compared(card_mib)
+    reference, interleaved = compared(1_000_000)  # a card that holds both: the order as it always was
+
+    local = [arm for arm in arms if arm != "main"]  # the main model's answers are kept, so asked once
+    switches = sum(1 for before, after in zip(local, local[1:]) if before != after)
+    if order == "model":
+        assert switches == 3  # visible: all of base, then all of v1; hidden: base again, then v1
+    else:
+        assert local == [arm for arm in interleaved if arm != "main"] and switches > 3
+    assert result["rows"] == reference["rows"] and result["overall"] == reference["overall"]

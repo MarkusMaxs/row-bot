@@ -256,6 +256,7 @@ class Comparer:
         busy: Callable[[], bool] | None = None,
         serving_context: Callable[[str], int | None] | None = None,
         server_hold: Callable[[str], Any] | None = None,
+        card_mib: Callable[[], int | None] | None = None,
     ) -> None:
         self._root = root
         self._store = store
@@ -274,6 +275,7 @@ class Comparer:
         self._busy = busy
         self._serving_context = serving_context
         self._server_hold = server_hold
+        self._card_mib = card_mib
 
     @property
     def root(self) -> Path:
@@ -378,6 +380,41 @@ class Comparer:
         with self._server_held(state.runtime):
             return self._run(version, stop, state)
 
+    def _card(self) -> int | None:
+        if self._card_mib is not None:
+            return self._card_mib()
+        from row_bot.learning.training import hardware
+
+        found = hardware.peek()
+        return int(found.gpu.memory_mib) if found is not None and found.gpu is not None else None
+
+    def _local_sizes(self, version: int, state: Any, base_key: str) -> list[int]:
+        """The model files of the comparison's two local models (the new version and its baseline)."""
+
+        from row_bot.learning.training import base_model, releases, weights
+
+        sizes = [int(getattr(state, "gguf_bytes", 0) or 0)]
+        if base_key == "base":
+            model = _trained_from(version, self._root) or weights.MODELS.get(
+                gate.read_settings(self._root).starting_model, weights.QWEN35_9B)
+            built = base_model.read(model.id, self._root)
+            sizes.append(int(built.gguf_bytes) if built is not None else 0)
+        elif base_key.startswith("v") and base_key[1:].isdigit():
+            other = releases.read_state(releases.version_dir(int(base_key[1:]), self._root))
+            sizes.append(int(getattr(other, "gguf_bytes", 0) or 0) if other is not None else 0)
+        return sizes
+
+    def _order(self, sizes: list[int]) -> str:
+        """``model`` when the two local models can't stay loaded together on this card, so each is loaded once
+        rather than for every task (28 Oct: a 27B and its 27B starting model on a 32 GB card swapped each task,
+        about 16 s a task). Each needs about 1.25 times its file and 1 GB (the 9B's and 27B's measured needs).
+        Models that fit together (the 9B and its starting model) keep the interleaved order."""
+
+        card = self._card()
+        known = [size for size in sizes if size > 0]
+        need = sum(int(size / 2**20 * 1.25) + 1024 for size in known)
+        return "model" if card and len(known) > 1 and need > card else "interleaved"
+
     def _server_held(self, runtime: str) -> Any:
         """Row-Bot's own model server (O75) stays running for the whole comparison when the version
         runs there (its starting model is served there too): idle unloading never stops it between
@@ -445,6 +482,7 @@ class Comparer:
         packs = [pack for pack in PACKS if container or pack != "small_coding"]
         hidden_total = evaluation.audit_size(asked_by=ASKED_BY, store=self.store, packs=packs, verifiers=verifiers,
                                              include_replay=self.plan.replay) if self.plan.hidden else 0
+        order = self._order(self._local_sizes(version, state, base_key)) if base_ref else "interleaved"
         total = (len(chosen) * max(1, self.plan.visible_repeats)
                  + hidden_total * max(1, self.plan.hidden_repeats)) * len(arms)
         self._progress(version, phase="visible", done=0, total=total)
@@ -471,7 +509,7 @@ class Comparer:
                                                unsupported=set(unsupported) & {"main"})
             shown = evaluation.compare(arms, tasks=chosen, runner=runner, cache=cache, meter=meter, store=self.store,
                                        client=self._client, clock=self.clock, on_case=counted, budget=budget,
-                                       repeats=self.plan.visible_repeats, kind_key=family_key)
+                                       repeats=self.plan.visible_repeats, kind_key=family_key, order=order)
             hidden = None
             if self.plan.hidden and not shown.stopped:
                 self._progress(version, phase="hidden")
@@ -483,7 +521,7 @@ class Comparer:
                     arms, asked_by=ASKED_BY, store=self.store, runner=runner, cache=cache, meter=meter,
                     client=self._client, clock=self.clock, packs=packs, verifiers=verifiers,
                     include_replay=self.plan.replay, budget=budget, on_progress=hidden_progress,
-                    repeats=self.plan.hidden_repeats, combine_with=shown, kind_key=family_key)
+                    repeats=self.plan.hidden_repeats, combine_with=shown, kind_key=family_key, order=order)
             write_backs = list(getattr(worker, "write_backs", []) or [])
         except _Interrupted as interrupted:
             self._progress(version, state="paused" if interrupted.reason == "in_use" else "stopped",
