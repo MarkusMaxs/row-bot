@@ -19,6 +19,7 @@ import type {
   PageDecisionWrite,
   PageTheme,
   VideoProjectChange,
+  VideoProjectExport,
   DictationScope,
   DictationHandle,
   DictationResult,
@@ -2799,6 +2800,10 @@ export class ClientController {
     this.query(() => this.transport.restoreVideoProject?.(projectId, number));
   makeVideoProject = (projectId: string) =>
     this.query(() => this.transport.makeVideoProject?.(projectId));
+  exportVideoProject = (
+    projectId: string,
+    shape: VideoProjectExport['shape'],
+  ) => this.query(() => this.transport.exportVideoProject?.(projectId, shape));
   /** Every approval waiting for the person, wherever it was raised (B255). */
   pendingApprovals = (signal?: AbortSignal) =>
     this.query(() => this.transport.pendingApprovals?.(signal));

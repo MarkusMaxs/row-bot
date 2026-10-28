@@ -259,6 +259,34 @@
   flex-wrap: wrap;
   gap: var(--space-2);
 }
+.video-review .video-exports {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.video-export {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-height: 36px;
+}
+.video-export-name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-size: var(--type-size-metadata);
+}
+.video-export-name strong {
+  color: var(--text-primary);
+  font-weight: var(--weight-medium);
+}
+.video-export-name small {
+  color: var(--text-muted);
+}
 .video-panel-foot {
   margin: 0;
   color: var(--text-muted);

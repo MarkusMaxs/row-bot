@@ -92,6 +92,8 @@ function view(patch: Partial<VideoProjectView> = {}): VideoProjectView {
       'Sound: present (average -18 dB, peak -2 dB).',
     ],
     checks_passed: true,
+    aspect: '',
+    exports: [],
     ...patch,
   };
 }
@@ -305,4 +307,43 @@ it('the timeline trims, splits at the playhead, removes and undoes with the keys
   await userEvent.keyboard('{Control>}z{/Control}');
   expect(within(timeline).getAllByRole('button')).toHaveLength(3);
   expect(screen.getByRole('group', { name: 'Unsaved changes' })).toBeVisible();
+});
+
+it('a made version offers its other shapes, says where each fits, and downloads the ones made', async () => {
+  const made = view().edit!;
+  const { controller } = setup(
+    view({
+      aspect: '16:9',
+      exports: [
+        {
+          shape: 'gif',
+          edit: {
+            ...made,
+            edit_id: 'edit-00000002',
+            output_name: 'Launch demo v2.gif',
+            mime_type: 'image/gif',
+          },
+        },
+      ],
+      edit: { ...made, duration_seconds: 75 },
+    }),
+  );
+  const shapes = await screen.findByRole('list', { name: 'Other shapes' });
+  const rows = within(shapes).getAllByRole('listitem');
+  expect(rows.map((row) => row.textContent)).toEqual([
+    expect.stringContaining(
+      'Tall 9:16Shorts, Reels · longer than Shorts allow (1:00)',
+    ),
+    expect.stringContaining('Square 1:1X, Instagram'),
+    expect.stringContaining('GIF'),
+  ]);
+  expect(
+    within(rows[2]).getByRole('button', { name: 'Download GIF' }),
+  ).toBeVisible();
+  controller.exportVideoProject = vi.fn(async () => view());
+  await userEvent.click(within(rows[0]).getByRole('button', { name: 'Make' }));
+  expect(controller.exportVideoProject).toHaveBeenCalledWith(
+    'vid-1a2b3c4d',
+    '9:16',
+  );
 });

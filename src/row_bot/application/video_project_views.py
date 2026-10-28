@@ -23,6 +23,11 @@ def _project(project_id: str) -> video_projects.Project | None:
     return video_projects.get(project_id)
 
 
+def _stored(project: video_projects.Project) -> video_projects.Project:
+    """The project as it is now: making a video records its progress there, not on this copy."""
+    return video_projects.get(project.project_id, project.conversation_id) or project
+
+
 def read_video_project(project_id: str, number: int | None = None) -> dict[str, Any] | None:
     project = _project(project_id)
     if project is None or (number is not None and project.version(number) is None):
@@ -49,7 +54,7 @@ def change_video_project(project_id: str, body: dict[str, Any]) -> dict[str, Any
     except ProjectError as error:
         raise ProjectRefused("video_project_stale" if error.stale else "video_project_invalid") from None
     video_projects.make(project, version.number)
-    return video_projects.view(project, version.number)
+    return video_projects.view(_stored(project), version.number)
 
 
 def restore_video_project(project_id: str, number: int) -> dict[str, Any] | None:
@@ -65,7 +70,19 @@ def restore_video_project(project_id: str, number: int) -> dict[str, Any] | None
         raise ProjectRefused("video_project_invalid") from None
     if not version.edit_id:
         video_projects.make(project, version.number)
-    return video_projects.view(project, version.number)
+    return video_projects.view(_stored(project), version.number)
+
+
+def export_video_project(project_id: str, shape: str) -> dict[str, Any] | None:
+    project = _project(project_id)
+    if project is None:
+        return None
+    _need_ffmpeg()
+    try:
+        video_projects.export(project, shape)
+    except ProjectError:
+        raise ProjectRefused("video_project_not_made") from None
+    return video_projects.view(_stored(project))
 
 
 def make_video_project(project_id: str, number: int | None = None) -> dict[str, Any] | None:
@@ -74,4 +91,4 @@ def make_video_project(project_id: str, number: int | None = None) -> dict[str, 
         return None
     _need_ffmpeg()
     video_projects.make(project, number or project.latest.number)
-    return video_projects.view(project, number)
+    return video_projects.view(_stored(project), number)

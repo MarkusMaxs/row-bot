@@ -12,6 +12,7 @@ the workspace, and writing new files to the chat, needs none.
 
 from __future__ import annotations
 
+import time
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -33,7 +34,7 @@ class _Scene(BaseModel):
 
 
 class _VideoInput(BaseModel):
-    action: Literal["create", "change", "make", "status", "undo"] = "status"
+    action: Literal["create", "change", "make", "status", "undo", "export"] = "status"
     project: str = Field(default="", description="change, make, status, undo: the project (vid-…).")
     title: str = Field(default="", description="create: the video's name.")
     scenes: list[_Scene] | None = Field(default=None, description="create, change: every scene, in order.")
@@ -41,6 +42,11 @@ class _VideoInput(BaseModel):
     music_volume: float | None = Field(default=None, description="0-1, default 0.3 (it dips under the voice).")
     captions: bool | None = Field(default=None, description="Show each line as a caption under its scene.")
     voice_lines: bool | None = Field(default=None, description="Say the lines (default true).")
+    aspect: Literal["", "16:9", "1:1", "9:16"] | None = Field(
+        default=None, description="create, change: the video's shape ('' keeps its first video's).")
+    shape: Literal["16:9", "1:1", "9:16", "gif"] | None = Field(
+        default=None, description="export: the same version in this shape (X, YouTube 16:9; Shorts, Reels 9:16), "
+                                  "each scene reframed on its zoom, or a GIF.")
     note: str = Field(default="", description="create, change: what you changed, in a few words.")
     version: int | None = Field(default=None, description="make, status: a version (default the latest).")
 
@@ -53,8 +59,6 @@ def _conversation() -> str:
 
 def _wait_for(project_id: str, conversation: str, number: int, seconds: float) -> None:
     """Wait a little for the video while the turn waits; it carries on in the background after."""
-    import time
-
     from row_bot import video_edits, video_projects
 
     deadline = time.monotonic() + seconds
@@ -86,9 +90,30 @@ def _make(project, number: int | None) -> str:
     return with_approval(line, text) if line else text
 
 
+def _export(project, shape: str, number: int | None) -> str:
+    from row_bot import video_projects
+    from row_bot.tools.approval_gate import with_approval
+    from row_bot.tools.video_editing_tool import ffmpeg_consent
+
+    refusal, line, download = ffmpeg_consent("edit", "video")
+    if refusal:
+        return refusal
+    version = video_projects.export(project, shape, number, download=download)
+    fresh = project
+    for _ in range(int(INLINE_SECONDS * 5)):  # Until its edit has started (it's made in the background).
+        fresh = video_projects.get(project.project_id, project.conversation_id) or project
+        if shape in (fresh.version(version.number) or version).exports:
+            break
+        time.sleep(0.2)
+    text = (f"Exporting version {version.number} as {shape}: it's saved to this chat when it's made, and shows in the "
+            "Video panel. " + video_projects.summary(fresh, version.number))
+    return with_approval(line, text) if line else text
+
+
 def _video(action: str = "status", project: str = "", title: str = "", scenes: list | None = None,
            music: str | None = None, music_volume: float | None = None, captions: bool | None = None,
-           voice_lines: bool | None = None, note: str = "", version: int | None = None) -> str:
+           voice_lines: bool | None = None, note: str = "", version: int | None = None, aspect: str | None = None,
+           shape: str | None = None) -> str:
     from row_bot import video_projects
     from row_bot.video_projects import ProjectError
 
@@ -101,7 +126,7 @@ def _video(action: str = "status", project: str = "", title: str = "", scenes: l
             found = video_projects.create(conversation, title, raw, music=music or "",
                                           music_volume=0.3 if music_volume is None else music_volume,
                                           captions=bool(captions), voice_lines=voice_lines is not False,
-                                          by="row-bot", note=note)
+                                          aspect=aspect or "", by="row-bot", note=note)
             return _make(found, None)
         found = video_projects.get(project, conversation)
         if found is None:
@@ -109,7 +134,7 @@ def _video(action: str = "status", project: str = "", title: str = "", scenes: l
         if action == "change":
             changed = video_projects.change(found, by="row-bot", note=note, scenes=raw if scenes is not None else None,
                                             title=title or None, music=music, music_volume=music_volume,
-                                            captions=captions, voice_lines=voice_lines)
+                                            captions=captions, voice_lines=voice_lines, aspect=aspect)
             return _make(found, changed.number)
         if action == "undo":
             if len(found.versions) < 2:
@@ -118,6 +143,8 @@ def _video(action: str = "status", project: str = "", title: str = "", scenes: l
             return video_projects.summary(found, back.number)
         if action == "make":
             return _make(found, version)
+        if action == "export":
+            return _export(found, shape or "", version)
         if action == "status":
             number = version or found.latest.number
             _wait_for(found.project_id, conversation, number, 60)
@@ -125,7 +152,7 @@ def _video(action: str = "status", project: str = "", title: str = "", scenes: l
             return video_projects.summary(fresh, number)
     except ProjectError as error:
         return str(error)
-    return "Use action create, change, make, status or undo."
+    return "Use action create, change, make, status, undo or export."
 
 
 def langchain_tool():
@@ -139,7 +166,8 @@ def langchain_tool():
             "(start, end), with speed, zoom, a card and its line (voiced when made). create, then change with "
             "every scene (keep scene ids) and a note; each change is a new version and makes the video again, "
             "saved to this chat. Read the checks in the result: never say it's done until they pass. undo goes "
-            "back one version. For one quick edit use edit_video."
+            "back one version; export makes the same version in another shape or a GIF. For one quick edit use "
+            "edit_video."
         ),
         args_schema=_VideoInput,
     )

@@ -114,6 +114,35 @@ def test_making_a_version_renders_its_scenes_in_one_edit_with_its_voices_music_a
     assert (view["status"], view["edit"]["edit_id"]) == ("rendering", version.edit_id)
 
 
+def test_a_made_version_exports_in_another_shape_and_as_a_gif(studio):
+    from row_bot import video_edits, video_projects
+    from row_bot.application.attachments import register_attachment
+
+    project = video_projects.create("conversation-a", "Launch demo", SCENES)
+    with pytest.raises(video_projects.ProjectError, match="Make this version first"):
+        video_projects.export(project, "9:16")
+    video_projects.make(project, 1)
+    made = video_edits.get(_wait(project.project_id, 1).edit_id)
+    saved = register_attachment("conversation-a", "Launch demo v1.mp4", MP4)
+    video_edits._set(made, status="saved", media_ref=saved["attachment_ref"], mime_type="video/mp4")
+
+    video_projects.export(project, "9:16")
+    for _ in range(300):
+        if "9:16" in video_projects.get(project.project_id).latest.exports:
+            break
+        __import__("threading").Event().wait(0.01)
+    tall = studio["started"][-1]
+    assert tall.steps[0].aspect == "9:16" and tall.output_name == "Launch demo v1 9x16.mp4"
+    video_projects.export(project, "gif")
+    gif = studio["started"][-1]
+    assert gif.gif and [media.ref for media in gif.sources] == [saved["attachment_ref"]]
+    exports = video_projects.view(video_projects.get(project.project_id))["exports"]
+    assert [item["shape"] for item in exports] == ["9:16", "gif"]
+    assert video_projects.get(project.project_id).latest.edit_id == made.edit_id, "the version's own video stays"
+    with pytest.raises(video_projects.ProjectError, match="Export as"):
+        video_projects.export(project, "4:3")
+
+
 def test_scenes_that_cannot_be_used_are_refused_plainly(studio):
     from row_bot import video_projects
 

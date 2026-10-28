@@ -5111,7 +5111,7 @@ class VideoEditView(WireModel):
     output_name: str = Field(max_length=120)
     # The saved video, or the contact sheet of the stills, shown with a preview (None until saved).
     media_ref: str | None = Field(max_length=512)
-    mime_type: Literal["video/mp4", "image/jpeg", "image/png"] | None
+    mime_type: Literal["video/mp4", "image/jpeg", "image/png", "image/gif"] | None
     size_bytes: int | None = Field(ge=0)
     frame_count: int = Field(ge=0, le=64)
     stopped_by: Literal["", "you", "agent", "conversation", "quit"]
@@ -5171,6 +5171,16 @@ class VideoVersionView(WireModel):
     note: str = Field(max_length=200)
 
 
+class VideoExportView(WireModel):
+    """The same version in another shape, or as a GIF: the edit that makes it."""
+    shape: Literal["16:9", "1:1", "9:16", "gif"]
+    edit: VideoEditView
+
+
+class VideoProjectExport(WireModel):
+    shape: Literal["16:9", "1:1", "9:16", "gif"]
+
+
 class VideoProjectView(WireModel):
     """A video project at one version (5.3.1 B3), shared by the Video panel and Row-Bot."""
     project_id: VideoProjectId
@@ -5195,6 +5205,9 @@ class VideoProjectView(WireModel):
     # The review card's checks: sound, black and still stretches.
     checks: list[str] = Field(max_length=12)
     checks_passed: bool | None
+    # Its shape ("" keeps its first video's), and its exports in other shapes or as a GIF.
+    aspect: Literal["", "16:9", "1:1", "9:16"]
+    exports: list[VideoExportView] = Field(max_length=4)
 
 
 class VideoProjectChange(WireModel):
@@ -7782,6 +7795,7 @@ class MediaAvailable(WireModel):
     mime_type: Literal[
         "image/png",
         "image/jpeg",
+        "image/gif",
         "video/mp4",
         "audio/mpeg",
         "audio/ogg",
@@ -8031,6 +8045,7 @@ class AttachmentView(WireModel):
     mime_type: Literal[
         "image/png",
         "image/jpeg",
+        "image/gif",
         "video/mp4",
         "audio/mpeg",
         "audio/ogg",

@@ -112,7 +112,8 @@
               "enum": [
                 "video/mp4",
                 "image/jpeg",
-                "image/png"
+                "image/png",
+                "image/gif"
               ],
               "type": "string"
             },
@@ -228,6 +229,31 @@
         "ffmpeg"
       ],
       "title": "VideoEditView",
+      "type": "object"
+    },
+    "VideoExportView": {
+      "additionalProperties": false,
+      "description": "The same version in another shape, or as a GIF: the edit that makes it.",
+      "properties": {
+        "edit": {
+          "$ref": "#/$defs/VideoEditView"
+        },
+        "shape": {
+          "enum": [
+            "16:9",
+            "1:1",
+            "9:16",
+            "gif"
+          ],
+          "title": "Shape",
+          "type": "string"
+        }
+      },
+      "required": [
+        "shape",
+        "edit"
+      ],
+      "title": "VideoExportView",
       "type": "object"
     },
     "VideoScene": {
@@ -379,6 +405,16 @@
   "additionalProperties": false,
   "description": "A video project at one version (5.3.1 B3), shared by the Video panel and Row-Bot.",
   "properties": {
+    "aspect": {
+      "enum": [
+        "",
+        "16:9",
+        "1:1",
+        "9:16"
+      ],
+      "title": "Aspect",
+      "type": "string"
+    },
     "captions": {
       "title": "Captions",
       "type": "boolean"
@@ -426,6 +462,14 @@
           "type": "null"
         }
       ]
+    },
+    "exports": {
+      "items": {
+        "$ref": "#/$defs/VideoExportView"
+      },
+      "maxItems": 4,
+      "title": "Exports",
+      "type": "array"
     },
     "latest": {
       "minimum": 1,
@@ -514,7 +558,9 @@
     "problem",
     "edit",
     "checks",
-    "checks_passed"
+    "checks_passed",
+    "aspect",
+    "exports"
   ],
   "title": "VideoProjectView",
   "type": "object"

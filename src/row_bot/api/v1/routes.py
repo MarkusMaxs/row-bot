@@ -1034,6 +1034,7 @@ _STATUS.update(
         "video_project_stale": 409,
         "video_project_invalid": 422,
         "video_project_needs_ffmpeg": 409,
+        "video_project_not_made": 409,
         "sent_file_unavailable": 404,
         "sent_file_expired": 410,
         "sent_files_gone": 409,
@@ -5518,6 +5519,15 @@ def create_router(
 
         body = await _body(request, dto.VideoProjectRestore, 4 * 1024)
         result = await _project_call(restore_video_project, _project_id(project_id), body.number)
+        return await respond(request, dto.VideoProjectView, result)
+
+    @router.post("/video-projects/{project_id}/export")
+    async def export_video_project_route(request: Request, project_id: str) -> JSONResponse:
+        await session(request, lane="mutation")
+        from row_bot.application.video_project_views import export_video_project
+
+        body = await _body(request, dto.VideoProjectExport, 4 * 1024)
+        result = await _project_call(export_video_project, _project_id(project_id), body.shape)
         return await respond(request, dto.VideoProjectView, result)
 
     @router.post("/video-projects/{project_id}/make")

@@ -1340,6 +1340,7 @@
           "enum": [
             "image/png",
             "image/jpeg",
+            "image/gif",
             "video/mp4",
             "audio/mpeg",
             "audio/ogg",
