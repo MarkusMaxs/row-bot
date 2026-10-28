@@ -18,6 +18,7 @@ import type {
   ClientState,
   PageDecisionWrite,
   PageTheme,
+  VideoBrand,
   VideoProjectChange,
   VideoProjectExport,
   DictationScope,
@@ -2800,6 +2801,11 @@ export class ClientController {
     this.query(() => this.transport.restoreVideoProject?.(projectId, number));
   makeVideoProject = (projectId: string) =>
     this.query(() => this.transport.makeVideoProject?.(projectId));
+  /** The brand kit (5.3.1 B3). */
+  videoBrand = (signal?: AbortSignal) =>
+    this.query(() => this.transport.videoBrand?.(signal));
+  saveVideoBrand = (brand: VideoBrand) =>
+    this.query(() => this.transport.saveVideoBrand?.(brand));
   exportVideoProject = (
     projectId: string,
     shape: VideoProjectExport['shape'],

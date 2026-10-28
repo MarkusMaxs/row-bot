@@ -974,6 +974,8 @@ export interface ClientTransport {
     number: number,
   ): Promise<Wire.VideoProjectView>;
   makeVideoProject?(projectId: string): Promise<Wire.VideoProjectView>;
+  videoBrand?(signal?: AbortSignal): Promise<Wire.VideoBrand>;
+  saveVideoBrand?(brand: Wire.VideoBrand): Promise<Wire.VideoBrand>;
   exportVideoProject?(
     projectId: string,
     shape: Wire.VideoProjectExport['shape'],

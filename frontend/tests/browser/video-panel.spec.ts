@@ -63,6 +63,14 @@ test('a video Row-Bot made opens beside the chat as scenes, and an edit there is
   await expect(shapes).toContainText('Tall 9:16');
   await expect(shapes).toContainText('Shorts, Reels');
   await views(page, info, 'video-panel-review', shapes);
+  // The brand kit: one look for every video, edited here.
+  await panel.getByText('Brand kit', { exact: true }).click();
+  const kit = panel.getByRole('group', { name: 'Brand kit' });
+  await kit.getByLabel('Outro').fill('row-bot.ai');
+  await kit.getByLabel('Caption style').selectOption('bold');
+  await views(page, info, 'video-panel-brand', kit);
+  await kit.getByRole('button', { name: 'Save brand kit' }).click();
+  await expect(panel).toContainText('Brand kit saved');
 
   // Edit by text: the line changes, a scene moves; nothing is saved until Save.
   const line = panel.getByLabel('Scene 2 line');

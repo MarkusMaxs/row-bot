@@ -86,6 +86,8 @@ class Version:
     # Its shape ("" keeps its first video's) and its other shapes or GIF, each an edit: shape -> edit id.
     aspect: str = ""
     exports: dict[str, str] = field(default_factory=dict)
+    # Use the brand kit (its colour, captions, logo, intro and outro).
+    brand: bool = True
     # Making its video: "" (not yet), "voicing", "rendering" (edit_id follows the edit) or "failed".
     status: str = ""
     edit_id: str = ""
@@ -153,7 +155,7 @@ def _load(path: Path) -> Project | None:
                 note=str(item.get("note") or ""), scenes=scenes, music=str(item.get("music") or ""),
                 music_volume=float(item.get("music_volume", 0.3)), captions=bool(item.get("captions")),
                 voice_lines=bool(item.get("voice_lines", True)), status=str(item.get("status") or ""),
-                aspect=str(item.get("aspect") or ""),
+                aspect=str(item.get("aspect") or ""), brand=bool(item.get("brand", True)),
                 exports={str(key): str(value) for key, value in (item.get("exports") or {}).items()
                          if key in EXPORTS},
                 edit_id=str(item.get("edit_id") or ""), problem=str(item.get("problem") or ""),
@@ -302,8 +304,8 @@ def _add_version(project: Project, version: Version) -> Version:
 
 
 def create(conversation_id: str, title: str, scenes: list[Any], *, music: str = "", music_volume: float = 0.3,
-           captions: bool = False, voice_lines: bool = True, aspect: str = "", by: By = "row-bot",
-           note: str = "") -> Project:
+           captions: bool = False, voice_lines: bool = True, aspect: str = "", brand: bool = True,
+           by: By = "row-bot", note: str = "") -> Project:
     """A new project with its first version."""
     conversation = str(conversation_id or "").strip()
     if not conversation:
@@ -314,7 +316,7 @@ def create(conversation_id: str, title: str, scenes: list[Any], *, music: str = 
         version = Version(number=1, at=time.time(), by=by, note=_text(note, MAX_NOTE) or "First version",
                           scenes=_clean_scenes(scenes, conversation, []), music=_text(music, 200),
                           music_volume=_volume(music_volume), captions=bool(captions), voice_lines=bool(voice_lines),
-                          aspect=_aspect(aspect))
+                          aspect=_aspect(aspect), brand=bool(brand))
         _add_version(project, version)
     logger.info("Video project created (%d scenes)", len(version.scenes))
     return project
@@ -329,7 +331,8 @@ def _volume(value: Any) -> float:
 
 def change(project: Project, *, by: By, note: str = "", base: int | None = None, scenes: list[Any] | None = None,
            title: str | None = None, music: str | None = None, music_volume: float | None = None,
-           captions: bool | None = None, voice_lines: bool | None = None, aspect: str | None = None) -> Version:
+           captions: bool | None = None, voice_lines: bool | None = None, aspect: str | None = None,
+           brand: bool | None = None) -> Version:
     """A new version with these changes; ``base`` is the version they were made on (refused when it isn't the
     latest, so two editors never overwrite each other)."""
     with _LOCK:
@@ -351,6 +354,7 @@ def change(project: Project, *, by: By, note: str = "", base: int | None = None,
             captions=latest.captions if captions is None else bool(captions),
             voice_lines=latest.voice_lines if voice_lines is None else bool(voice_lines),
             aspect=latest.aspect if aspect is None else _aspect(aspect),
+            brand=latest.brand if brand is None else bool(brand),
         )
         _add_version(fresh, version)
         project.title, project.versions = fresh.title, fresh.versions
@@ -367,7 +371,7 @@ def restore(project: Project, number: int, *, by: By) -> Version:
         version = Version(number=fresh.latest.number + 1, at=time.time(), by=by, note=f"Back to version {number}",
                           scenes=[Scene(**asdict(scene)) for scene in old.scenes], music=old.music,
                           music_volume=old.music_volume, captions=old.captions, voice_lines=old.voice_lines,
-                          aspect=old.aspect, exports=dict(old.exports),
+                          aspect=old.aspect, exports=dict(old.exports), brand=old.brand,
                           status="rendering" if old.edit_id else "", edit_id=old.edit_id)
         _add_version(fresh, version)
         project.versions = fresh.versions
@@ -455,6 +459,16 @@ def _file_name(title: str, suffix: str) -> str:
     return output_name(title, default="video", suffix=suffix)
 
 
+def _look() -> Any:
+    """The brand kit as the renderer draws it."""
+    from row_bot import video_brand
+    from row_bot.video_editing import Look
+
+    kit = video_brand.load()
+    return Look(colour=video_brand.rgb(kit.colour), captions=kit.captions, logo=video_brand.logo_png(kit),
+                logo_corner=kit.logo_corner, intro=kit.intro, outro=kit.outro)
+
+
 def _make(project_id: str, conversation_id: str, number: int, download: bool, shape: str = "") -> None:
     """Voice what needs it, then make the version's video (or, with ``shape``, the same in that shape)."""
     from row_bot import sound, video_edits
@@ -486,7 +500,7 @@ def _make(project_id: str, conversation_id: str, number: int, download: bool, sh
                          zoom=tuple(scene.zoom) if scene.zoom else None, card=scene.card, line=scene.line,
                          voice=scene.voice if version.voice_lines else "") for scene in version.scenes]
         steps = [Step(op="scenes", scenes=cuts, style="caption" if version.captions else "",
-                      aspect=shape or version.aspect)]
+                      aspect=shape or version.aspect, look=_look() if version.brand else None)]
         sounds: dict[str, tuple[Any, bytes, str]] = {}
         for name in [cut.voice for cut in cuts if cut.voice] + ([version.music] if version.music else []):
             if name not in sounds:
@@ -554,6 +568,7 @@ def view(project: Project, number: int | None = None) -> dict[str, Any]:
         "checks": list(edit.checks) if edit is not None else [],
         "checks_passed": edit.checks_passed if edit is not None else None,
         "aspect": version.aspect,
+        "brand": version.brand,
         "exports": [{"shape": shape, "edit": video_edits.view(found)} for shape in EXPORTS
                     if (found := video_edits.get(version.exports.get(shape, ""))) is not None],
     }

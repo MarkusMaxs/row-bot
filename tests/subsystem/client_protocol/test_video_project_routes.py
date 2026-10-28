@@ -135,3 +135,20 @@ def test_the_panel_reads_changes_and_goes_back_on_a_project(service, studio, mon
         assert client.get("/api/v1/video-projects/not-a-project", headers=headers).status_code == 404
         assert client.get(f"/api/v1/video-projects/{project.project_id}", params={"version": 9},
                           headers=headers).status_code == 404
+
+
+def test_the_brand_kit_is_read_and_saved_through_the_api(service, studio):  # noqa: F811
+    with _client(service) as client:
+        _, headers = bootstrap(client)
+        kit = client.get("/api/v1/video-brand", headers=headers)
+        assert kit.status_code == 200, kit.text
+        assert (kit.json()["colour"], kit.json()["captions"], kit.json()["logo"]) == ("#1f2937", "box", "")
+        saved = client.put("/api/v1/video-brand", headers=headers, json={
+            **kit.json(), "colour": "#AA3300", "outro": "row-bot.ai", "music_mood": "warm"})
+        assert saved.status_code == 200, saved.text
+        assert client.get("/api/v1/video-brand", headers=headers).json() == saved.json()
+        assert saved.json()["colour"] == "#aa3300"
+        missing = client.put("/api/v1/video-brand", headers=headers, json={**kit.json(), "logo": "chat:not-a-file"})
+        assert (missing.status_code, missing.json()["code"]) == (422, "video_brand_invalid")
+        assert client.put("/api/v1/video-brand", headers=headers,
+                          json={**kit.json(), "colour": "red"}).status_code == 422

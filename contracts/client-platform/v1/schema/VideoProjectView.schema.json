@@ -415,6 +415,10 @@
       "title": "Aspect",
       "type": "string"
     },
+    "brand": {
+      "title": "Brand",
+      "type": "boolean"
+    },
     "captions": {
       "title": "Captions",
       "type": "boolean"
@@ -560,7 +564,8 @@
     "checks",
     "checks_passed",
     "aspect",
-    "exports"
+    "exports",
+    "brand"
   ],
   "title": "VideoProjectView",
   "type": "object"

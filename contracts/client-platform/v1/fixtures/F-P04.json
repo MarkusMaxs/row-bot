@@ -9,8 +9,8 @@
     "files": {
       "src/row_bot/api/v1/__init__.py": "f54ba3b1c9555e65c5e715ba99685ae3c795ced6c6c15c9bac2bc3f18a1498a8",
       "src/row_bot/api/v1/document_upload_stream.py": "9d7f480472630d5aa7298503af7b9451607b1856406caa115cb6578bbe700494",
-      "src/row_bot/api/v1/routes.py": "cecba2a1a6d85bd0b1e35fd08c3812d47f5e595f27fc883f541f0b9b6badfedc",
-      "src/row_bot/api/v1/schemas.py": "889bd076d53c1aa860fb82b85454aae6302b53acb29be50387438dd685644ee6",
+      "src/row_bot/api/v1/routes.py": "cf9dffb556ea560ff2801b859e8c91635b5d1da4841152cc2275d6cf4215b937",
+      "src/row_bot/api/v1/schemas.py": "c08b3785047765db662798ff2b423314cb0315d6e5d916481b6d8ee13ea437f8",
       "src/row_bot/api/v1/security.py": "d94a1f82917863bd2a6bd7996b268557d742c3a5f0c564dd18c2673c16a63ea3",
       "src/row_bot/application/__init__.py": "139fbb6a5592b9bf600f82c1623c05a4f0b90b793e4d7183cac03951984fff51",
       "src/row_bot/application/app_notices.py": "ad6f7c8e2b2f1d1508d82ee1a82e236d22c5fc0518f1ec871d1d04aaa8ea1338",
@@ -114,7 +114,7 @@
       "src/row_bot/application/task_settings_controls.py": "694c9ff0644d94295d75c89c213ca959ab3897cc7ca385a901942a0772ff9734",
       "src/row_bot/application/transcript_blocks.py": "2b7dd080bae0bc4a6843c25105f6fa85f6d78aacd6ad3af9196ecfb622e9ce6d",
       "src/row_bot/application/video_edit_views.py": "fa8cbaf73f35530d6752d29458d6b966073185ce9be73cbf0c3f86a43f72374f",
-      "src/row_bot/application/video_project_views.py": "e39b27b475c426cf73da00d85c6b3482958e1a4fa09d586c025c90e7502342e5",
+      "src/row_bot/application/video_project_views.py": "66fdd6686247e96263f59d86c94eca00c48b933535e5201ea84b94f95aa95f19",
       "src/row_bot/application/wiki_commands.py": "cf2fbb84c69bea86e23c55eceffdf9d3279ab500b7e468dda088a86bd073399c",
       "src/row_bot/application/workspace_edit_commands.py": "8610c1ba41dab554cfadb5e864b57895f25f395e92aa5da8083bcac8a0e4f536",
       "src/row_bot/application/workspace_import_commands.py": "9629e80c491792ae737e011e4fea6ece484d628bc0dd8c15fb3fabbc6928668e",
@@ -133,7 +133,7 @@
       "src/row_bot/threads.py": "8ef91738963fadf21d814f9c918c107af876f59141b56a71f7910a4edd3e38c2",
       "tests/helpers/client_platform_fakes.py": "d42f99a12400aa20b34994a0dbb01904a160f0dd918258e5a3930a0054df898d"
     },
-    "sha256": "583025a263925b110a8ca25a0a6879e00fa3413a2b3790a22a2a03dd579909f5"
+    "sha256": "281ec8318bf77533c93f243a410fcd3173fe3c21d9baac13806807b9194ff464"
   },
   "records": [
     {

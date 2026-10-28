@@ -143,6 +143,42 @@ def test_a_made_version_exports_in_another_shape_and_as_a_gif(studio):
         video_projects.export(project, "4:3")
 
 
+def test_the_brand_kit_is_used_for_every_video_unless_a_version_turns_it_off(studio):
+    import io
+
+    from PIL import Image
+
+    from row_bot import video_brand, video_projects
+    from row_bot.application.attachments import register_attachment
+
+    assert video_brand.load() == video_brand.Brand(), "a plain default until it's saved"
+    picture = io.BytesIO()
+    Image.new("RGB", (40, 20), (200, 0, 0)).save(picture, format="PNG")
+    logo = register_attachment("conversation-a", "logo.png", picture.getvalue())["attachment_ref"]
+    clip = next(item["ref"] for item in __import__("row_bot.media_library", fromlist=["items"]).items()
+                if item["kind"] == "video")
+    for wrong, words in (({"colour": "red"}, "hex colour"), ({"captions": "huge"}, "Captions are"),
+                         ({"logo": clip}, "a picture from Library")):
+        with pytest.raises(video_brand.BrandError, match=words):
+            video_brand.save(wrong)
+    saved = video_brand.save({"colour": "#112233", "captions": "bold", "logo": logo, "intro": "  Row-Bot  ",
+                              "outro": "row-bot.ai", "music_mood": "upbeat"})
+    assert video_brand.load() == saved and saved.intro == "Row-Bot"
+
+    project = video_projects.create("conversation-a", "Launch demo", SCENES)
+    video_projects.make(project, 1)
+    _wait(project.project_id, 1)
+    look = studio["started"][-1].steps[0].look
+    assert (look.colour, look.captions, look.intro, look.outro) == ((17, 34, 51), "bold", "Row-Bot", "row-bot.ai")
+    assert look.logo.startswith(b"\x89PNG"), "the logo, ready to lay over the video"
+
+    plain = video_projects.change(project, by="you", brand=False, note="Without the brand")
+    video_projects.make(project, plain.number)
+    _wait(project.project_id, plain.number)
+    assert studio["started"][-1].steps[0].look is None
+    assert video_projects.view(video_projects.get(project.project_id))["brand"] is False
+
+
 def test_scenes_that_cannot_be_used_are_refused_plainly(studio):
     from row_bot import video_projects
 

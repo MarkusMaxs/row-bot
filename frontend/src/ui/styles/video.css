@@ -287,6 +287,49 @@
 .video-export-name small {
   color: var(--text-muted);
 }
+.video-scenes-head .video-captions + .video-captions {
+  margin-left: var(--space-3);
+}
+.video-brand {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-top: var(--space-2);
+}
+.video-brand-grid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+/* A compact form in the side panel: label and control on one line. */
+.video-brand .field.is-row {
+  grid-template-columns: 112px minmax(0, 1fr);
+  grid-template-areas: 'label control';
+  column-gap: var(--space-3);
+  padding: var(--space-1) 0;
+}
+.video-brand .field.is-row > .field-label {
+  font-size: var(--type-size-metadata);
+}
+.video-brand .field.is-row > .video-brand-colour {
+  justify-self: start;
+}
+.video-brand-colour {
+  width: 48px;
+  height: 32px;
+  padding: 2px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+}
+.video-brand-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--type-size-metadata);
+}
 .video-panel-foot {
   margin: 0;
   color: var(--text-muted);
