@@ -1398,6 +1398,43 @@
     }
   },
   {
+    "id": "google-analytics-mcp",
+    "name": "Google Analytics MCP Server",
+    "description": "Google's own server for Analytics reports, realtime reports and property details. Read-only.",
+    "source": "curated",
+    "url": "https://github.com/googleanalytics/google-analytics-mcp",
+    "publisher": "Google",
+    "classification": "official",
+    "category": "Data & Research",
+    "trust_tier": "official_vendor",
+    "risk_level": "low",
+    "action_scope": "read_only",
+    "transport": "stdio",
+    "requires_auth": true,
+    "recommended": false,
+    "capabilities": [
+      "analytics",
+      "reports"
+    ],
+    "overlaps_native": [],
+    "last_reviewed": "2026-10-28",
+    "notes": [
+      "Runs the analytics-mcp package from Google on this computer; it needs Python tools (uv).",
+      "Sign in once with `gcloud auth application-default login` and the analytics.readonly scope, and turn on the Google Analytics Admin and Data APIs in your Google Cloud project.",
+      "Read-only: Row-Bot starts it without --allow-write. Google labels it experimental."
+    ],
+    "install": {
+      "transport": "stdio",
+      "command": "uvx",
+      "args": [
+        "analytics-mcp"
+      ],
+      "env": {
+        "GOOGLE_CLOUD_PROJECT": ""
+      }
+    }
+  },
+  {
     "id": "mixpanel-mcp",
     "name": "Mixpanel MCP",
     "description": "Query Mixpanel reports and events and manage dashboards, cohorts and flags (US region endpoint).",

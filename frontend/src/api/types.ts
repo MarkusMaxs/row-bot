@@ -954,6 +954,8 @@ export interface ClientTransport {
   ): Promise<Wire.ExportSaved>;
   attention?(signal?: AbortSignal): Promise<Wire.AttentionSnapshot>;
   pendingApprovals?(signal?: AbortSignal): Promise<Wire.PendingApprovalPage>;
+  scheduledPosts?(signal?: AbortSignal): Promise<Wire.ScheduledPostPage>;
+  cancelScheduledPost?(id: string): Promise<Wire.ScheduledPostCancelled>;
   monitorLogs?(limit?: number, signal?: AbortSignal): Promise<Wire.MonitorLogs>;
   systemDiagnosis?(signal?: AbortSignal): Promise<Wire.SystemDiagnosis>;
   systemHealth?(signal?: AbortSignal): Promise<Wire.SystemDiagnosis>;

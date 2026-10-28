@@ -202,6 +202,13 @@
           "title": "Action",
           "type": "string"
         },
+        "limit": {
+          "default": 0,
+          "maximum": 25000,
+          "minimum": 0,
+          "title": "Limit",
+          "type": "integer"
+        },
         "media": {
           "items": {
             "$ref": "#/$defs/XPostMedia"
@@ -214,6 +221,13 @@
           "default": "",
           "maxLength": 80,
           "title": "Name",
+          "type": "string"
+        },
+        "post_at": {
+          "default": "",
+          "maxLength": 16,
+          "pattern": "^(\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d)?$",
+          "title": "Post At",
           "type": "string"
         },
         "target_id": {

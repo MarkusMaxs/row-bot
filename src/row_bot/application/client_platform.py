@@ -180,6 +180,25 @@ def _question_answer(asked: dict | None, payload: dict) -> dict | None:
         raise ClientPlatformError("question_answer_invalid") from None
 
 
+def _x_post_edit(interrupt: Any, payload: dict) -> tuple[str, dict]:
+    """(the card's interrupt id, its resume value) for the person's edit of an X post on its card (G2).
+
+    Only a post, reply or quote asked by itself is edited, and only files its card showed are kept; the tool
+    asks again with what was edited, so an edit never approves anything.
+    """
+    items = interrupt if isinstance(interrupt, list) else [interrupt]
+    edit = payload.get("edit")
+    post = items[0].get("x_post") if len(items) == 1 and isinstance(items[0], dict) else None
+    if (not isinstance(edit, dict) or not isinstance(post, dict) or post.get("action") not in {"post", "reply", "quote"}
+            or not items[0].get("__interrupt_id")):
+        raise ClientPlatformError("approval_edit_invalid")
+    shown = {str(item.get("sha256")) for item in post.get("media") or [] if isinstance(item, dict)}
+    kept = [str(item) for item in edit.get("media") or []]
+    if not set(kept) <= shown:
+        raise ClientPlatformError("approval_edit_invalid")
+    return str(items[0]["__interrupt_id"]), {"x_post_edit": {"text": str(edit.get("text") or ""), "media": kept}}
+
+
 def _settled_denial(events: Iterable[tuple], *, conversation_id: str, identity: str,
                     expected_results: int, computer: bool, memory: bool = False) -> Iterator[tuple]:
     """A denied approval ends the turn once the denied calls have their results.
@@ -1999,6 +2018,10 @@ class ClientPlatformService:
             raise ClientPlatformError("approval_already_resolved")
         from row_bot import questions
         asked = questions.stored_question(row["approval_payload_json"])
+        editing = payload.get("decision") == "edit"
+        if editing != (payload.get("edit") is not None) or (editing and (asked is not None
+                                                                         or row["resume_kind"] != "conversation")):
+            raise ClientPlatformError("approval_edit_invalid")
         answer = _question_answer(asked, payload)
         if row["resume_kind"] == "conversation" and asked is not None:
             return self._answer_question_locked(approval_id, row, asked, answer, runtime_surface=runtime_surface)
@@ -2007,6 +2030,7 @@ class ClientPlatformService:
             approved = payload.get("decision") == "approve"
             from row_bot.application import client_computer_controls as computer
             stored = computer.approval_context(row["approval_payload_json"])
+            edited = _x_post_edit(stored.get("interrupt"), payload) if editing else None
             # A computer the turn was using keeps its session when the turn goes on.
             lease_generation = computer.prepare_approval_resume(
                 self, conversation_id, stored, approved=approved, runtime_surface=runtime_surface)
@@ -2019,17 +2043,18 @@ class ClientPlatformService:
             alone_id = str((alone or {}).get("__interrupt_id") or "")
             asks_again = len(context["interrupt_ids"]) > 1 and alone_id in context["interrupt_ids"]
             from row_bot.application.conversation_followups import after_approval
-            after_approval(conversation_id, approved=approved or asks_again)
+            after_approval(conversation_id, approved=approved or asks_again or edited is not None)
             # Answered, by the person or by what they approved for this turn:
             # Buddy stops saying "Needs approval" now, not when the turn ends (B333).
             _buddy(conversation_id, "approval.approved" if approved else "approval.denied",
-                   "Approved" if approved else "Denied", approval_id=approval_id)
+                   "Approved" if approved else "Edited" if edited else "Denied", approval_id=approval_id)
             if approved and payload.get("scope") in {"turn", "chat"} and alone is None:
                 from row_bot.application import approval_grants
                 kinds = approval_grants.approval_kinds(interrupt)
                 if kinds:
                     approval_grants.grant(conversation_id, kinds, payload["scope"])
-            answered = ({"interrupt_ids": [alone_id], "resume_values": {alone_id: approved}} if asks_again
+            answered = ({"interrupt_ids": [edited[0]], "resume_values": {edited[0]: edited[1]}} if edited
+                        else {"interrupt_ids": [alone_id], "resume_values": {alone_id: approved}} if asks_again
                         else {"interrupt_ids": context["interrupt_ids"]})
             result = self._start(conversation_id, {"model_selection": context["model_selection"]}, resume=True,
                                  approval_context={"approved": approved, **answered,

@@ -56,6 +56,7 @@ MODELS = {name: getattr(schemas, name) for name in (
     "McpPolicyPage", "McpPolicyRequest", "McpPolicyReview",
     "McpChatState", "McpChatReviewRequest", "McpChatReview", "McpChatOutcome",
     "AttentionProblem", "AttentionUpdate", "AttentionSnapshot", "PendingApproval", "PendingApprovalPage",
+    "ScheduledPost", "ScheduledPostPage", "ScheduledPostCancelled",
     "RuntimeInstallationSnapshot", "RuntimeInstallationReviewRequest", "RuntimeInstallationReview", "RuntimeInstallationReceipt",
     "DocumentQueuePage", "DocumentControlReviewRequest", "DocumentControlReview", "DocumentControlReceipt",
     "DocumentUploadReviewRequest", "DocumentUploadReview", "DocumentUploadReceipt",
@@ -234,6 +235,8 @@ OPERATIONS = (
     ("post", "/pages/{page_id}/save", "PageFrameRequest", "ExportSaved"),
     ("get", "/monitor/attention", None, "AttentionSnapshot"),
     ("get", "/monitor/approvals", None, "PendingApprovalPage"),
+    ("get", "/monitor/scheduled-posts", None, "ScheduledPostPage"),
+    ("delete", "/monitor/scheduled-posts/{post_id}", None, "ScheduledPostCancelled"),
     ("get", "/monitor/logs", None, "MonitorLogs"),
     ("post", "/monitor/diagnosis", None, "SystemDiagnosis"),
     ("get", "/monitor/diagnosis", None, "SystemDiagnosis"),
@@ -838,6 +841,10 @@ export const getAttention = (base: string, proof: SessionProof, signal?: AbortSi
   jsonRequest(base, '/monitor/attention', 'AttentionSnapshot', proof, 'GET', undefined, undefined, signal);
 export const getPendingApprovals = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<PendingApprovalPage> =>
   jsonRequest(base, '/monitor/approvals', 'PendingApprovalPage', proof, 'GET', undefined, undefined, signal);
+export const getScheduledPosts = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<ScheduledPostPage> =>
+  jsonRequest(base, '/monitor/scheduled-posts', 'ScheduledPostPage', proof, 'GET', undefined, undefined, signal);
+export const cancelScheduledPost = (base: string, proof: SessionProof, post: string, signal?: AbortSignal): Promise<ScheduledPostCancelled> =>
+  jsonRequest(base, `/monitor/scheduled-posts/${id(post)}`, 'ScheduledPostCancelled', proof, 'DELETE', undefined, undefined, signal);
 export const getMonitorLogs = (base: string, proof: SessionProof, limit = 200, signal?: AbortSignal): Promise<MonitorLogs> =>
   jsonRequest(base, '/monitor/logs' + query({limit}), 'MonitorLogs', proof, 'GET', undefined, undefined, signal);
 export const runSystemDiagnosis = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<SystemDiagnosis> =>

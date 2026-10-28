@@ -154,8 +154,40 @@ def question(account: XAccount, action: str) -> str:
             "delete": f"Delete a post from {account.handle}?"}[action]
 
 
+# A post may wait for a time slot (5.3.1 G3): approved now, sent by the scheduler at its time.
+SLOT_AHEAD = timedelta(days=7)  # How far ahead a post may be scheduled.
+SLOT_LATE = timedelta(hours=12)  # A post Row-Bot couldn't send by then (it was closed) is never sent late.
+
+
+def slot(value: str | None, now: datetime | None = None) -> datetime | None:
+    """When an approved post goes out: None for at once; a local time ("13:00", the next one) or date and time."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    moment = (now or datetime.now()).replace(second=0, microsecond=0)
+    try:
+        if re.fullmatch(r"\d{1,2}:\d{2}", text):
+            hour, minute = (int(part) for part in text.split(":"))
+            when = moment.replace(hour=hour, minute=minute)
+            if when <= moment:
+                when += timedelta(days=1)
+        else:
+            when = datetime.fromisoformat(text)
+            if when.tzinfo is not None:
+                when = when.astimezone().replace(tzinfo=None)
+            when = when.replace(second=0, microsecond=0)
+    except ValueError:
+        raise XPostError(f"post_at is a local time like 13:00 or 2026-10-29T09:30, not {text!r}, so nothing was "
+                         "posted.") from None
+    if when <= moment:
+        raise XPostError(f"{when:%Y-%m-%d %H:%M} has passed, so nothing was posted. Leave post_at out to post now.")
+    if when - moment > SLOT_AHEAD:
+        raise XPostError("A post can be scheduled up to 7 days ahead, so nothing was posted.")
+    return when
+
+
 def card(account: XAccount, action: str, text: str, target: str, media: list[Media], *,
-         target_text: str = "") -> dict[str, Any]:
+         target_text: str = "", post_at: datetime | None = None) -> dict[str, Any]:
     """What the person's card shows; never a path or a token."""
     return {
         "account_id": account.id, "username": account.username, "name": account.name, "action": action,
@@ -164,6 +196,8 @@ def card(account: XAccount, action: str, text: str, target: str, media: list[Med
         "target_text": target_text[:_MAX_TEXT],
         "media": [{"name": item.name, "size": item.size, "sha256": item.short, "kind": item.kind,
                    "thumbnail": item.thumbnail} for item in media],
+        "limit": _LIMITS.get(account.id, 0),  # How long a post the account may send, when X said (0: unknown).
+        "post_at": post_at.isoformat(timespec="minutes") if post_at else "",
     }
 
 
@@ -181,24 +215,56 @@ def _words(account: XAccount, action: str, text: str, target: str, media: list[M
 
 
 def approval_payload(account: XAccount, action: str, text: str, target: str, media: list[Media], *,
-                     target_text: str = "") -> dict[str, Any]:
-    """The approval this post asks for: its card, its words, and the binding (a new question when any part changes)."""
-    return {"tool": "x_post", "label": question(account, action).rstrip("?"),
-            "description": _words(account, action, text, target, media, target_text),
-            "question": question(account, action), "binding": payload_hash(account, action, text, target, media),
+                     target_text: str = "", post_at: datetime | None = None) -> dict[str, Any]:
+    """The approval this post asks for: its card, its words, and the binding (a new question when any part changes,
+    its time slot included)."""
+    binding = payload_hash(account, action, text, target, media)
+    words = _words(account, action, text, target, media, target_text)
+    if post_at is not None:
+        binding += "@" + post_at.isoformat(timespec="minutes")
+        words += f" It goes out at {post_at:%H:%M} on {post_at:%a %d %b}."
+    return {"tool": "x_post", "label": question(account, action).rstrip("?"), "description": words,
+            "question": question(account, action), "binding": binding,
             "args": {"account": account.handle, "action": action, "text": text, "tweet_id": target,
-                     "media": [item.name for item in media]},
-            "x_post": card(account, action, text, target, media, target_text=target_text)}
+                     "media": [item.name for item in media],
+                     **({"post_at": post_at.isoformat(timespec="minutes")} if post_at else {})},
+            "x_post": card(account, action, text, target, media, target_text=target_text, post_at=post_at)}
+
+
+class PostEdited(Exception):
+    """The person edited the post on its card (G2): ask again with this text and the files they kept."""
+
+    def __init__(self, text: str, kept: list[str]) -> None:
+        super().__init__("The person edited the post.")
+        self.text, self.kept = text, kept
+
+
+def _edited(answer: Any) -> PostEdited | None:
+    edit = answer.get("x_post_edit") if isinstance(answer, dict) else None
+    if not isinstance(edit, dict) or not isinstance(edit.get("text"), str):
+        return None
+    return PostEdited(edit["text"], [str(item) for item in edit.get("media") or []])
 
 
 def approve(account: XAccount, action: str, text: str, target: str, media: list[Media], *,
-            target_text: str = "") -> tuple[str | None, str]:
-    """(None, its approval line) when this exact post may go out; else (the refusal, its line)."""
+            target_text: str = "", post_at: datetime | None = None) -> tuple[str | None, str]:
+    """(None, its approval line) when this exact post may go out; else (the refusal, its line).
+
+    Raises PostEdited when the person edited it on the card instead: never an approval of anything.
+    """
     from row_bot.tools.approval_gate import X_POST_RISK, current_approval_mode, resolve_approval_line, with_approval
 
-    payload = approval_payload(account, action, text, target, media, target_text=target_text)
+    payload = approval_payload(account, action, text, target, media, target_text=target_text, post_at=post_at)
+    answers: list[Any] = []
+
+    def ask(asked: dict[str, Any]) -> Any:
+        answers.append(_ask(asked))
+        return answers[-1]
     outcome, line = resolve_approval_line(payload, approval_mode=current_approval_mode(), risks=(X_POST_RISK,),
-                                          approval_callback=lambda asked: _ask(asked))
+                                          approval_callback=ask)
+    edited = _edited(answers[-1]) if answers and outcome == "deny" else None
+    if edited is not None:
+        raise edited
     if outcome == "allow":
         return None, line
     if outcome == "block":
@@ -211,6 +277,143 @@ def _ask(payload: dict[str, Any]) -> Any:
     from langgraph.types import interrupt
 
     return interrupt(payload)
+
+
+# ── Scheduled posts (G3) ─────────────────────────────────────────────────────
+# An approved post with a time slot waits here, with the files it was approved with (by path and SHA-256),
+# until the scheduler's minute loop sends it at its time. A file changed since the approval, a sign-in
+# removed or a time missed by more than SLOT_LATE sends nothing and says so.
+
+_SCHEDULE_LOCK = threading.Lock()
+_IN_FLIGHT: set[str] = set()  # Scheduled posts being sent now.
+
+
+def _schedule_path() -> Path:
+    return get_row_bot_data_dir() / "x" / "scheduled.json"
+
+
+def _scheduled() -> list[dict[str, Any]]:
+    try:
+        value = json.loads(_schedule_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
+def _save_scheduled(items: list[dict[str, Any]]) -> None:
+    path = _schedule_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    # Settled posts are kept a week, for the record.
+    keep = [item for item in items if item.get("status") == "scheduled"
+            or str(item.get("settled_at") or "") >= _stamp(_now() - timedelta(days=7))]
+    temporary.write_text(json.dumps(keep, indent=1), encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def schedule(account: XAccount, action: str, text: str, target: str, media: list[Media],
+             post_at: datetime) -> dict[str, Any]:
+    """Keep an approved post for its time slot; the scheduler sends it then."""
+    item = {"id": f"xs-{uuid.uuid4().hex[:12]}", "account_id": account.id, "action": action, "text": text,
+            "target": target, "post_at": post_at.isoformat(timespec="minutes"),
+            "media": [{"path": str(entry.path), "sha256": entry.sha256} for entry in media],
+            "created_at": _stamp(_now()), "status": "scheduled"}
+    with _SCHEDULE_LOCK:
+        _save_scheduled([*_scheduled(), item])
+    return item
+
+
+def scheduled_posts() -> list[dict[str, Any]]:
+    """The posts waiting for their time, soonest first, as Home's Review shows them (never a path or a token)."""
+    accounts = {account.id: account for account in x_accounts.listed()}
+    shown = []
+    with _SCHEDULE_LOCK:
+        waiting = sorted((item for item in _scheduled() if item.get("status") == "scheduled"),
+                         key=lambda item: str(item.get("post_at")))
+    for item in waiting:
+        account = accounts.get(str(item.get("account_id")))
+        files = []
+        for entry in item.get("media") or []:
+            path = Path(str(entry.get("path") or ""))
+            try:
+                size = path.stat().st_size
+            except OSError:
+                size = 0
+            mime = mimetypes.guess_type(path.name)[0] or ""
+            files.append({"name": path.name[:256], "size": size, "sha256": str(entry.get("sha256") or "")[:12],
+                          "kind": "video" if mime.startswith("video/") else "gif" if mime == "image/gif" else "image"})
+        shown.append({"id": item["id"], "account_id": str(item.get("account_id") or ""),
+                      "username": account.username if account else "", "action": str(item.get("action") or "post"),
+                      "text": str(item.get("text") or ""), "target_url": target_url(str(item.get("target") or "")),
+                      "post_at": str(item.get("post_at") or ""), "media": files})
+    return shown
+
+
+def cancel_scheduled(item_id: str) -> bool:
+    """Cancel a post still waiting for its time; False when there is none (it went, or was cancelled)."""
+    with _SCHEDULE_LOCK:
+        items = _scheduled()
+        for item in items:
+            if item.get("id") == item_id and item.get("status") == "scheduled":
+                item.update(status="cancelled", settled_at=_stamp(_now()))
+                _save_scheduled(items)
+                return True
+    return False
+
+
+def _settle_scheduled(item: dict[str, Any], status: str, result: str, url: str = "") -> None:
+    with _SCHEDULE_LOCK:
+        items = _scheduled()
+        for index, entry in enumerate(items):
+            if entry.get("id") == item["id"]:
+                items[index] = {**entry, "status": status, "result": result, "url": url,
+                                "settled_at": _stamp(_now())}
+        _save_scheduled(items)
+
+
+def send_due(now: datetime | None = None) -> list[dict[str, Any]]:
+    """Send each scheduled post whose time has come, once; what each one did."""
+    from row_bot.notifications import notify
+
+    if not _schedule_path().exists():
+        return []
+    moment = now or datetime.now()
+    with _SCHEDULE_LOCK:
+        # Taken before sending, so a slow send is never picked up twice. One cut off by Row-Bot closing is
+        # picked up again, and post_as checks X before sending it a second time.
+        due = [item for item in _scheduled() if item.get("status") == "scheduled"
+               and item["id"] not in _IN_FLIGHT and datetime.fromisoformat(str(item["post_at"])) <= moment]
+        _IN_FLIGHT.update(item["id"] for item in due)
+    done = []
+    for item in due:
+        account = next((entry for entry in x_accounts.listed() if entry.id == item.get("account_id")), None)
+        when = datetime.fromisoformat(str(item["post_at"]))
+        if account is None:
+            status, result, url = "failed", "Its X account was removed, so it wasn't posted.", ""
+        elif moment - when > SLOT_LATE:
+            status, result, url = "missed", (f"Row-Bot wasn't running at {when:%H:%M} on {when:%a %d %b}, so it "
+                                             "wasn't posted. Approve it again to post it."), ""
+        else:
+            try:
+                media = media_facts([entry["path"] for entry in item.get("media") or []])
+                if [entry.sha256 for entry in media] != [entry["sha256"] for entry in item.get("media") or []]:
+                    raise XPostError("A file changed after you approved the post, so it wasn't posted.")
+                sent = post_as(account, str(item["action"]), str(item["text"]), str(item.get("target") or ""),
+                               media)
+                status = {"posted": "posted", "unknown": "unknown"}.get(sent.status, "failed")
+                result, url = sent.text, sent.url
+            except XPostError as exc:
+                status, result, url = "failed", str(exc), ""
+        _settle_scheduled(item, status, result, url)
+        _IN_FLIGHT.discard(item["id"])
+        done.append({"id": item["id"], "status": status, "result": result, "url": url})
+        handle = account.handle if account else "X"
+        if status == "posted":
+            notify(title=f"Posted on X as {handle}", message=url or result, source="x", requested=True)
+        else:
+            notify(title=f"A scheduled post as {handle} didn't go out", message=result, toast_type="warning",
+                   source="x")
+    return done
 
 
 # ── The operation record ─────────────────────────────────────────────────────
@@ -534,6 +737,63 @@ def read_text(account: XAccount, target: str) -> str:
         return str((response.json().get("data") or {}).get("text") or "")[:_MAX_TEXT] if response.status_code == 200 else ""
     except Exception:
         return ""
+
+
+# X counts a post's length by weight (5.3.1 G1): each link is 23, and characters outside the Latin and common
+# punctuation ranges count 2. Without a subscription a post is 280; with one, 25,000.
+_LINK = re.compile(r"https?://\S+", re.IGNORECASE)
+LINK_LENGTH = 23
+SHORT_POST, LONG_POST = 280, 25_000
+_LIMITS: dict[str, int] = {}
+MEDIA_LIMITS = "up to 4 pictures (5 MB each) or one GIF (15 MB) or one video (512 MB)"
+
+
+def _weigh(text: str) -> int:
+    import unicodedata
+
+    return sum(1 if (code <= 4351 or 8192 <= code <= 8205 or 8208 <= code <= 8223 or 8242 <= code <= 8247) else 2
+               for code in map(ord, unicodedata.normalize("NFC", text)))
+
+
+def weighted_length(text: str) -> int:
+    """The post's length as X counts it."""
+    total, position = 0, 0
+    for match in _LINK.finditer(text):
+        total += _weigh(text[position:match.start()]) + LINK_LENGTH
+        position = match.end()
+    return total + _weigh(text[position:])
+
+
+def text_limit(account: XAccount) -> int | None:
+    """How long a post the account may send: 280, or 25,000 with an X subscription; None when X doesn't say."""
+    if account.id in _LIMITS:
+        return _LIMITS[account.id]
+    token = x_accounts.valid_token(account)
+    if token is None:
+        return None
+    try:
+        response = x_accounts.send("GET", f"{x_accounts.API_BASE}/users/me", headers=x_accounts.bearer(token),
+                                   params={"user.fields": "subscription_type"}, timeout=10)
+        if response.status_code != 200:
+            return None
+        kind = str((response.json().get("data") or {}).get("subscription_type") or "None")
+    except Exception:
+        return None
+    _LIMITS[account.id] = LONG_POST if kind in {"Basic", "Premium", "PremiumPlus"} else SHORT_POST
+    return _LIMITS[account.id]
+
+
+def check_length(account: XAccount, action: str, text: str) -> None:
+    """Refuse, before the card, a post longer than the account may send (X would refuse it after approval)."""
+    if action == "delete" or not text:
+        return
+    limit = text_limit(account)
+    length = weighted_length(text)
+    if limit is not None and length > limit:
+        what = "with its X subscription" if limit == LONG_POST else "without an X subscription"
+        raise XPostError(f"That post is {length:,} characters as X counts them (each link counts {LINK_LENGTH}); "
+                         f"@{account.username} can post up to {limit:,} {what}. Shorten it by {length - limit:,}, "
+                         "or post the rest as a reply to it.")
 
 
 def check_text(action: str, text: str | None, target: str | None) -> tuple[str, str]:
