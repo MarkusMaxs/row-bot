@@ -2206,6 +2206,8 @@ def create_router(
     async def transcribe_dictation(
         conversation_id: str, lease_id: str, request: Request
     ) -> JSONResponse:
+        from row_bot.voice.browser_local import MAX_INPUT_BYTES
+
         current = await session(request, lane="mutation")
         handle = dictation_handle(conversation_id, lease_id, dictation_headers(request))
         utterance = voice_header(request, "x-dictation-utterance", 36)
@@ -2252,7 +2254,7 @@ def create_router(
                         break
                     transport.check_receive(operation)
                     security.session(await _context(request), current.id, current.csrf)
-                    if len(data) + len(chunk) > 8388608:
+                    if len(data) + len(chunk) > MAX_INPUT_BYTES:
                         raise ProtocolError("payload_too_large", 413)
                     data.extend(chunk)
             await dictation_owner(request, current, conversation_id)

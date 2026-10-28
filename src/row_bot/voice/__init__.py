@@ -48,7 +48,7 @@ CHANNELS = 1
 # VAD / speech collection
 _PRE_SPEECH_CHUNKS = 8      # ~640 ms of audio kept before speech trigger
 _SILENCE_TIMEOUT_S = 1.5    # seconds of silence after last speech to stop recording
-_MAX_RECORDING_S = 30       # hard cap on a single utterance
+_MAX_RECORDING_S = 300      # hard cap on a single utterance (5.3.1 A4)
 _MIN_SPEECH_CHUNKS = 5      # minimum chunks to count as real speech (~400 ms)
 
 # Whisper
