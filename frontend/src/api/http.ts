@@ -1,6 +1,7 @@
 import * as wire from '../../../contracts/client-platform/v1/typescript/client';
 import type {
   ClientTransport,
+  RowBotSandboxCreate,
   VideoBrand,
   VideoProjectChange,
   VideoProjectExport,
@@ -456,6 +457,26 @@ export class HttpTransport implements ClientTransport {
   }
   makeVideoProject(projectId: string) {
     return wire.makeVideoProject(this.base, this.session(), projectId);
+  }
+  rowBotSandboxes(signal?: AbortSignal) {
+    return wire.getRowBotSandboxes(this.base, this.session(), signal);
+  }
+  createRowBotSandbox(body: RowBotSandboxCreate) {
+    return wire.createRowBotSandbox(this.base, this.session(), body);
+  }
+  actOnRowBotSandbox(sandboxId: string, action: 'start' | 'stop' | 'reset') {
+    return wire.actOnRowBotSandbox(
+      this.base,
+      this.session(),
+      sandboxId,
+      action,
+    );
+  }
+  rowBotSandboxLink(sandboxId: string) {
+    return wire.rowBotSandboxLink(this.base, this.session(), sandboxId);
+  }
+  deleteRowBotSandbox(sandboxId: string) {
+    return wire.deleteRowBotSandbox(this.base, this.session(), sandboxId);
   }
   videoBrand(signal?: AbortSignal) {
     return wire.getVideoBrand(this.base, this.session(), signal);

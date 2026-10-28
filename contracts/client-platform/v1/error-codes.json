@@ -525,6 +525,8 @@
     "resource_unavailable": 404,
     "restore_expired": 409,
     "revision_conflict": 409,
+    "row_bot_sandbox_refused": 409,
+    "row_bot_sandbox_unavailable": 404,
     "runtime_installation_command_unavailable": 404,
     "runtime_installation_owner_unavailable": 409,
     "runtime_installation_pending": 409,

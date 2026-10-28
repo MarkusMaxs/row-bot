@@ -18,6 +18,7 @@ import type {
   ClientState,
   PageDecisionWrite,
   PageTheme,
+  RowBotSandboxCreate,
   VideoBrand,
   VideoProjectChange,
   VideoProjectExport,
@@ -851,6 +852,7 @@ export class ClientController {
         session_ttl_seconds: result.session_ttl_seconds,
         server_utc_offset_minutes: result.server_utc_offset_minutes ?? null,
         server_timezone: result.server_timezone ?? null,
+        sandbox: result.sandbox ?? false,
         native_adapter: result.native_adapter,
         limits: result.limits,
       };
@@ -2801,6 +2803,19 @@ export class ClientController {
     this.query(() => this.transport.restoreVideoProject?.(projectId, number));
   makeVideoProject = (projectId: string) =>
     this.query(() => this.transport.makeVideoProject?.(projectId));
+  /** Sandboxes (5.3.1 B4): second Row-Bots on made-up data. */
+  rowBotSandboxes = (signal?: AbortSignal) =>
+    this.query(() => this.transport.rowBotSandboxes?.(signal));
+  createRowBotSandbox = (body: RowBotSandboxCreate) =>
+    this.query(() => this.transport.createRowBotSandbox?.(body));
+  actOnRowBotSandbox = (
+    sandboxId: string,
+    action: 'start' | 'stop' | 'reset',
+  ) => this.query(() => this.transport.actOnRowBotSandbox?.(sandboxId, action));
+  rowBotSandboxLink = (sandboxId: string) =>
+    this.query(() => this.transport.rowBotSandboxLink?.(sandboxId));
+  deleteRowBotSandbox = (sandboxId: string) =>
+    this.query(() => this.transport.deleteRowBotSandbox?.(sandboxId));
   /** The brand kit (5.3.1 B3). */
   videoBrand = (signal?: AbortSignal) =>
     this.query(() => this.transport.videoBrand?.(signal));

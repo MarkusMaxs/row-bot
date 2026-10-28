@@ -75,7 +75,7 @@ MODELS = {name: getattr(schemas, name) for name in (
     "InsightsSnapshot", "InsightCommand", "InsightReceipt",
     "LearningSnapshot", "LearningTraining", "LearningDownload", "LearningHardware", "LearningConversation", "LearningLessonPage", "LearningCommand", "LearningReceipt", "LearningVersionDetails",
     "KnowledgeEditorState", "KnowledgeReviewRequest", "KnowledgeReview", "KnowledgeReceipt",
-    "KnowledgeGraphSnapshot", "BackgroundProcessView", "BackgroundProcessPage", "BackgroundProcessOutput", "RecordingView", "RecordingPage", "VideoEditView", "VideoEditPage", "VideoScene", "VideoSceneWrite", "VideoVersionView", "VideoBrand", "VideoExportView", "VideoProjectExport", "VideoProjectView", "VideoProjectChange", "VideoProjectRestore", "DeliveryView", "DeliveryPage", "PageDecisionView", "PageView", "PagePage", "MediaItem", "MediaPage", "MediaTagsWrite", "MediaTags", "PageTheme", "PageFrameRequest", "PageFrame", "PageStateWrite", "PageDecisionWrite", "PageDownload", "WorkspaceFolderPage", "SandboxJobView", "SandboxJobPage", "SandboxStatusView", "SandboxStartPayload", "LocalAddressGrantView", "LocalAddressPage", "MonitorSnapshot", "MonitorLogs", "SystemDiagnosis", "SystemDiagnosisSettings", "InstallCountSnapshot", "InstallCountChoice", "InstallCountDeletion", "UpdateRelease", "UpdateEngineView", "UpdateHostRequest", "UpdateHostView", "UpdateHeldBack", "UpdateSnapshot", "UpdateCommand", "UpdateReceipt", "MigrationScanRequest", "MigrationSource", "MigrationSources", "MigrationPreviewSummary", "MigrationPreviewItem", "MigrationPreview", "MigrationApplyReviewRequest", "MigrationApplyReview", "MigrationApplyCommand", "MigrationFailedItem", "MigrationApplyReceipt", "OnboardingSnapshot", "OnboardingCommand", "OnboardingReceipt", "LocalRuntimeSnapshot", "ModelTestResult", "ProviderKeyCheckRequest", "ProviderKeyCheck", "DreamRunRequest", "DreamRunReview", "DreamRunCommand", "DreamRunReceipt",
+    "KnowledgeGraphSnapshot", "BackgroundProcessView", "BackgroundProcessPage", "BackgroundProcessOutput", "RecordingView", "RecordingPage", "VideoEditView", "VideoEditPage", "VideoScene", "VideoSceneWrite", "VideoVersionView", "VideoBrand", "VideoExportView", "RowBotSandboxView", "SandboxPackView", "RowBotSandboxPage", "RowBotSandboxCreate", "RowBotSandboxLink", "VideoProjectExport", "VideoProjectView", "VideoProjectChange", "VideoProjectRestore", "DeliveryView", "DeliveryPage", "PageDecisionView", "PageView", "PagePage", "MediaItem", "MediaPage", "MediaTagsWrite", "MediaTags", "PageTheme", "PageFrameRequest", "PageFrame", "PageStateWrite", "PageDecisionWrite", "PageDownload", "WorkspaceFolderPage", "SandboxJobView", "SandboxJobPage", "SandboxStatusView", "SandboxStartPayload", "LocalAddressGrantView", "LocalAddressPage", "MonitorSnapshot", "MonitorLogs", "SystemDiagnosis", "SystemDiagnosisSettings", "InstallCountSnapshot", "InstallCountChoice", "InstallCountDeletion", "UpdateRelease", "UpdateEngineView", "UpdateHostRequest", "UpdateHostView", "UpdateHeldBack", "UpdateSnapshot", "UpdateCommand", "UpdateReceipt", "MigrationScanRequest", "MigrationSource", "MigrationSources", "MigrationPreviewSummary", "MigrationPreviewItem", "MigrationPreview", "MigrationApplyReviewRequest", "MigrationApplyReview", "MigrationApplyCommand", "MigrationFailedItem", "MigrationApplyReceipt", "OnboardingSnapshot", "OnboardingCommand", "OnboardingReceipt", "LocalRuntimeSnapshot", "ModelTestResult", "ProviderKeyCheckRequest", "ProviderKeyCheck", "DreamRunRequest", "DreamRunReview", "DreamRunCommand", "DreamRunReceipt",
     "KnowledgeMaintenanceRequest", "KnowledgeMaintenanceReview", "KnowledgeMaintenanceCommand", "KnowledgeMaintenanceReceipt",
     "KnowledgeRelationPage", "KnowledgeRelationReviewRequest", "KnowledgeRelationReview", "KnowledgeRelationReceipt",
     "SubscriptionAccountsSnapshot", "SubscriptionFlowSnapshot", "SubscriptionActionReview",
@@ -227,6 +227,11 @@ OPERATIONS = (
     ("post", "/video-projects/{project_id}/make", None, "VideoProjectView"),
     ("post", "/video-projects/{project_id}/export", "VideoProjectExport", "VideoProjectView"),
     ("get", "/video-brand", None, "VideoBrand"),
+    ("get", "/row-bot-sandboxes", None, "RowBotSandboxPage"),
+    ("post", "/row-bot-sandboxes", "RowBotSandboxCreate", "RowBotSandboxView"),
+    ("post", "/row-bot-sandboxes/{sandbox_id}/link", None, "RowBotSandboxLink"),
+    ("post", "/row-bot-sandboxes/{sandbox_id}/{action}", None, "RowBotSandboxView"),
+    ("delete", "/row-bot-sandboxes/{sandbox_id}", None, "RowBotSandboxPage"),
     ("put", "/video-brand", "VideoBrand", "VideoBrand"),
     ("get", "/deliveries", None, "DeliveryPage"),
     ("get", "/deliveries/{delivery_id}", None, "DeliveryView"),
@@ -813,6 +818,19 @@ export const changeVideoProject = (base: string, proof: SessionProof, project: s
 /** Back to an earlier version, as a new version. */
 export const restoreVideoProject = (base: string, proof: SessionProof, project: string, body: VideoProjectRestore, signal?: AbortSignal): Promise<VideoProjectView> =>
   jsonRequest(base, `/video-projects/${id(project)}/restore`, 'VideoProjectView', proof, 'POST', validateWire('VideoProjectRestore', body), undefined, signal);
+/** Sandboxes (5.3.1 B4): second Row-Bots on made-up data. */
+export const getRowBotSandboxes = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<RowBotSandboxPage> =>
+  jsonRequest(base, '/row-bot-sandboxes', 'RowBotSandboxPage', proof, 'GET', undefined, undefined, signal);
+export const createRowBotSandbox = (base: string, proof: SessionProof, body: RowBotSandboxCreate, signal?: AbortSignal): Promise<RowBotSandboxView> =>
+  jsonRequest(base, '/row-bot-sandboxes', 'RowBotSandboxView', proof, 'POST', validateWire('RowBotSandboxCreate', body), undefined, signal);
+/** Start, stop, or reset it to its pack. */
+export const actOnRowBotSandbox = (base: string, proof: SessionProof, sandbox: string, action: 'start' | 'stop' | 'reset', signal?: AbortSignal): Promise<RowBotSandboxView> =>
+  jsonRequest(base, `/row-bot-sandboxes/${id(sandbox)}/${action}`, 'RowBotSandboxView', proof, 'POST', undefined, undefined, signal);
+/** Its address with a one-time sign-in, for the person's own window or browser. */
+export const rowBotSandboxLink = (base: string, proof: SessionProof, sandbox: string, signal?: AbortSignal): Promise<RowBotSandboxLink> =>
+  jsonRequest(base, `/row-bot-sandboxes/${id(sandbox)}/link`, 'RowBotSandboxLink', proof, 'POST', undefined, undefined, signal);
+export const deleteRowBotSandbox = (base: string, proof: SessionProof, sandbox: string, signal?: AbortSignal): Promise<RowBotSandboxPage> =>
+  jsonRequest(base, `/row-bot-sandboxes/${id(sandbox)}`, 'RowBotSandboxPage', proof, 'DELETE', undefined, undefined, signal);
 /** The brand kit every video uses unless a version turns it off. */
 export const getVideoBrand = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<VideoBrand> =>
   jsonRequest(base, '/video-brand', 'VideoBrand', proof, 'GET', undefined, undefined, signal);

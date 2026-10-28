@@ -163,6 +163,16 @@ class _RecordInput(BaseModel):
     note: str = Field(default="", description="For beat: what happens next, in a few words")
 
 
+class _SandboxInput(BaseModel):
+    action: Literal["list", "create", "start", "stop", "reset", "open"] = Field(
+        default="list", description="list, create (and start), start, stop, reset to its pack, or open in this "
+                                    "chat's browser, signed in")
+    sandbox: str = Field(default="", description="The sandbox (box-…), for every action but list and create")
+    name: str = Field(default="", description="For create: its name, e.g. Demo shop")
+    pack: Literal["empty", "shop", "charity", "paperwork", "code"] = Field(
+        default="empty", description="For create: the made-up data it starts with")
+
+
 # ── Shared steps ──────────────────────────────────────────────────────────────
 
 
@@ -909,6 +919,78 @@ def browser_record(action: str, max_minutes: int = 5, beat: str = "live", note: 
     )
 
 
+def _sandbox_approval(what: str, name: str) -> dict:
+    return {
+        "tool": "sandbox",
+        "label": "Start a sandbox",
+        "question": f"{what} a sandbox ({name})?",
+        "description": ("Row-Bot will start a second Row-Bot on this computer, on made-up data with its own chats, "
+                        "settings and sign-ins. It can't see your own Row-Bot or its files, and it stops when "
+                        "Row-Bot quits."),
+        "args": {"sandbox": name},
+    }
+
+
+def _sandbox_line(item: Any) -> str:
+    from row_bot import sandboxes
+
+    view = sandboxes.view(item)
+    where = f" at {view['url']}" if view["url"] else ""
+    why = f" ({view['problem']})" if view["problem"] else ""
+    return f"Sandbox {item.sandbox_id}: \"{item.name}\", {view['pack_name'].lower()}, {item.status}{where}{why}."
+
+
+def sandbox(action: str = "list", sandbox: str = "", name: str = "", pack: str = "empty") -> str:
+    """A sandbox: a second Row-Bot on made-up data, to try things safely or film a demo in this chat's browser."""
+    from row_bot import sandboxes
+    from row_bot.tools.approval_gate import approval_check, with_approval
+
+    if sandboxes.is_sandbox():
+        return "This is a sandbox already: it starts no sandboxes of its own."
+    if action == "list":
+        found = sandboxes.list_sandboxes()
+        return "\n".join(_sandbox_line(item) for item in found) if found else "There are no sandboxes yet."
+    line = ""
+    try:
+        if action == "create":
+            refusal, line = approval_check(
+                _sandbox_approval("Create and start", name or pack),
+                risks=("starts a second Row-Bot on this computer",),
+                blocked_message="BLOCKED: Starting a sandbox needs approval, and this chat is on Block.",
+                cancelled_message="The person didn't want a sandbox; none was made.")
+            if refusal:
+                return refusal
+            item = sandboxes.create(name, pack)
+            sandboxes.start(item.sandbox_id)
+            item = sandboxes.wait_running(item.sandbox_id, 90) or item
+        else:
+            item = sandboxes.get(sandbox.strip())
+            if item is None:
+                return f"{sandbox or 'That'} isn't a sandbox here: list them, or create one."
+            if action == "start":
+                refusal, line = approval_check(
+                    _sandbox_approval("Start", item.name), risks=("starts a second Row-Bot on this computer",),
+                    blocked_message="BLOCKED: Starting a sandbox needs approval, and this chat is on Block.",
+                    cancelled_message="The person didn't want the sandbox started.")
+                if refusal:
+                    return refusal
+                sandboxes.start(item.sandbox_id)
+                item = sandboxes.wait_running(item.sandbox_id, 90) or item
+            elif action == "stop":
+                item = sandboxes.stop(item.sandbox_id)
+            elif action == "reset":
+                item = sandboxes.reset(item.sandbox_id)
+            elif action == "open":
+                result = browser_navigate(sandboxes.sign_in_url(item.sandbox_id))
+                return f"Opened {item.name} in this chat's browser, signed in.\n{result}"
+    except sandboxes.SandboxError as error:
+        return str(error)
+    text = _sandbox_line(item)
+    if item.status == "running" and action in {"create", "start"}:
+        text += " Open it with action open: this chat's browser signs in to it."
+    return with_approval(line, text) if line else text
+
+
 _TOOLS: tuple[tuple[Any, str, str, type[BaseModel] | None], ...] = (
     (browser_navigate, "browser_navigate",
      "Open a web address in Row-Bot's browser (or back, forward, reload) and return the page with refs. "
@@ -939,6 +1021,10 @@ _TOOLS: tuple[tuple[Any, str, str, type[BaseModel] | None], ...] = (
      "Record this chat's page in Row-Bot's browser to a video (asks first): start, do the steps (paced, with a "
      "drawn pointer), mark beats (live, work, cut), then stop. To record the whole screen use computer_record.",
      _RecordInput),
+    (sandbox, "sandbox",
+     "A sandbox: a second Row-Bot on made-up data (a shop with its app, a charity's documents, paperwork, sample "
+     "code, or empty) to try a workflow safely or film a demo. create starts one (asks first); open signs this "
+     "chat's browser in to it; stop, reset, list.", _SandboxInput),
 )
 
 
