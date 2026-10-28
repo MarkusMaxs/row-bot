@@ -1769,6 +1769,7 @@ const CATALOG: Record<string, Entry> = {
     'none',
   ],
   row_bot_sandbox_unavailable: ['That sandbox is no longer here.', 'none'],
+  wait_unavailable: ['That wait has already ended.', 'none'],
   row_bot_sandbox_refused: [
     'The sandbox can’t do that now: start it first, or delete one (five at most).',
     'none',

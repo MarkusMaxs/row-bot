@@ -1063,6 +1063,13 @@ async def _run_startup_sequence():
             schedule_health_checks(_get_scheduler())
     except Exception as exc:
         logger.warning("Could not schedule Monitor's checks: %s", exc)
+    try:
+        from row_bot import waits
+        from row_bot.tasks import _get_scheduler
+        with _startup_phase("waits_scheduler"):
+            waits.schedule(_get_scheduler())
+    except Exception as exc:
+        logger.warning("Could not schedule waits: %s", exc)
 
     _set("✅ Ready")
     startup_state.ready = True

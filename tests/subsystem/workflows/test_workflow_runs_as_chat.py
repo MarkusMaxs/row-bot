@@ -170,7 +170,11 @@ def test_saying_no_on_the_card_ends_the_run_as_denied(workflows, platform):  # n
     resolve(platform, pending_approval(workflows, waiting["thread_id"]), "deny", "deny-post")
     settle(platform, waiting["thread_id"])
     done = latest(workflows, task["id"])
-    assert (done["status"], done["notice"]) == ("denied", "You said no, so it stopped there.")
+    assert done["status"] == "denied"
+    assert done["notice"].startswith("You said no to “") and done["notice"].endswith("”, so it stopped there.")
+    from row_bot import workflow_turns
+    kept = workflow_turns.notes(task["id"])
+    assert "the person said no to “" in kept and "Don't do it another way" in kept, "the next run knows"
 
 
 def test_a_new_run_replaces_one_still_waiting_on_its_card(workflows, platform):  # noqa: F811

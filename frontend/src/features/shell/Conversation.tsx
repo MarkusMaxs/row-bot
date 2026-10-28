@@ -65,6 +65,7 @@ import WaitingMessages, {
   type WaitingAction,
   type WaitingMessage,
 } from './WaitingMessages';
+import { WaitsStrip } from './Waits';
 import ContextUsage from './ContextUsage';
 import DelegatedActivity, {
   interruptedWork,
@@ -3701,6 +3702,7 @@ export default function Conversation({
               busy={busy || state.status !== 'ready'}
               onAction={waitingAction}
             />
+            <WaitsStrip conversationId={id ?? ''} />
             <div
               className="composer-field"
               ref={composerFieldRef}

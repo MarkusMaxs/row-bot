@@ -50,10 +50,13 @@ Choose **Home**, then the **Workflows** tab. Overview's **New workflow** quick s
 ## Its Conversation
 
 - Every run of a workflow is a new turn in the same conversation, marked with when and how it started, such as **Scheduled run · 26 Oct, 08:00**. Open it with **Open conversation** to read what each run did, see its approval cards, or carry on in it yourself.
-- A run's outcome comes from what its tools did, never from the model's own words: **Posted**, with the post's link, for example, or **Not sure it went through** when a tool couldn't confirm it. A run you said no to ends **You said no**.
+- A run's outcome comes from what its tools did, never from the model's own words: **Posted**, with the post's link, for example, or **Not sure it went through** when a tool couldn't confirm it. A run you said no to ends **You said no to …**, naming what you refused, and its notes keep a dated line so the next run knows and doesn't try it another way.
 - A run that fails on a passing problem, such as the network or a busy provider, tries again by itself after a wait. Once something has gone out, it never tries again: nothing is posted or sent twice.
 - A workflow keeps short notes between runs: what it checked and when, ids it needs again, what's left. Each run reads them first and updates them before it ends, so it doesn't check again what an earlier run already did. Updating them shows as a step in the run.
-- Workflows hand work on by sending it: a trends workflow ends by sending its brief to the publisher workflow's conversation, which starts a run there. Pictures, clips and voice lines pass through **Library › Media**, where a workflow finds, tags and copies them. For real screenshots and clips, a workflow uses a [sandbox](/docs/operations/#sandboxes), never your own Row-Bot.
+- A run has the tools and skills a chat has, including skills you made in other chats.
+- Workflows hand work on by sending it, by the other workflow's name: a trends workflow ends by sending its brief to the publisher workflow's conversation, which starts a turn there. An update that needs no answer is sent without asking for a reply, and a note can wait for the other workflow's next run instead of starting a turn now.
+- A post made for a time slot waits in **Home › Review**, where you edit it, approve it or say no; approved, it goes out at its time.
+- A run can wait for something and carry on when it happens: a build or check to pass, a page to change, a time, or another workflow to finish. Nothing runs while it waits. **Home › Waiting** and the conversation show what it waits for, with **Stop**. Pictures, clips and voice lines pass through **Library › Media**, where a workflow finds, tags and copies them. For real screenshots and clips, a workflow uses a [sandbox](/docs/operations/#sandboxes), never your own Row-Bot.
 - A run has no step limit to set. It keeps going while it makes progress, and stops when you press **Stop** or when it keeps repeating the same thing. After a very long run of steps it stops and asks **Keep going?**: send **Continue** in its conversation to pick up from there.
 
 ## Workflow Settings

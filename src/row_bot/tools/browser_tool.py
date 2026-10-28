@@ -988,6 +988,10 @@ def sandbox(action: str = "list", sandbox: str = "", name: str = "", pack: str =
     text = _sandbox_line(item)
     if item.status == "running" and action in {"create", "start"}:
         text += " Open it with action open: this chat's browser signs in to it."
+        if not sandboxes.has_model(item.sandbox_id):
+            # Its own sign-in (decision 4): only the person signs in, so ask them; a demo needs real answers.
+            text += (" It has no model yet: ask the person to open it from Settings › Sandboxes and sign in to a "
+                     "provider once; its chats can't answer until then.")
     return with_approval(line, text) if line else text
 
 
