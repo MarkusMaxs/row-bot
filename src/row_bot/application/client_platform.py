@@ -339,7 +339,8 @@ class ClientPlatformService:
                         cancel_scope: Any = None, queued_pass_id: str = "", queue_context: dict | None = None,
                         resume_pending: bool = False,
                         attachments: list[dict[str, Any]] | None = None,
-                        note: str = "", retry: bool = False, shown: dict[str, str] | None = None) -> Any:
+                        note: str = "", retry: bool = False, shown: dict[str, str] | None = None,
+                        linked: dict[str, Any] | None = None) -> Any:
         """Single admission path for every conversation turn.
 
         ``retry`` runs the person's last message again in place: the turn it replaces goes in the same write that
@@ -382,7 +383,14 @@ class ClientPlatformService:
                 if attachments
                 else {}
             )
-            if note:
+            if linked:
+                # A message from another conversation (5.3.1 C): the chat shows it with where it came from, the
+                # model reads it fenced. Its note keeps it from ever counting as the person's request.
+                public_metadata = {"platform_public_content": linked["text"], "platform_note": "linked",
+                                   "row_bot_ui": {"linked_from": {
+                                       "id": linked["id"], "title": linked["title"],
+                                       "kind": "reply" if linked.get("reply") else "message"}}}
+            elif note:
                 # A server-started follow-up: the transcript shows the note,
                 # the model reads the prompt.
                 public_metadata = {"platform_public_content": note, "platform_note": "continuation"}
@@ -618,6 +626,7 @@ class ClientPlatformService:
         orchestration_activity: dict | None = None,
         awaiting_approval: bool | None = None,
         goal_waiting: bool | None = None,
+        started_from: str | None = None,
     ) -> dict:
         row = self._metadata(conversation_id)
         from row_bot import threads
@@ -627,6 +636,9 @@ class ClientPlatformService:
             from row_bot import agent_runs
             own_run = agent_runs.get_agent_run_for_thread(conversation_id)
             parent_conversation_id = str(own_run.get("parent_thread_id") or "") if own_run else ""
+        if started_from is None:
+            from row_bot.linked_conversations import started_from as linked_sources
+            started_from = linked_sources([conversation_id]).get(conversation_id, "")
         if orchestration_activity is None:
             from row_bot.agent_orchestrator import get_thread_orchestration_activity
             orchestration_activity = get_thread_orchestration_activity([conversation_id]).get(conversation_id, {})
@@ -645,6 +657,7 @@ class ClientPlatformService:
                 "incognito": bool(row.get("incognito")),
                 "updated_at": str(row.get("updated_at") or ""),
                 "parent_conversation_id": parent_conversation_id or None,
+                "started_from": started_from or None,
                 "activity_state": orchestration_activity.get("state"),
                 "activity_phase": str(orchestration_activity.get("phase") or "")[:64],
                 "category": threads.classify_thread(
@@ -727,13 +740,16 @@ class ClientPlatformService:
         activity = get_thread_orchestration_activity([row[0] for row in selected]) if selected else {}
         awaiting = self._awaiting_approval([row[0] for row in selected])
         goals_waiting = self._goals_waiting([row[0] for row in selected])
+        from row_bot.linked_conversations import started_from as linked_sources
+        sources = linked_sources([row[0] for row in selected])
         items = []
         for row in selected:
             try:
                 items.append(self.get_conversation(row[0], workflow_thread_ids=workflow_thread_ids,
                              parent_conversation_id=parent_ids.get(row[0], ""),
                              orchestration_activity=activity.get(row[0], {}),
-                             awaiting_approval=row[0] in awaiting, goal_waiting=row[0] in goals_waiting))
+                             awaiting_approval=row[0] in awaiting, goal_waiting=row[0] in goals_waiting,
+                             started_from=sources.get(row[0], "")))
             except ClientPlatformError as error:
                 if error.code != "not_found":
                     raise
@@ -1101,6 +1117,16 @@ class ClientPlatformService:
             else:
                 delegated_activity.start_run(self, target, str(payload["text"]))
             return {"conversation_id": target, "revision": str(row["client_revision"]), "status": "completed"}
+        if kind in {"conversation.link.start", "conversation.link.dismiss"}:
+            # The person's Start or Not now on a proposed conversation (5.3.1 C).
+            from row_bot import linked_conversations as linked
+            act = linked.start_proposal if kind.endswith("start") else linked.dismiss_proposal
+            try:
+                card = act(str(payload["link_id"]), source_id=target)
+            except linked.LinkError as exc:
+                raise ClientPlatformError("not_found") from exc
+            return {"conversation_id": target, "revision": str(row["client_revision"]), "status": "completed",
+                    "linked_conversation_id": card["conversation_id"]}
         if kind == "media.save":
             from row_bot.application.conversation_media_copy import save_output
             try:
@@ -1526,7 +1552,9 @@ class ClientPlatformService:
                 resume_pending=resume, attachments=None if resume else attachment_views,
                 note=followup.note if followup is not None else "",
                 retry=not resume and queue_record is None and followup is None and payload.get("retry") is True,
-                shown=shown)
+                shown=shown,
+                linked=({"text": followup.shown or followup.prompt, **(followup.linked_from or {})}
+                        if followup is not None and followup.kind == "linked" else None))
         except BaseException:
             if page_id:
                 from row_bot import pages
@@ -1692,6 +1720,11 @@ class ClientPlatformService:
                     from row_bot.workflow_turns import after_turn as after_workflow_turn
                     after_workflow_turn(conversation_id, status=status, reply=final_text, error_text=error_text)
                 self.finish_execution(handle, status)
+                with _turn_end_step(conversation_id, "linked conversations"):
+                    # The reply to a message from another conversation goes back to it, and the next waiting
+                    # message starts here (5.3.1 C).
+                    from row_bot.linked_conversations import after_turn as after_linked_turn
+                    after_linked_turn(conversation_id, generation_id=generation_id, status=status, reply=final_text)
                 from row_bot.application.conversation_naming import after_turn
                 after_turn(self, conversation_id, status=status, reply=final_text, model_ref=model_ref)
         def start_failed(_exc: BaseException) -> None:

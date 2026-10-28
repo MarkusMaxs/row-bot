@@ -104,7 +104,7 @@ MODELS = {name: getattr(schemas, name) for name in (
     "TalkStart", "TalkSnapshot", "TalkResult", "TalkOutputRequest", "RealtimeSnapshot", "RealtimeStart", "RealtimeEvent", "RealtimeEventRequest", "RealtimeEventResult", "DefaultModelSnapshot", "VoiceRunView",
     "FolderGrantClaim", "FolderGrantView", "DeckSetupOptions", "ArtifactSetupOptions", "ArtifactPreview", "ArtifactEditingState", "ArtifactLifecycleState", "WorkspaceInspector", "WorkspaceChanges",
     "WorkspaceDirectory", "WorkspaceFile", "WorkspaceDiff", "WorkspaceChangeSetPage", "WorkspaceChangeSetFiles", "DraftView", "DraftSave", "ParentSteeringView", "ClientQueueView",
-    "Notice", "NoticePage", "NoticeFrame", "LiveFrame")}
+    "ConversationLinkPage", "Notice", "NoticePage", "NoticeFrame", "LiveFrame")}
 
 # Method, path, request DTO (binary uses bytes), response DTO. This table also
 # drives OpenAPI and is checked against the actual router in the contract tests.
@@ -497,6 +497,7 @@ OPERATIONS = (
     ("get", "/conversations/{conversation_id}/draft", None, "DraftView"),
     ("get", "/conversations/{conversation_id}/steering", None, "ParentSteeringView"),
     ("get", "/conversations/{conversation_id}/queue", None, "ClientQueueView"),
+    ("get", "/conversations/{conversation_id}/links", None, "ConversationLinkPage"),
     ("put", "/conversations/{conversation_id}/draft", "DraftSave", "DraftView"),
     ("post", "/resources/commands", "Command", "CommandReceipt"),
     ("post", "/resources/folder-selection", None, "FolderGrantView"),
@@ -716,6 +717,9 @@ export const getDelegatedRun = (base: string, proof: SessionProof, conversation:
   jsonRequest(base, `/conversations/${id(conversation)}/delegated/${id(run)}`, 'DelegatedRun', proof, 'GET', undefined, undefined, signal);
 export const getQueue = (base: string, proof: SessionProof, conversation: string, generation_id?: string, cursor?: string, signal?: AbortSignal): Promise<ClientQueueView> =>
   jsonRequest(base, `/conversations/${id(conversation)}/queue` + query({generation_id,cursor}), 'ClientQueueView', proof, 'GET', undefined, undefined, signal);
+/** The conversations this one started or proposed, with their state (5.3.1 C). */
+export const getConversationLinks = (base: string, proof: SessionProof, conversation: string, signal?: AbortSignal): Promise<ConversationLinkPage> =>
+  jsonRequest(base, `/conversations/${id(conversation)}/links`, 'ConversationLinkPage', proof, 'GET', undefined, undefined, signal);
 /** Messages that have not been sent or discarded yet, oldest first, in one page. */
 export const getWaitingMessages = (base: string, proof: SessionProof, conversation: string, signal?: AbortSignal): Promise<ClientQueueView> =>
   jsonRequest(base, `/conversations/${id(conversation)}/queue` + query({waiting:'true',limit:256}), 'ClientQueueView', proof, 'GET', undefined, undefined, signal);
