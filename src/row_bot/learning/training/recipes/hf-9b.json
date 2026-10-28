@@ -38,6 +38,12 @@
     "setup_seconds": 900,
     "seconds_per_step": 16.0,
     "export_seconds_per_pass": 240,
-    "upload_seconds": 300
+    "upload_seconds": 300,
+    "alternatives": [
+      {
+        "flavor": "a100-large",
+        "price_per_hour": 2.5
+      }
+    ]
   }
 }

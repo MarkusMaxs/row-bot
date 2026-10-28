@@ -170,3 +170,18 @@ def test_changing_where_to_train_sets_aside_a_run_planned_for_the_other_place(hf
     remote = _plan(data, trainer)
     write_learning_settings({"train_where": "this_computer"})
     assert trainer.jobs.get(remote.id).state == "stopped"  # never uploaded: nothing on Hugging Face to undo
+
+
+def test_the_card_is_chosen_from_the_recipe_s_and_the_quote_shows_each_with_its_price(hf):
+    client, headers, data, _hub, sign_in, _trainer = hf
+    sign_in.authorize()
+
+    chosen = _ok(_command(client, headers, "hf_choose_flavor", flavor="a100-large"))
+    _error(_command(client, headers, "hf_choose_flavor", flavor="h200"), "learning_training_changed")
+    _error(_command(client, headers, "hf_choose_flavor", flavor="Not A Card"), "invalid_command", 422)
+
+    assert chosen["summary"] == "Training on Hugging Face uses a100-large."
+    assert learning.read_settings(data).hf_flavor == "a100-large"
+    quote = chosen["snapshot"]["personal_model"]["hugging_face"]["quote"]
+    assert quote["flavor"] == "a100-large" and quote["price_per_hour"] == 2.5
+    assert [item["flavor"] for item in quote["choices"]] == ["l40sx1", "a100-large"]

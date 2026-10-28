@@ -286,3 +286,69 @@ def test_the_version_is_made_ready_from_the_jobs_gguf_and_the_uploads_are_delete
     world.trainer.tick()
     assert not world.hub.repos  # deleted once the model is here and checked (O133)
     assert remote_training.read_record(job.id, world.root).cleaned_at is not None
+
+
+# ── The card: the recipe's own or a reviewed alternative (28 Oct: no free L40S) ─────
+
+
+def test_a_recipe_offers_its_own_card_first_then_its_reviewed_alternatives(world):
+    offered = world.trainer.flavors(recipes.load("hf-9b"))
+
+    assert [item["flavor"] for item in offered] == ["l40sx1", "a100-large"]
+    assert offered[1]["price_per_hour"] == 2.5 and offered[1]["seconds_per_step"] == offered[0]["seconds_per_step"]
+
+
+@pytest.mark.parametrize("alternatives", [
+    [{"flavor": "l40sx1", "price_per_hour": 2.0}],  # the recipe's own card again
+    [{"flavor": "a100-large"}],  # no price
+    [{"flavor": "a100-large", "price_per_hour": 2.5, "image": "other"}],  # a key no alternative may set
+    "a100-large",
+])
+def test_a_recipe_s_alternatives_are_checked(alternatives):
+    remote = dict(recipes.load("hf-9b").remote)
+    remote["alternatives"] = alternatives
+
+    with pytest.raises(recipes.RecipeError):
+        recipes._remote(remote, "hf-9b")  # noqa: SLF001
+
+
+def test_the_quote_prices_every_card_and_the_chosen_one_is_the_run_s(world):
+    first = world.trainer.quote(examples=90, upload_bytes=1)
+
+    assert (first.flavor, [item["flavor"] for item in first.choices]) == ("l40sx1", ["l40sx1", "a100-large"])
+    a100 = first.choices[1]
+    assert (a100["label"], a100["price_per_hour"]) == ("a100-large", 2.5)  # not on the live price list here
+    assert a100["cost_usd"] > first.choices[0]["cost_usd"] and a100["seconds"] == first.choices[0]["seconds"]
+    save_learning_settings(world.root, train_where="hugging_face",
+                           hugging_face={"model": "", "monthly_cap_usd": 20, "runs_confirmed": True,
+                                         "flavor": "a100-large"})
+
+    chosen = world.trainer.quote(examples=90, upload_bytes=1)
+
+    assert (chosen.flavor, chosen.price_per_hour, chosen.cost_usd) == ("a100-large", 2.5, a100["cost_usd"])
+    job, record = _started(world)
+    assert record.flavor == "a100-large" and world.hub.jobs[job.remote_request_id].flavor == "a100-large"
+    assert record.price_per_hour == 2.5
+
+
+def test_a_card_the_recipe_doesn_t_offer_is_never_used(world):
+    save_learning_settings(world.root, train_where="hugging_face",
+                           hugging_face={"model": "", "monthly_cap_usd": 20, "runs_confirmed": True,
+                                         "flavor": "h200"})
+
+    assert world.trainer.quote(examples=90, upload_bytes=1).flavor == "l40sx1"
+
+
+def test_while_hugging_face_waits_for_a_free_card_the_run_says_so_and_costs_nothing(world):
+    from row_bot.application import learning_hugging_face
+
+    job, _record = _started(world)
+    world.trainer.tick()  # Hugging Face: SCHEDULING (no card free yet)
+
+    waiting = learning_hugging_face.run_view(world.jobs.get(job.id))
+
+    assert waiting["waiting_for_gpu"] is True and waiting["gpu_label"] == "1x Nvidia L40S"
+    assert waiting["cost_usd"] == 0
+    world.hub.jobs[job.remote_request_id].stage = "RUNNING"
+    world.trainer.tick()
+    assert learning_hugging_face.run_view(world.jobs.get(job.id))["waiting_for_gpu"] is False
