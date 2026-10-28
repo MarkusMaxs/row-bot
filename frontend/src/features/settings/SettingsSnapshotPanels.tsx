@@ -2545,7 +2545,7 @@ export function SystemSnapshotPanel({
               mutation={mutation}
               field="shell.allow_data_folder"
               label="Let the agent read Row-Bot's data folder"
-              hint="It holds your conversations, settings and keys. When on, commands that read it ask you each time."
+              hint="It holds your conversations, settings and keys. When on, commands that read it follow this chat's approvals."
               value={snapshot.shell.allow_data_folder}
             />
           )}

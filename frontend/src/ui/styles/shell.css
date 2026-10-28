@@ -1089,13 +1089,15 @@
 
 /* --------------------------------------------------------------- Context */
 
-/* Conversation details. A wide chat keeps them open in a rail anchored to
-   the right edge, from under the header to the foot of the window, with a
-   hairline beside the transcript (U3). The transcript's scroller ends at the
-   rail and its reading column, the composer, the Latest pill and errors
-   centre in the width left. A chat too narrow for the rail and a
-   comfortable column (isNarrowChat) opens them on demand as a card under
-   the header's details button. Reduced transparency makes the card opaque. */
+/* Conversation details. A wide window keeps them open as a glass card under
+   the header's buttons, beside a full reading column (U21). A chat with less
+   room keeps them in a rail anchored to the right edge, from under the
+   header to the foot of the window, with a hairline beside the transcript
+   (U3): there a card would cover the column. The transcript's scroller ends
+   at the rail and its reading column, the composer, the Latest pill and
+   errors centre in the width left. A chat too narrow for the rail and a
+   comfortable column (isNarrowChat) opens them on demand as a card under the
+   header's details button. Reduced transparency makes the card opaque. */
 .chat-workspace {
   position: relative;
   grid-template-columns: minmax(0, 1fr) minmax(280px, 316px);
@@ -1108,7 +1110,7 @@
   --column: calc(var(--chat-column) + 2 * var(--chat-gutter));
   grid-template-columns: minmax(0, 1fr);
 }
-.details-open .transcript {
+.details-rail.details-open .transcript {
   margin-inline-end: var(--details-width);
 }
 .details-wide .transcript > .transcript-content {
@@ -1120,9 +1122,9 @@
   /* Outside the transcript, whose scrollbar is not part of the column. */
   --basis: calc(100% - var(--transcript-scrollbar, 0px));
 }
-.details-open > .composer,
-.details-open .latest-pill,
-.details-open .chat-error {
+.details-rail.details-open > .composer,
+.details-rail.details-open .latest-pill,
+.details-rail.details-open .chat-error {
   --basis: calc(100% - var(--transcript-scrollbar, 0px) - var(--details-width));
 }
 .details-wide .transcript > .transcript-content,
@@ -1131,6 +1133,23 @@
 .details-wide .chat-error {
   --column-left: max(0px, (var(--basis) - var(--column)) / 2);
   --column-width: min(var(--column), var(--basis));
+}
+/* The card (U21): the column stays centred, and moves left (then narrows a
+   little) only as far as it must so nothing runs under the card. */
+.details-float.details-open .transcript > .transcript-content,
+.details-float.details-open > .composer,
+.details-float.details-open .latest-pill,
+.details-float.details-open .chat-error {
+  --details-space: calc(var(--details-width) + 24px + 16px);
+  --column-left: clamp(
+    16px,
+    (var(--basis) - var(--column)) / 2,
+    var(--basis) - var(--column) - var(--details-space)
+  );
+  --column-width: min(
+    var(--column),
+    var(--basis) - var(--details-space) - 16px
+  );
 }
 .details-wide .transcript > .transcript-content,
 .details-wide > .composer {
@@ -1209,9 +1228,28 @@
     box-shadow: none;
   }
 }
+/* The card on a wide window (U21): content height, under the header's
+   buttons, its right edge on the last button's and above the composer. */
+/* The header's buttons end where the card does. */
+.details-float .chat-content > .conversation-heading {
+  padding-inline-end: 24px;
+}
+.chat-workspace.details-float > .context-card.context-card-pinned {
+  position: absolute;
+  z-index: 30;
+  top: 52px;
+  right: 24px;
+  width: var(--details-width);
+  /* Ends above the composer, never over it. */
+  max-height: calc(100% - 52px - 128px);
+  box-shadow:
+    inset 0 1px 0 var(--surface-highlight),
+    0 2px 8px -2px var(--shadow-color),
+    0 24px 56px -16px var(--shadow-color);
+}
 /* The anchored rail: part of the page, not a card over it (after the card's
    fills so it keeps none). Nothing scrolls under it. */
-.chat-workspace > .context-card.context-card-pinned {
+.chat-workspace.details-rail > .context-card.context-card-pinned {
   grid-column: 1;
   grid-row: 1 / -1;
   justify-self: end;
@@ -1228,11 +1266,11 @@
   backdrop-filter: none;
   animation: none;
 }
-.context-card-pinned .conversation-context-rail {
+.details-rail .context-card-pinned .conversation-context-rail {
   flex: 1 1 auto;
   padding: 10px 16px 16px;
 }
-.context-card-pinned .context-rail-heading {
+.details-rail .context-card-pinned .context-rail-heading {
   right: 12px;
 }
 /* The compact details sheet adopts the same host (Conversation). */
