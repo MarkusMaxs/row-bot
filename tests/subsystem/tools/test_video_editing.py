@@ -284,6 +284,17 @@ def test_a_caption_reads_the_same_in_a_square_or_tall_cut_as_in_a_wide_one():
     assert render_text(line, "caption", 720, 1280)[1] <= 720
 
 
+def test_a_square_cut_of_a_scene_without_a_zoom_is_centred_where_its_pointer_was():
+    from row_bot.video_editing import SceneCut, Step
+
+    scenes = Step(op="scenes", aspect="1:1", scenes=[
+        SceneCut(input=0, end=2, focus=(0.9, 0.2)), SceneCut(input=0, start=2, end=4)])
+    plan = build_plan([InputVideo("input-1.mp4", HD)], [scenes], "output.mp4")
+
+    # 640×360 square is 360×360: the first scene at the right edge, where the pointer was; the second in the middle.
+    assert "crop=360:360:280:0" in plan.graph and "crop=360:360:140:0" in plan.graph
+
+
 def test_the_brand_kit_puts_an_intro_and_outro_on_its_colour_and_its_logo_in_a_corner():
     from row_bot.video_editing import Look, SceneCut, Step
 

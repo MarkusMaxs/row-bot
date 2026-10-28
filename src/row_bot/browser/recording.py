@@ -27,6 +27,8 @@ logger = logging.getLogger(__name__)
 FPS = 30
 # Frames are scaled down so neither side is larger than this.
 MAX_SIDE = 1920
+# Pointer moves kept with a recording, for following it in another shape.
+TRAIL_POINTS = 2_000
 # The drawn pointer: how long it takes to reach a target, and how long a click's ring shows.
 MOVE_SECONDS = 0.45
 RING_SECONDS = 0.5
@@ -97,6 +99,8 @@ class PageRecorder:
         self.started_at = 0.0
         # Where the pointer goes: (when, x, y, clicked, from x, from y), x and y 0–1 across the page.
         self._pointer: list[tuple[float, float, float, bool, float, float]] = []
+        # Where the pointer went, kept with the recording: a square or tall cut follows it (5.3.1).
+        self.trail: list[tuple[float, float, float]] = []
         # Marked moments: (seconds into the recording, live | work | cut, a note).
         self.beats: list[tuple[float, str, str]] = []
         self._thread = threading.Thread(target=self._run, daemon=True, name="row-bot-browser-recording")
@@ -132,6 +136,8 @@ class PageRecorder:
             start = (here[0], here[1]) if here else (x, y)
             self._pointer.append((now, x, y, bool(click), *start))
             del self._pointer[:-16]
+            self.trail.append((round(now, 2), round(x, 4), round(y, 4)))
+            del self.trail[:-TRAIL_POINTS]
 
     def beat(self, kind: str, note: str = "") -> float:
         """Mark this moment; its seconds into the recording."""

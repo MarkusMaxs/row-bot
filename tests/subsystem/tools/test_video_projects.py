@@ -39,6 +39,7 @@ def studio(platform, monkeypatch):  # noqa: F811
         return edit
 
     monkeypatch.setattr(sound, "speak", speak)
+    monkeypatch.setattr("row_bot.tts.TTSService.is_installed", lambda self: True)  # Row-Bot's voice is here.
     monkeypatch.setattr(video_edits, "start", start)
     return {"said": said, "started": started}
 
@@ -255,3 +256,41 @@ def test_the_video_tool_makes_a_project_and_its_step_shows_the_project_card(stud
 
     assert "no earlier version" in video_project_tool._video(action="undo", project=project_id)
     assert "isn't a video project in this chat" in video_project_tool._video(action="status", project="vid-00000000")
+
+
+def test_a_scene_follows_where_its_recordings_pointer_was(studio):
+    """V3: a square or tall cut of a scene without a zoom is centred on the pointer, so what's used stays in frame."""
+    import time
+
+    from row_bot import recordings, video_projects
+
+    record = recordings.Recording(recording_id="rec-0f0e0d0c", conversation_id="conversation-a", kind="browser",
+                                  started_at=time.time() - 30, max_seconds=300, status="saved",
+                                  trail=[[1.0, 0.2, 0.3], [2.0, 0.25, 0.35], [3.0, 0.3, 0.3],
+                                         [11.0, 0.9, 0.1], [12.0, 0.95, 0.05]])
+    recordings._ensure_loaded()
+    recordings._RECORDS[record.recording_id] = record
+
+    assert video_projects.pointer_focus("rec-0f0e0d0c", 0.0, 5.0) == (0.25, 0.3)
+    assert video_projects.pointer_focus("rec-0f0e0d0c", 10.0, None) == (0.925, 0.075)
+    assert video_projects.pointer_focus("rec-0f0e0d0c", 5.0, 9.0) is None, "no moves then: the middle"
+    assert video_projects.pointer_focus("clip.mp4", 0.0, 5.0) is None, "a file has no pointer"
+
+
+def test_making_a_narrated_video_without_rowbots_voice_asks_for_it_first(studio, monkeypatch):
+    from row_bot import ffmpeg_runtime, video_projects
+    from row_bot.tools import approval_gate, video_project_tool
+
+    monkeypatch.setattr(video_project_tool, "_conversation", lambda: "conversation-a")
+    monkeypatch.setattr(ffmpeg_runtime, "find", lambda: object())
+    monkeypatch.setattr("row_bot.tts.TTSService.is_installed", lambda self: False)
+    asked: list[str] = []
+    monkeypatch.setattr(approval_gate, "approval_check", lambda payload, **_: asked.append(payload["question"]) or (
+        "The person didn't allow downloading Row-Bot's voice; nothing was downloaded.", ""))
+    project = video_projects.create("conversation-a", "Launch demo", SCENES)
+
+    said = video_project_tool._video(action="make", project=project.project_id)
+
+    assert said.startswith("The person didn't allow downloading Row-Bot's voice")
+    assert asked == ["Narrating this video needs Row-Bot's voice (Kokoro, about 206 MB) from GitHub. Download it now?"]
+    assert video_projects.get(project.project_id, "conversation-a").latest.status != "rendering", "nothing made"
