@@ -424,7 +424,9 @@ def render_text(text: str, style: str, frame_width: int, frame_height: int, *,
     from PIL import Image, ImageDraw
 
     style = style or "badge"
-    size = max(12, round(frame_height * _STYLE_SIZES[style] * (1.3 if plain and style == "caption" else 1)))
+    # Sized as on a 16:9 picture of this width, so a square or tall cut fits the same words on a line.
+    reference = min(frame_height, frame_width * 9 / 16)
+    size = max(12, round(reference * _STYLE_SIZES[style] * (1.3 if plain and style == "caption" else 1)))
     typeface = font(size)
     probe = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
     max_width = int(frame_width * (0.86 if style != "badge" else 0.6))
