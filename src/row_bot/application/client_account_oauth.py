@@ -425,7 +425,8 @@ def _expire() -> None:
 # What an account's setup reviews (Google's: "Gmail and Calendar. Sending and changes always ask
 # first."): its first sign-in turns that access on, so the account reads Connected, not Off (F29).
 # A sign-in that replaces one keeps the switches as the person left them.
-_REVIEWED_ACCESS = {"google": ("gmail", "calendar"), "microsoft": ("outlook_mail", "outlook_calendar")}
+_REVIEWED_ACCESS = {"google": ("gmail", "calendar"), "microsoft": ("outlook_mail", "outlook_calendar"),
+                    "x": ("x",)}
 
 
 _MICROSOFT_FAILED = {
@@ -452,18 +453,26 @@ def _save_sign_in(account: str, token: dict) -> str:
         from row_bot import x_accounts
 
         # Its own account, named by X (``/2/users/me``): a new one is added, one already there is replaced.
-        return f"Connected {x_accounts.add(token).handle} on X."
+        first = not x_accounts.listed()
+        handle = x_accounts.add(token).handle
+        if first:  # X's first sign-in turns on the access its setup reviewed, as Google's does (F30).
+            _turn_on(account)
+        return f"Connected {handle} on X."
     first = account_tokens.read(account) is None
     account_tokens.write(account, token)  # Keychain only; a failure keeps the old sign-in.
     account_tokens.record_check(account, "valid")  # The provider has just issued it.
     if first:
-        from row_bot.tools import registry
-        for tool in _REVIEWED_ACCESS.get(account, ()):
-            try:
-                registry.set_enabled(tool, True)
-            except Exception:
-                logger.warning("Couldn't turn on %s after signing in to %s", tool, account, exc_info=True)
+        _turn_on(account)
     return "Account authorization saved."
+
+
+def _turn_on(account: str) -> None:
+    from row_bot.tools import registry
+    for tool in _REVIEWED_ACCESS.get(account, ()):
+        try:
+            registry.set_enabled(tool, True)
+        except Exception:
+            logger.warning("Couldn't turn on %s after signing in to %s", tool, account, exc_info=True)
 
 
 def _finish_auth(job_key: str) -> None:

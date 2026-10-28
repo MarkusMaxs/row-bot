@@ -410,7 +410,12 @@ class TTSService:
         worker (sets ``_stop_event``), the mic stays muted so the caller
         can decide what to do next.
         """
-        import sounddevice as sd
+        try:
+            import sounddevice as sd
+        except Exception:
+            # No sound system to play through (a Linux machine without PulseAudio).
+            logger.warning("TTS stream playback unavailable", exc_info=True)
+            return
 
         natural_end = False
 
@@ -507,9 +512,9 @@ class TTSService:
 
     def _play(self, text: str) -> None:
         """Generate audio with Kokoro and play it via sounddevice."""
-        import sounddevice as sd
-
         try:
+            import sounddevice as sd
+
             samples, sample_rate = self._synthesize_samples(text)
 
             if self._stop_event.is_set():

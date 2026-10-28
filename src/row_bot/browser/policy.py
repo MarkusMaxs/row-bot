@@ -80,12 +80,18 @@ class Consequence:
     kind: Kind
     site: str
     control: str
+    # A sandbox's page (5.3.1 B4): its name. What happens there stays in its made-up data, on this computer.
+    sandbox: str = ""
 
     @property
     def risk(self) -> str:
         return _RISKS[self.kind]
 
     def question(self) -> str:
+        if self.sandbox:
+            verb = {"pay": "Pay", "book": "Book", "send": "Send", "delete": "Delete",
+                    "account": "Change the account", "upload": "Upload"}[self.kind]
+            return f"{verb} in the {self.sandbox} sandbox?"
         return {
             "pay": f"Pay on {self.site}?",
             "book": f"Book on {self.site}?",
@@ -114,9 +120,14 @@ class Consequence:
             "account": "This changes your account.",
             "upload": "The site gets a copy of the file.",
         }[self.kind]
+        if self.sandbox:
+            what = "It stays in the sandbox's made-up data: nothing leaves this computer."
+            where = f"in the {self.sandbox} sandbox"
+        else:
+            where = f"on {self.site}"
         if self.kind == "upload":
-            return f"Row-Bot will upload {self.control} on {self.site}. {what}"
-        return f'Row-Bot will {verb} "{self.control}" on {self.site}. {what}'
+            return f"Row-Bot will upload {self.control} {where}. {what}"
+        return f'Row-Bot will {verb} "{self.control}" {where}. {what}'
 
 
 _RISKS: dict[str, str] = {
@@ -187,6 +198,18 @@ def classify(
 
     page = page or PageFacts()
     site = site_of(page.url) or "this site"
+    found = _consequence(action, control, role, page, site)
+    if found is None:
+        return None
+    from dataclasses import replace
+
+    from row_bot import sandboxes
+
+    named = sandboxes.name_at(page.url)
+    return replace(found, sandbox=named) if named else found
+
+
+def _consequence(action: str, control: str, role: str, page: PageFacts, site: str) -> Consequence | None:
     role = str(role or "").casefold()
     name = _words(control)[:160]
     if action == "submit":
