@@ -1265,6 +1265,14 @@ async def _cleanup_runtime(reason: str = "shutdown") -> bool:
     except Exception as exc:
         _safe_console_print(f"[shutdown] Video edit cleanup error: {exc}")
     try:
+        # Sandboxes (5.3.1 B4): each second Row-Bot this one started stops with it.
+        from row_bot.sandboxes import stop_all as _stop_sandboxes
+        _boxes = await asyncio.to_thread(_stop_sandboxes)
+        if _boxes:
+            _safe_console_print(f"[shutdown] Stopped {_boxes} sandbox(es)")
+    except Exception as exc:
+        _safe_console_print(f"[shutdown] Sandbox cleanup error: {exc}")
+    try:
         # Prepare sandbox stops with its network off: its install container is removed (F18).
         from row_bot.developer.sandbox_prepare import stop_all as _stop_sandbox_jobs
         _jobs = await asyncio.to_thread(_stop_sandbox_jobs, timeout=15.0)

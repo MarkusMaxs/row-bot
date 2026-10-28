@@ -112,6 +112,7 @@
           "enum": [
             "image/png",
             "image/jpeg",
+            "image/gif",
             "video/mp4",
             "audio/mpeg",
             "audio/ogg",
@@ -1315,6 +1316,7 @@
           "enum": [
             "image/png",
             "image/jpeg",
+            "image/gif",
             "video/mp4",
             "audio/mpeg",
             "audio/ogg",
@@ -2029,7 +2031,8 @@
             "question_answered",
             "page",
             "request_corrected",
-            "linked_conversation"
+            "linked_conversation",
+            "video_project"
           ],
           "title": "Kind",
           "type": "string"
@@ -2090,6 +2093,13 @@
           "maxLength": 64,
           "pattern": "^(proc-[0-9a-f]{8})?$",
           "title": "Process Id",
+          "type": "string"
+        },
+        "project_id": {
+          "default": "",
+          "maxLength": 32,
+          "pattern": "^(vid-[0-9a-f]{8})?$",
+          "title": "Project Id",
           "type": "string"
         },
         "recording_id": {

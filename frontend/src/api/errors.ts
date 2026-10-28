@@ -639,6 +639,7 @@ const CATALOG: Record<string, Entry> = {
     'This approval expired. Close this and answer the current approval.',
     'review',
   ],
+  media_unavailable: ["That item isn't in the media library any more.", 'none'],
   scheduled_post_unavailable: [
     'That post already went out or was cancelled.',
     'none',
@@ -1758,6 +1759,32 @@ const CATALOG: Record<string, Entry> = {
   process_unavailable: ['That command is no longer running.', 'none'],
   recording_unavailable: ['That recording is no longer listed.', 'none'],
   video_edit_unavailable: ['That video edit is no longer listed.', 'none'],
+  video_project_unavailable: ['That video is no longer here.', 'none'],
+  video_project_stale: [
+    'The video changed meanwhile. Look at the new version, then change it again.',
+    'review',
+  ],
+  video_project_invalid: [
+    "One of the scenes' videos can't be used any more. Ask Row-Bot to swap it.",
+    'none',
+  ],
+  row_bot_sandbox_unavailable: ['That sandbox is no longer here.', 'none'],
+  row_bot_sandbox_refused: [
+    'The sandbox can’t do that now: start it first, or delete one (five at most).',
+    'none',
+  ],
+  video_brand_invalid: [
+    'The brand kit couldn’t be saved: pick its logo from your pictures again.',
+    'none',
+  ],
+  video_project_not_made: [
+    'Make this version first: its other shapes come from it.',
+    'none',
+  ],
+  video_project_needs_ffmpeg: [
+    'Making the video needs ffmpeg. Ask Row-Bot to make it once, and it offers to download ffmpeg.',
+    'none',
+  ],
   sent_file_unavailable: ['That file is no longer here to download.', 'none'],
   sent_file_expired: [
     'This download has ended: sent files stay for 7 days. Ask Row-Bot to send it again.',

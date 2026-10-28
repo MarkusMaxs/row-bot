@@ -27,12 +27,12 @@ TraceGroupKind = Literal["generic", "browser", "computer"]
 TraceSpecializationKind = Literal[
     "skill_load", "delegated_agent", "media", "resource_created", "resource_bound", "setup_needed", "connect_apps",
     "background_process", "recording", "video_edit", "delivery", "sandbox_job", "sandbox_unprepared",
-    "question_answered", "page", "request_corrected", "linked_conversation",
+    "question_answered", "page", "request_corrected", "linked_conversation", "video_project",
 ]
 CARD_SPECIALIZATIONS = frozenset({
     "resource_created", "resource_bound", "setup_needed", "connect_apps", "background_process", "recording",
     "video_edit", "delivery", "sandbox_job", "sandbox_unprepared", "question_answered", "page",
-    "linked_conversation",
+    "linked_conversation", "video_project",
 })
 # A recording of Row-Bot's browser or of the screen a step started or stopped (F2): the result's
 # first line after its approval line names it, and the card follows it by that id.
@@ -46,6 +46,7 @@ _DELIVERY_LINE = re.compile(r"Delivery (send-[0-9a-f]{8}): ")
 # A page a step made or changed (N5): the result's first line names it, and the card opens it by that id.
 _PAGE_TOOLS = frozenset({"page_create", "page_update"})
 _PAGE_LINE = re.compile(r"Page (page-[0-9a-f]{8}): ")
+_VIDEO_PROJECT_LINE = re.compile(r"Video project (vid-[0-9a-f]{8}): ")
 # A call the model got wrong and is told to send again (U11): arguments that didn't fit the tool, a tool
 # that doesn't exist, or a question it worded wrongly. The model reads the whole error; a person sees a
 # quiet line instead, never the arguments or Python.
@@ -171,6 +172,8 @@ class TraceSpecialization:
     page_id: str = ""
     # linked_conversation (5.3.1 C): the link a card reads the conversation's state by.
     link_id: str = ""
+    # video_project (5.3.1 B3): the project its card re-reads and opens in the Video panel.
+    project_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -715,6 +718,17 @@ def _page_specialization(name: str, content: Any) -> TraceSpecialization | None:
     return TraceSpecialization(kind="page", page_id=match.group(1)) if match else None
 
 
+def _video_project_specialization(name: str, content: Any) -> TraceSpecialization | None:
+    """The video project a video step made or changed (5.3.1 B3): its card opens the Video panel."""
+    if name != "video" or not isinstance(content, str):
+        return None
+    first, _newline, rest = content.partition("\n")
+    if first.startswith("Approval: "):
+        first = rest.partition("\n")[0]
+    match = _VIDEO_PROJECT_LINE.match(first)
+    return TraceSpecialization(kind="video_project", project_id=match.group(1)) if match else None
+
+
 def _sandbox_specialization(name: str, content: Any) -> TraceSpecialization | None:
     """Prepare sandbox's job by its handle line, or the offer under a test run that lacked its tools."""
     if not isinstance(content, str):
@@ -759,6 +773,7 @@ def specialize_tool_result(result: Any) -> TraceSpecialization | None:
         or _video_edit_specialization(name, _content(result))
         or _delivery_specialization(name, _content(result))
         or _page_specialization(name, _content(result))
+        or _video_project_specialization(name, _content(result))
         or _sandbox_specialization(name, _content(result))
         or _skill_specialization(name, payload)
         or _agent_specialization(name, payload)
@@ -916,6 +931,7 @@ def _public_specialization(
             **({"job_id": specialization.job_id} if specialization.job_id else {}),
             **({"page_id": specialization.page_id} if specialization.page_id else {}),
             **({"link_id": specialization.link_id} if specialization.link_id else {}),
+            **({"project_id": specialization.project_id} if specialization.project_id else {}),
             **({"outcome": specialization.outcome,
                 "answers": [dict(answer) for answer in specialization.answers]}
                if specialization.kind == "question_answered" else {}),

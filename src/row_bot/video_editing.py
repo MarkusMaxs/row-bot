@@ -137,6 +137,47 @@ class Step:
     role: str = ""
     volume: float | None = None
     duck: bool = True
+    # scenes (a video project's, 5.3.1 B3; never the agent's own step): the pieces, in order, and the shape
+    # the video is reframed to ("16:9", "1:1", "9:16"; "" keeps the first input's).
+    scenes: list["SceneCut"] = field(default_factory=list)
+    aspect: str = ""
+    # scenes: the brand kit's look (cards, badges, captions, intro, outro, logo); text: a card's fill colour
+    # and whether it's drawn without its box (a bold caption, or a title on a coloured card).
+    look: "Look | None" = None
+    fill: tuple[int, int, int, int] | None = None
+    plain: bool = False
+
+
+@dataclass(frozen=True)
+class SceneCut:
+    """One scene of a video project: a piece of an input, its speed, a zoom, a card, its line and voice."""
+
+    input: int
+    start: float = 0.0
+    end: float | None = None
+    speed: float = 1.0
+    zoom: tuple[float, float, float, float] | None = None
+    card: str = ""
+    line: str = ""
+    voice: str = ""
+
+
+CARD_SECONDS = 3.0
+BOOKEND_SECONDS = 2.0
+
+
+@dataclass(frozen=True)
+class Look:
+    """The brand kit as the renderer uses it (5.3.1 B3)."""
+
+    colour: tuple[int, int, int] = (31, 41, 55)
+    # How lines show under their scenes: "box" (a dark box), "bold" (large, outlined) or "title" (centred).
+    captions: str = "box"
+    logo: bytes | None = None
+    logo_corner: str = "top-left"
+    intro: str = ""
+    outro: str = ""
+ASPECTS = {"16:9": 16 / 9, "1:1": 1.0, "9:16": 9 / 16}
 
 
 def _number(value: Any, name: str) -> float | None:
@@ -233,7 +274,9 @@ def parse_steps(raw: Iterable[Any] | None) -> list[Step]:
 
 def sound_sources(steps: list[Step]) -> list[str]:
     """The sound files an edit lays, each once, in the order the steps name them."""
-    return list(dict.fromkeys(step.source for step in steps if step.op == "sound" and step.source))
+    names = [step.source for step in steps if step.op == "sound" and step.source]
+    names += [scene.voice for step in steps if step.op == "scenes" for scene in step.scenes if scene.voice]
+    return list(dict.fromkeys(names))
 
 
 def speed_words(factor: float) -> str:
@@ -257,6 +300,7 @@ def describe(steps: list[Step], inputs: int = 1) -> str:
             "crop": "cropped",
             "captions": "captioned",
             "sound": {"voice": "added a voice", "music": "added music"}.get(step.role, "set the sound level"),
+            "scenes": f"cut {len(step.scenes)} scene{'s' if len(step.scenes) != 1 else ''}",
         }[step.op]
         if word not in words:
             words.append(word)
@@ -373,12 +417,14 @@ class Overlay:
 _STYLE_SIZES = {"badge": 0.05, "title": 0.08, "caption": 0.052}
 
 
-def render_text(text: str, style: str, frame_width: int, frame_height: int) -> tuple[bytes, int, int]:
-    """Draw text as a picture: a rounded dark badge, a large title, or a caption box."""
+def render_text(text: str, style: str, frame_width: int, frame_height: int, *,
+                fill: tuple[int, int, int, int] | None = None, plain: bool = False) -> tuple[bytes, int, int]:
+    """Draw text as a picture: a rounded dark badge, a large title, or a caption box; in a brand's colour
+    (``fill``), or ``plain``: no box, the letters outlined so they read on any picture."""
     from PIL import Image, ImageDraw
 
     style = style or "badge"
-    size = max(12, round(frame_height * _STYLE_SIZES[style]))
+    size = max(12, round(frame_height * _STYLE_SIZES[style] * (1.3 if plain and style == "caption" else 1)))
     typeface = font(size)
     probe = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
     max_width = int(frame_width * (0.86 if style != "badge" else 0.6))
@@ -391,13 +437,16 @@ def render_text(text: str, style: str, frame_width: int, frame_height: int) -> t
     picture = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(picture)
     radius = height // 2 if style == "badge" and len(lines) == 1 else round(size * 0.45)
-    fill = (17, 24, 39, 214) if style != "caption" else (0, 0, 0, 178)
-    draw.rounded_rectangle((0, 0, width - 1, height - 1), radius=radius, fill=fill)
+    if not plain:
+        box = fill or ((17, 24, 39, 214) if style != "caption" else (0, 0, 0, 178))
+        draw.rounded_rectangle((0, 0, width - 1, height - 1), radius=radius, fill=box)
+    outline = max(2, round(size * 0.08)) if plain else 0
     for index, line in enumerate(lines):
         line_width = probe.textlength(line, font=typeface)
         left = (width - line_width) / 2
         top = pad_y + index * line_height + (line_height - size) / 2 - size * 0.1
-        draw.text((left, top), line, font=typeface, fill=(255, 255, 255, 255))
+        draw.text((left, top), line, font=typeface, fill=(255, 255, 255, 255), stroke_width=outline,
+                  stroke_fill=(0, 0, 0, 230))
     output = io.BytesIO()
     picture.save(output, format="PNG", optimize=True)
     return output.getvalue(), width, height
@@ -416,10 +465,25 @@ def place(position: str, width: int, height: int, frame_width: int, frame_height
 
 def text_overlay(step: Step, frame_width: int, frame_height: int) -> Overlay:
     style = step.style or "badge"
-    png, width, height = render_text(step.text, style, frame_width, frame_height)
+    png, width, height = render_text(step.text, style, frame_width, frame_height, fill=step.fill, plain=step.plain)
     default = {"badge": "top-right", "title": "center", "caption": "bottom"}[style]
     x, y = place(step.position or default, width, height, frame_width, frame_height)
     return Overlay(png, width, height, x, y, step.start, step.end)
+
+
+def logo_overlay(png: bytes, corner: str, frame_width: int, frame_height: int) -> Overlay:
+    """A brand's logo, a tenth of the picture's height, in its corner for the whole video."""
+    from PIL import Image
+
+    picture = Image.open(io.BytesIO(png)).convert("RGBA")
+    height = max(16, round(frame_height * 0.1))
+    width = max(16, round(picture.width * height / max(1, picture.height)))
+    if width > frame_width // 3:
+        width, height = frame_width // 3, max(16, round(picture.height * (frame_width // 3) / max(1, picture.width)))
+    output = io.BytesIO()
+    picture.resize((width, height), Image.LANCZOS).save(output, format="PNG", optimize=True)
+    x, y = place(corner, width, height, frame_width, frame_height)
+    return Overlay(output.getvalue(), width, height, x, y, None, None)
 
 
 # ── The plan ────────────────────────────────────────────────────────────────
@@ -447,6 +511,8 @@ class Plan:
     has_audio: bool
     summary: str
     outputs: list[str] = field(default_factory=list)
+    # A project's scenes: where each starts on the finished video, then where it ends.
+    marks: list[float] = field(default_factory=list)
 
 
 def _even(value: float) -> int:
@@ -485,6 +551,10 @@ class _Builder:
         self.duration = sum(item.info.duration for item in inputs)
         self.video = ""
         self.audio: str | None = None
+        self.lengths = [item.info.duration for item in inputs]
+        # Voice lines a project's scenes lay: (when on the finished video, the file).
+        self.voice_cues: list[tuple[float, str]] = []
+        self.marks: list[float] = []
 
     def label(self, kind: str) -> str:
         self.count += 1
@@ -691,6 +761,118 @@ class _Builder:
     def sound(self, step: Step) -> None:
         """Laid on the finished timeline once every picture step is done (``mix``)."""
 
+    def scenes(self, step: Step) -> None:
+        """A video project's scenes in order: each piece cut from its input, at its speed, with its zoom,
+        its card for the first seconds and its line as a caption (``style="caption"``); its voice line
+        is laid at the scene's start on the finished video."""
+        if not step.scenes:
+            raise EditError("A video needs at least one scene.")
+        offsets = [sum(self.lengths[:index]) for index in range(len(self.lengths))]
+        cuts: list[tuple[float, float]] = []
+        for number, scene in enumerate(step.scenes, 1):
+            if not 0 <= scene.input < len(self.lengths):
+                raise EditError(f"Scene {number}: its video isn't one of the inputs.")
+            length = self.lengths[scene.input]
+            start = min(max(0.0, scene.start), length)
+            end = length if scene.end is None else min(scene.end, length)
+            if end - start < 0.05:
+                raise EditError(f"Scene {number}: {_seconds_text(start)}–{_seconds_text(end)} s is outside its "
+                                f"video, which is {_seconds_text(length)} s long.")
+            cuts.append((offsets[scene.input] + start, offsets[scene.input] + end))
+        videos, sounds = self._pieces(cuts, audio=True)
+        self._join(videos, sounds)
+        lengths = [end - start for start, end in cuts]
+        self.duration = sum(lengths)
+        # Speeds from the last scene back, so each one's times are still those of the cut timeline.
+        for index in range(len(step.scenes) - 1, -1, -1):
+            factor = step.scenes[index].speed
+            if abs(factor - 1) > 1e-3:
+                begin = sum(lengths[:index])
+                # Its badge is laid after the reframe, so a tall shape never cuts it off.
+                self.speed(Step(op="speed", start=begin, end=begin + lengths[index], factor=factor, label=False))
+        finals = [length / scene.speed for length, scene in zip(lengths, step.scenes)]
+        self.marks = [round(sum(finals[:index]), 3) for index in range(len(finals) + 1)]
+        for index, scene in enumerate(step.scenes):
+            if scene.zoom:
+                x, y, width, height = scene.zoom
+                self.zoom(Step(op="zoom", start=self.marks[index], end=self.marks[index + 1], x=x, y=y,
+                               width=width, height=height))
+        if step.aspect:
+            self._reframe(step.aspect, step.scenes)
+        look = step.look or Look()
+        fill = (*look.colour, 230) if step.look else None
+        if look.intro or look.outro:
+            self._bookends(look)
+        for index, scene in enumerate(step.scenes):
+            begin, end = self.marks[index], self.marks[index + 1]
+            if abs(scene.speed - 1) > 1e-3:
+                badge = Step(op="text", text=speed_words(scene.speed), position="top-right", style="badge",
+                             fill=fill)
+                self.video = self.lay(self.video, text_overlay(badge, self.width, self.height), start=begin, end=end)
+            if scene.card:
+                card = Step(op="text", text=scene.card, style="title", position="center", fill=fill)
+                self.video = self.lay(self.video, text_overlay(card, self.width, self.height),
+                                      start=begin, end=min(end, begin + CARD_SECONDS))
+            if scene.line and step.style == "caption":
+                caption = (Step(op="text", text=scene.line, style="title", position="center", plain=True)
+                           if look.captions == "title" else
+                           Step(op="text", text=scene.line, style="caption", position="bottom",
+                                plain=look.captions == "bold"))
+                self.video = self.lay(self.video, text_overlay(caption, self.width, self.height),
+                                      start=begin, end=end)
+            if scene.voice:
+                self.voice_cues.append((begin, scene.voice))
+        for text, start in ((look.intro, 0.0), (look.outro, self.duration - BOOKEND_SECONDS)):
+            if text:
+                title = Step(op="text", text=text, style="title", position="center", plain=True)
+                self.video = self.lay(self.video, text_overlay(title, self.width, self.height), start=start,
+                                      end=start + BOOKEND_SECONDS)
+        if look.logo:
+            self.video = self.lay(self.video, logo_overlay(look.logo, look.logo_corner, self.width, self.height))
+
+    def _bookends(self, look: Look) -> None:
+        """The intro and outro: cards of the brand's colour before the first scene and after the last."""
+        colour = "0x{:02x}{:02x}{:02x}".format(*look.colour)
+        seconds = _seconds_text(BOOKEND_SECONDS)
+
+        def card() -> tuple[str, str | None]:
+            video = self.label("v")
+            self.add(f"color=c={colour}:s={self.width}x{self.height}:r={_seconds_text(self.fps)}:d={seconds},"
+                     f"setsar=1,format=yuv420p{video}")
+            if not self.audio:
+                return video, None
+            sound = self.label("a")
+            self.add(f"anullsrc=channel_layout=stereo:sample_rate=48000,atrim=duration={seconds}{sound}")
+            return video, sound
+
+        pieces = ([card()] if look.intro else []) + [(self.video, self.audio)] + ([card()] if look.outro else [])
+        self._join([video for video, _ in pieces], [sound for _, sound in pieces if sound])
+        shift = BOOKEND_SECONDS if look.intro else 0.0
+        self.marks = [round(mark + shift, 3) for mark in self.marks]
+        self.duration += BOOKEND_SECONDS * (bool(look.intro) + bool(look.outro))
+
+    def _reframe(self, aspect: str, scenes: list[SceneCut]) -> None:
+        """Each scene cropped to the shape around its focus: the middle of its zoom, else the middle of the
+        picture. A shape the video already has changes nothing."""
+        if aspect not in ASPECTS:
+            raise EditError(f"A video's shape is 16:9, 1:1 or 9:16, not {aspect}.")
+        target, w, h = ASPECTS[aspect], self.width, self.height
+        if abs(w / h - target) < 0.01:
+            return
+        cw, ch = (_even(h * target), h) if w / h > target else (w, _even(w / target))
+        cuts = [(self.marks[index], self.marks[index + 1]) for index in range(len(scenes))]
+        videos, _ = self._pieces(cuts, audio=False)
+        for index, scene in enumerate(scenes):
+            fx, fy = ((scene.zoom[0] + scene.zoom[2] / 2, scene.zoom[1] + scene.zoom[3] / 2) if scene.zoom
+                      else (0.5, 0.5))
+            left = int(min(max(0.0, fx * w - cw / 2), w - cw))
+            top = int(min(max(0.0, fy * h - ch / 2), h - ch))
+            out = self.label("v")
+            self.add(f"{videos[index]}crop={cw}:{ch}:{left}:{top},setsar=1{out}")
+            videos[index] = out
+        self._join(videos, [])
+        self.width, self.height = cw, ch
+
     def _amix(self, labels: list[str]) -> str:
         if len(labels) == 1:
             return labels[0]
@@ -702,6 +884,7 @@ class _Builder:
         """Voice lines at their times, music under them (ducked while a voice speaks) and the video's own sound,
         mixed and brought to one loudness: the narrated video's sound in one pass."""
         sounds = [step for step in steps if step.op == "sound"]
+        sounds += [Step(op="sound", source=voice, role="voice", start=moment) for moment, voice in self.voice_cues]
         if not sounds:
             return
         total = _seconds_text(self.duration)
@@ -803,7 +986,16 @@ def build_plan(
     args += ["-progress", "pipe:1", "-nostats", file_argument(output)]
     return Plan(args=args, graph=";\n".join(builder.lines), overlays=builder.overlays,
                 duration=builder.duration, width=builder.width, height=builder.height,
-                has_audio=bool(builder.audio), summary=describe(steps, len(inputs)), outputs=[output])
+                has_audio=bool(builder.audio), summary=describe(steps, len(inputs)), outputs=[output],
+                marks=builder.marks)
+
+
+def gif_arguments(source: str, output: str, *, width: int = 480, fps: int = 12) -> list[str]:
+    """One ffmpeg run that makes a looping GIF of a finished video, with its own palette (clear colours)."""
+    graph = (f"[0:v]fps={fps},scale={width}:-2:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];"
+             "[b][p]paletteuse=dither=bayer:bayer_scale=4")
+    return ["-hide_banner", "-nostdin", "-y", *input_arguments(source), "-filter_complex", graph, "-loop", "0",
+            "-progress", "pipe:1", "-nostats", file_argument(output)]
 
 
 def graph_option_for(version: str) -> str:

@@ -181,6 +181,9 @@ def _purge_thread_files(thread_id: str) -> int:
     from row_bot.video_edits import delete_conversation as delete_video_edits
 
     removed += delete_video_edits(thread_id)  # Its video edits' records (the results are its media).
+    from row_bot.video_projects import delete_conversation as delete_video_projects
+
+    removed += delete_video_projects(thread_id)  # Its video projects (their videos are its media).
     from row_bot.developer.sandbox_prepare import delete_conversation as delete_sandbox_jobs
 
     removed += delete_sandbox_jobs(thread_id)  # Its Prepare sandbox records (the packages stay in the sandbox).

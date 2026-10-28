@@ -147,6 +147,8 @@ Ask Row-Bot to record what it does in its browser and it asks first, then record
 - **While it records**, the conversation shows **Recording · 0:42** with **Stop**, and Buddy shows **Recording the browser** (or **the screen**).
 - **It stops** when Row-Bot or you stop it, at its time limit (5 minutes unless asked otherwise; at most an hour), before the video gets too large for the chat (200 MB), when its conversation is deleted, and when Row-Bot quits. Stopping needs no approval.
 - **The video** (MP4) then shows in the conversation with a player, and in the conversation's files.
+- **Made to be watched**: browser recordings run at 30 frames a second. While one records, Row-Bot's clicks, typing and scrolling go at a viewer's pace, and a drawn pointer glides to each control and rings where it clicks.
+- **Beats**: as it works, Row-Bot marks moments as **live** (worth watching as it happens), **work** (a wait or busy stretch) or **cut** (leave it out). Ask for a video of the recording and Row-Bot makes one from its beats: live stretches as they happened, work sped up 4× with its badge, cuts left out. Edit it in the Video panel like any other.
 - **Hidden in browser recordings**: pages with a password, one-time code or card field, and anything shown while you've taken over the browser, record as a blank frame.
 - Recording needs Row-Bot's video support, which comes with the full install; Row-Bot says so if it's missing.
 
@@ -159,6 +161,20 @@ Row-Bot can edit videos you already have: its recordings, files in the conversat
 - **Long edits** carry on in the background, so the reply isn't held up; they also show in **Home › Monitor › Background processes**. Stopping one needs no approval and saves nothing.
 - **Into the workspace**: ask Row-Bot to save a finished edit there. Replacing a file that's already there asks first; in a code folder, files are never replaced and each new one is recorded as a change you can undo.
 - Edits stop when their conversation is deleted and when Row-Bot quits. A result larger than a conversation can hold (200 MB) isn't saved; Row-Bot says how to make it smaller.
+
+### The Video Panel
+
+For a video with several parts, such as a demo, a tutorial or a reel, Row-Bot makes a **video project**: the video as scenes. Each scene is a piece of a recording, a clip or a video in the workspace, with its speed, a zoom on part of the picture, a title card over its first seconds, and its line: the words said over it, in your voice from **Settings › Voice**. Music can play under the whole video and dips while a line is said. The video is saved to the chat's files, and Row-Bot reads its checks before it says it's done.
+
+- **In the chat**, the step leaves a card with the video's name, its version and whether it's made. **Open** shows it in the **Video** panel beside the chat (full screen on a phone).
+- **The player** plays the version shown, with frame steps, **Loop** and **Download**. Tap a scene's picture to play from there. While you edit, it previews your edits at once instead: each scene's own video from its start to its end at its speed, zoomed in, with its card, its caption and its voice. A line you changed is said once the video is made.
+- **Scenes**: change a line and it's said again when the video is made; set a scene's speed (2× and faster shows a badge) or its card; move scenes up or down, remove one, or trim it under **Trim**. **Captions** shows each line under its scene. Nothing changes until **Save and make**, which makes the video again.
+- **Timeline** (on a computer, one click from **Scenes**): the scenes as blocks on tracks for the video, the lines, the title cards and the music, sized by their length. Drag a block's edges to trim it, drag a block to move it, click one to play from it, and zoom with the slider. Keys: Space plays, J and L step back and on, K pauses, I and O set the selected scene's start and end at the playhead, S splits it there, Delete removes it and Ctrl+Z undoes.
+- **Versions**: every change, yours or Row-Bot's, is a new version with a note of what changed, and the panel marks the scenes it changed. Go back to the version before in one tap, or pick an older one and choose **Use this version**. Going back is a new version too, so nothing is lost.
+- **Review**: once a version is made, its checks show (sound, black and still stretches). **Save to workspace** and **Post to X** ask Row-Bot in the chat, so posting shows its card first, with its own approval.
+- **Brand kit**: one look for every video, under **Brand kit** in the panel: a colour for title cards and speed badges, how captions show (in a box, bold and outlined, or large and centred), a logo from your pictures in Library › Media in a corner, an intro and an outro card on the colour, and the music mood Row-Bot picks. Changes apply the next time a video is made; turn **Brand** off for one version to make it plain.
+- **Other shapes**: under the review, make the same version **Wide 16:9** (X, YouTube), **Tall 9:16** (Shorts, Reels) or **Square 1:1**, each scene reframed around its zoom, or a **GIF**. Each says where it fits and warns when the video is longer than that place allows. Download each once it's made. Ask Row-Bot for a shape and it does the same.
+- Making a video needs ffmpeg: Row-Bot asks to download it the first time it makes one.
 
 ### Voice, Music And Transcripts
 

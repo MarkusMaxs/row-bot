@@ -24,7 +24,7 @@ Row-Bot uses semantic versioning:
   completed run.
 - **Nightly** (`nightly.yml`): the whole deterministic suite with the slow tests
   on Linux, Windows and macOS, the browser nightly set at desktop and phone
-  width, a Linux package build and install smoke, and the docs reference check.
+  width, and a Linux package build and install smoke.
   Weekly (or `weekly: true` on a manual run): Installer Verify on Windows and
   macOS and the browser smoke on Firefox and WebKit.
 - **Release** (`release.yml`): the `release-gate` job checks the lock files,
@@ -67,10 +67,17 @@ Node 24.15.0, `npm ci --ignore-scripts`), and the build scripts stage it into
    and macOS build scripts, the generated docs reference pages and the release
    gate read `src/row_bot/version.py`, so they need no edit.
 
-   Then sweep the human-facing text: `RELEASE_NOTES.md`, `README.md`, the
-   version sentence on `docs-site/docs/index.mdx`, and regenerate the docs
-   reference pages. Leave historical release notes alone. The landing page's
-   download links move only after the release is published (step 10 of Build
+   It also publishes the docs site (`scripts/docs/publish.py`): it regenerates
+   the reference pages from the code, builds the site with its search index and
+   syncs it into `docs/`, never touching the landing page. Pull requests between
+   releases change only the docs' sources (`docs-site/docs`), so the published
+   site describes the release people can install. `--no-docs` skips it; then
+   run `python scripts/docs/publish.py` before opening the release-prep PR.
+
+   Then sweep the human-facing text: `RELEASE_NOTES.md`, `README.md` and the
+   version sentence on `docs-site/docs/index.mdx` (publish again if you change
+   docs pages). Leave historical release notes alone. The landing page's
+   download links move only after the release is published (step 7 of Build
    and publish).
 4. Run the checks locally:
 
@@ -317,8 +324,14 @@ GitHub Actions.
      public.
 7. Move the landing page to the new release, now that its assets exist: the
    download links in `docs/site.js`, the version and `softwareVersion` in
-   `docs/index.html`, and `tests/docs/test_landing_page.py`, then publish the
-   docs site.
+   `docs/index.html`, and `tests/docs/test_landing_page.py`. The landing page
+   changes only by hand, in its own pull request with the `landing` label: the
+   Docs workflow refuses any other pull request that touches it, so the live
+   site at row-bot.ai never moves before its downloads exist.
+
+To publish a docs fix between releases, run `python scripts/docs/publish.py`
+and open a pull request with the result; the Docs workflow checks that the
+committed site is exactly a fresh build.
 8. Test the packaged updater from the previous version on each platform: a
    5.2 install prepares the update in the background and offers "Restart to
    update"; a 5.1 install downloads and runs the full installer (Windows and
