@@ -77,14 +77,27 @@ def test_a_sandbox_gets_none_of_this_row_bots_keys_settings_or_folders(home):
 
 def test_inside_a_sandbox_the_real_data_folder_is_private_and_the_workspace_is_its_own(home, monkeypatch):
     from row_bot.data_paths import default_workspace_root, is_private_data_path
+    from row_bot.tools.shell_tool import names_private_data
 
-    real = home / "real-profile"
+    real = home / "data"
     (real / "memory").mkdir(parents=True)
-    assert not is_private_data_path(real / "memory")
-    monkeypatch.setenv(sandboxes.SANDBOX_OF_ENV, str(real))
-    monkeypatch.setenv("ROW_BOT_WORKSPACE", str(home / "box" / "workspace"))
+    assert not is_private_data_path(home / "elsewhere")
+    sandbox = sandboxes.create("Demo shop", "shop")
+    env = sandboxes.environment(sandbox, 51234, "x" * 43, base={})
+    for name in ("ROW_BOT_DATA_DIR", "ROW_BOT_WORKSPACE", sandboxes.SANDBOX_OF_ENV):
+        monkeypatch.setenv(name, env[name])
+    workspace = Path(env["ROW_BOT_WORKSPACE"])
+    other = real / "sandboxes" / "box-other" / "workspace"
+
+    assert default_workspace_root() == workspace
     assert is_private_data_path(real / "memory"), "its file tools never read or change the real profile"
-    assert default_workspace_root() == home / "box" / "workspace"
+    assert not is_private_data_path(workspace / "docs" / "orders-october.csv"), "its own made-up files are its own"
+    assert is_private_data_path(Path(env["ROW_BOT_DATA_DIR"]) / "threads.db")
+    assert is_private_data_path(other / "notes.md"), "another sandbox's files are not"
+    assert not names_private_data(f'python -c "print(1)" "{workspace / "docs" / "orders-october.csv"}"')
+    assert names_private_data(f'type "{real / "memory" / "graph.db"}"')
+    assert names_private_data(f'type "{workspace}/../../box-other/workspace/notes.md"'), "no climbing out"
+    assert names_private_data(f'type "{other / "notes.md"}"')
 
 
 def test_a_sandbox_starts_from_its_pack_runs_stops_resets_and_goes(fake_process, home):

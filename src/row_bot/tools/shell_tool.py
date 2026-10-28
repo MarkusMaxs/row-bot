@@ -37,7 +37,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 from row_bot.approval_policy import normalize_approval_mode
 from row_bot.brand import APP_DATA_DIR_ENV, DEFAULT_DATA_DIR_NAME
-from row_bot.data_paths import get_row_bot_data_dir, private_data_dirs, shared_data_folder
+from row_bot.data_paths import get_row_bot_data_dir, private_data_dirs, sandbox_workspace, shared_data_folder
 from row_bot.process_cancellation import run_cancellable_subprocess
 from row_bot.secret_store import SERVER_SECRETS_DIR_ENV
 from row_bot.tools.base import BaseTool
@@ -302,14 +302,20 @@ def names_private_data(command: str) -> bool:
     home = _slashes(str(Path.home()))
     text = _HOME_REFERENCES.sub(lambda _match: home, text)
     data_dir = _slashes(str(get_row_bot_data_dir(create=False).expanduser().resolve()))
+    workspace = sandbox_workspace()
+    own = _slashes(str(workspace)) if workspace is not None else ""
     for folder in (_slashes(str(folder.expanduser().resolve())) for folder in private_data_dirs()):
         start = text.find(folder)
         while start != -1:
             rest = text[start + len(folder):]
             inside = re.split(r"[\s\"'*;|&<>]", rest[1:], maxsplit=1)[0] if rest.startswith("/") else ""
+            # A sandbox's own workspace, inside the folder it was started from, is its to use.
+            in_own = (own.startswith(folder + "/") and text.startswith(own, start)
+                      and re.match(r"(/|[\s\"';|&<>]|$)", text[start + len(own):]) is not None
+                      and ".." not in inside.split("/"))
             # The folder itself, or anything in it but its shared parts (the secrets folder has none);
             # ".." could climb out of a shared part.
-            if folder != data_dir or not shared_data_folder(inside) or ".." in inside.split("/"):
+            if not in_own and (folder != data_dir or not shared_data_folder(inside) or ".." in inside.split("/")):
                 return True
             start = text.find(folder, start + 1)
     return _DATA_DIR_SEGMENT.search(text) is not None
