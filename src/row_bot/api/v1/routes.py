@@ -10931,7 +10931,7 @@ def create_router(
                 if notices_epoch is not None
                 else None
             )
-            heartbeat = started = security.clock()
+            heartbeat = started = checked = security.clock()
             # How it ended, for the log (#568): a dropped window left no trace before.
             ended = "the window went away, or Row-Bot is stopping"
             logger.debug("Event stream opened (session %s)", current.id[:8])
@@ -10940,9 +10940,25 @@ def create_router(
                 # connection need not wait for the periodic heartbeat.
                 yield ": connected\n\n"
                 while sub.streaming and not await request.is_disconnected():
-                    await _context(request)
-                    security.session(await _context(request), current.id, current.csrf)
                     result = await replay(sub, position)
+                    notices = (
+                        app_notices.since(notice_position)
+                        if notice_position is not None
+                        else []
+                    )
+                    # Access is checked before anything is sent, and every half second while nothing
+                    # is: a revoked session's stream still ends well within a second, and an open page
+                    # no longer reads the access store eight times a second (5.3.1).
+                    if (
+                        result["snapshot_required"]
+                        or result["events"]
+                        or notices
+                        or security.clock() - checked >= 0.5
+                    ):
+                        security.session(
+                            await _context(request), current.id, current.csrf
+                        )
+                        checked = security.clock()
                     if result["snapshot_required"]:
                         await _context(request)
                         # A snapshot may exceed one event's limit. Transfer the new
@@ -10965,11 +10981,7 @@ def create_router(
                             )
                     # Background notices ride the same stream as their own
                     # frames; they never move the conversation cursor.
-                    for notice in (
-                        app_notices.since(notice_position)
-                        if notice_position is not None
-                        else ()
-                    ):
+                    for notice in notices:
                         frame = dto.NoticeFrame(
                             notices_epoch=app_notices.epoch, notice=notice.view()
                         )
