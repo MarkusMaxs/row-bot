@@ -3122,6 +3122,17 @@ def create_router(
         await call(service._metadata, conversation_id)
         return await respond(request, dto.ClientQueueView, asdict(result))
 
+    @router.get("/conversations/{conversation_id}/links")
+    async def conversation_links(conversation_id: str, request: Request) -> JSONResponse:
+        """The conversations this one started or proposed, with their state (5.3.1 C)."""
+        await session(request)
+        await call(service._metadata, conversation_id)
+        from row_bot.linked_conversations import links
+
+        cards = await call(links, conversation_id)
+        items = [{key: value for key, value in card.items() if key != "kind"} for card in cards]
+        return await respond(request, dto.ConversationLinkPage, {"schema_version": 1, "items": items})
+
     @router.get("/conversations/{conversation_id}/steering")
     async def steering_view(
         conversation_id: str,

@@ -12,6 +12,9 @@ ask_person: 1104
 calculate: 1020
 check_process: 638
 clone_repository: 608
+conversation_links: 205
+conversation_send: 524
+conversation_start: 894
 create_chart: 1950
 create_code_folder: 639
 create_design: 931
@@ -106,4 +109,4 @@ workspace_read_file: 867
 workspace_write_file: 556
 youtube_search: 660
 youtube_transcript: 725
-TOTAL (108 tools): 75041
+TOTAL (111 tools): 76664

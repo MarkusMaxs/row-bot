@@ -8,7 +8,7 @@ import GeneratedNotice from '@site/src/components/GeneratedNotice';
 # Tools
 
 <!-- generated-from: scripts/docs/collect_inventory.py -->
-<!-- inventory-hash: 9d2f0a8fe959dc1b -->
+<!-- inventory-hash: 9fffe2fb8b74828e -->
 
 <GeneratedNotice source="scripts/docs/collect_inventory.py" />
 
@@ -34,6 +34,7 @@ import GeneratedNotice from '@site/src/components/GeneratedNotice';
 | gmail | Gmail | Gmail tool - search, read, draft, and send emails via the Gmail API | Approval-gated: send_gmail_message |  | `src/row_bot/tools/gmail_tool.py` |
 | goal | goal_guide | Guidance for durable /goal progress tracking. | Operation-dependent approval | `tool_guides/goal_guide/SKILL.md` | `src/row_bot/tools/goal_tool.py` |
 | image_gen | Image Gen | Image generation tool - generate and edit images via OpenAI / Google | No tool-wide destructive classification |  | `src/row_bot/tools/image_gen_tool.py` |
+| linked_conversations | Linked Conversations | Linked conversations (5.3.1 C): start or propose a conversation, message another, list them. | Operation-dependent approval |  | `src/row_bot/tools/linked_conversations_tool.py` |
 | mcp | mcp_guide | Guidance for using external MCP tools safely. | Approval-gated: MCP destructive tool lookup failed: %s | `tool_guides/mcp_guide/SKILL.md` | `src/row_bot/tools/mcp_tool.py` |
 | media | Media | Library Media for the agent (5.3.1 B3): ``media_find``, ``media_tag`` and ``media_bring`` | No tool-wide destructive classification |  | `src/row_bot/tools/media_tool.py` |
 | memory | Memory | Memory tool - save, search, list, update, delete, link, and explore memories | Approval-gated: delete_memory |  | `src/row_bot/tools/memory_tool.py` |

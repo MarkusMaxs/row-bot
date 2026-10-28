@@ -624,7 +624,13 @@ export default function Navigation({
           <Button
             variant="ghost"
             className="nav-conversation-link"
-            aria-label={conversation.incognito ? `${title} (incognito)` : title}
+            aria-label={
+              conversation.incognito
+                ? `${title} (incognito)`
+                : conversation.started_from
+                  ? `${title} (started by another conversation)`
+                  : title
+            }
             aria-current={
               location.pathname === `/conversations/${conversation.id}`
                 ? 'page'

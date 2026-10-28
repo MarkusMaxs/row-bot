@@ -19,7 +19,8 @@ from typing import Any
 _PUBLIC_REFERENCE = re.compile(r"^[A-Za-z0-9:_-]{1,256}$")
 # Inputs the server started, shown as a short note instead of the person's
 # bubble: a follow-up step, a delegated agent's task and its parent's messages.
-PUBLIC_NOTES = frozenset({"continuation", "agent_task", "agent_guidance", "page"})
+# "linked": a message from another conversation (5.3.1 C).
+PUBLIC_NOTES = frozenset({"continuation", "agent_task", "agent_guidance", "page", "linked"})
 
 
 @dataclass(frozen=True)
@@ -350,6 +351,7 @@ class BlobReader:
         media: list[dict[str, Any]] = []
         media_error = ""
         note = ""
+        linked_from: dict[str, str] | None = None
         approval_id = ""
         chart_position, chart_label = None, ""
         if name == "ToolMessage" and "artifact" in fields:
@@ -383,7 +385,13 @@ class BlobReader:
                 if "platform_attachments" in metadata:
                     attachments = self.safe_attachments(metadata["platform_attachments"])
                 if "row_bot_ui" in metadata:
-                    ui = self.fields(metadata["row_bot_ui"], {"learning_fallback"})
+                    ui = self.fields(metadata["row_bot_ui"], {"learning_fallback", "linked_from"})
+                    if "linked_from" in ui and note == "linked":
+                        origin = self.fields(ui["linked_from"], {"id", "title", "kind"})
+                        found = {key: self.text(origin[key], 160) for key in ("id", "title", "kind") if key in origin}
+                        if re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", found.get("id", "")) and found.get("title"):
+                            linked_from = {"id": found["id"], "title": found["title"],
+                                           "kind": "reply" if found.get("kind") == "reply" else "message"}
                     if "learning_fallback" in ui:
                         # Learning (preview): the main model finished a stuck personal model's turn. The
                         # row is the note's public sentence; the handover's own text (written for the
@@ -415,6 +423,7 @@ class BlobReader:
                 "tool_calls_position": None if note else fields.get("tool_calls"), "tool_ids_lazy": tool_ids_lazy,
                 "tool_call_id": self.text(fields["tool_call_id"]) if "tool_call_id" in fields else "",
                 "attachments": attachments, "media": media, "media_error": media_error, "note": note,
+                "linked_from": linked_from,
                 "approval_id": approval_id, "chart_position": chart_position, "chart_label": chart_label,
                 "cut_short": cut_short, "answered_by": answered_by}
 
@@ -611,6 +620,8 @@ class BlobReader:
             row["media_error"] = record["media_error"]
         if record.get("note"):
             row["note"] = record["note"]
+        if record.get("linked_from"):
+            row["linked_from"] = record["linked_from"]
         if record.get("approval_id"):
             row["approval_id"] = record["approval_id"]
         if record.get("cut_short"):

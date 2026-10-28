@@ -2158,6 +2158,95 @@
       "title": "ConversationIncognitoCommand",
       "type": "object"
     },
+    "ConversationLinkDismissCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "client_session_id": {
+          "format": "uuid",
+          "title": "Client Session Id",
+          "type": "string"
+        },
+        "command_id": {
+          "format": "uuid",
+          "title": "Command Id",
+          "type": "string"
+        },
+        "expected_revision": {
+          "pattern": "^(0|[1-9][0-9]{0,19})$",
+          "title": "Expected Revision",
+          "type": "string"
+        },
+        "payload": {
+          "$ref": "#/$defs/ConversationLinkPayload"
+        },
+        "type": {
+          "const": "conversation.link.dismiss",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command_id",
+        "client_session_id",
+        "expected_revision",
+        "type",
+        "payload"
+      ],
+      "title": "ConversationLinkDismissCommand",
+      "type": "object"
+    },
+    "ConversationLinkPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "link_id": {
+          "pattern": "^[0-9a-f]{32}$",
+          "title": "Link Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "link_id"
+      ],
+      "title": "ConversationLinkPayload",
+      "type": "object"
+    },
+    "ConversationLinkStartCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "client_session_id": {
+          "format": "uuid",
+          "title": "Client Session Id",
+          "type": "string"
+        },
+        "command_id": {
+          "format": "uuid",
+          "title": "Command Id",
+          "type": "string"
+        },
+        "expected_revision": {
+          "pattern": "^(0|[1-9][0-9]{0,19})$",
+          "title": "Expected Revision",
+          "type": "string"
+        },
+        "payload": {
+          "$ref": "#/$defs/ConversationLinkPayload"
+        },
+        "type": {
+          "const": "conversation.link.start",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command_id",
+        "client_session_id",
+        "expected_revision",
+        "type",
+        "payload"
+      ],
+      "title": "ConversationLinkStartCommand",
+      "type": "object"
+    },
     "ConversationPinCommand": {
       "additionalProperties": false,
       "properties": {
@@ -10779,6 +10868,8 @@
       "conversation.create": "#/$defs/ConversationCreateCommand",
       "conversation.delete": "#/$defs/ConversationDeleteCommand",
       "conversation.incognito": "#/$defs/ConversationIncognitoCommand",
+      "conversation.link.dismiss": "#/$defs/ConversationLinkDismissCommand",
+      "conversation.link.start": "#/$defs/ConversationLinkStartCommand",
       "conversation.pin": "#/$defs/ConversationPinCommand",
       "conversation.queue.dispatch": "#/$defs/ConversationQueueDispatchCommand",
       "conversation.queue.edit": "#/$defs/ConversationQueueEditCommand",
@@ -10988,6 +11079,12 @@
     },
     {
       "$ref": "#/$defs/AgentDismissCommand"
+    },
+    {
+      "$ref": "#/$defs/ConversationLinkStartCommand"
+    },
+    {
+      "$ref": "#/$defs/ConversationLinkDismissCommand"
     },
     {
       "$ref": "#/$defs/MediaSaveCommand"

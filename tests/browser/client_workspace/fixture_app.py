@@ -2653,6 +2653,45 @@ def stream(text: str, enabled_tools: list[str], config: dict, *, stop_event=None
         finally:
             call["quiesced"] = True
         return
+    if "<message from=" in text and "Script, record and cut" in text:
+        # The conversation the linked-conversation fixture started answers its first message and ends.
+        call = predecessor._record("submit", config, "linked-started")
+        try:
+            yield from _natural_final(call, call["conversation_id"], "On it: scripting the demo now.",
+                                      "linked-started")
+        finally:
+            call["quiesced"] = True
+        return
+    if "linked conversation fixture" in text and "<message from=" not in text:
+        # 5.3.1 C: the turn proposes a conversation of its own; its card offers Start and Not now.
+        import json as _json
+        from row_bot import linked_conversations
+        from row_bot.threads import append_checkpoint_messages
+        call = predecessor._record("submit", config, "linked-conversation")
+        thread = call["conversation_id"]
+        identity = f"linked:{call['generation_id']}"
+        record = linked_conversations._insert(
+            source_id=thread, kind="proposal", status="proposed", title="Make the 5.3 demo video",
+            message="Script, record and cut a 60 second demo of the browser pane.", approval_mode="approve")
+        args = {"title": record["title"], "message": record["message"], "propose": True}
+        result = _json.dumps({"ok": True, "kind": "linked_conversation", "link_id": record["id"],
+                              "title": record["title"], "conversation_id": None, "state": "proposed",
+                              "proposed": True, "display_summary": "Proposed: " + record["title"]})
+        tool_id, result_id = fixture_id(identity + ":tool"), fixture_id(identity + ":result")
+        try:
+            append_checkpoint_messages(thread, [AIMessage(id=fixture_id(identity + ":call"), content="",
+                tool_calls=[{"id": tool_id, "name": "conversation_start", "args": args}])])
+            yield "tool_call", {"tool_call_id": tool_id, "message_id": result_id, "name": "conversation_start",
+                                "args": args}
+            append_checkpoint_messages(thread, [ToolMessage(id=result_id, tool_call_id=tool_id,
+                                                            name="conversation_start", content=result)])
+            yield "tool_done", {"tool_call_id": tool_id, "message_id": result_id, "name": "conversation_start",
+                                "args": args, "content": result}
+            yield from _natural_final(call, thread, "The demo video deserves its own chat: I've proposed one. "
+                                      "Start it when you're ready.", "linked")
+        finally:
+            call["quiesced"] = True
+        return
     if "outside files fixture" in text:
         # 5.3.1 B1/B2: a change outside the workspace asks, and may be allowed for the rest of the chat.
         from row_bot.threads import append_checkpoint_messages
