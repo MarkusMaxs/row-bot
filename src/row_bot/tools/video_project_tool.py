@@ -37,6 +37,8 @@ class _VideoInput(BaseModel):
     action: Literal["create", "change", "make", "status", "undo", "export"] = "status"
     project: str = Field(default="", description="change, make, status, undo: the project (vid-…).")
     title: str = Field(default="", description="create: the video's name.")
+    recording: str = Field(default="", description="create: make the scenes from a browser recording's beats "
+                                                   "(rec-…): live as it is, work sped up, cut left out.")
     scenes: list[_Scene] | None = Field(default=None, description="create, change: every scene, in order.")
     music: str | None = Field(default=None, description="A music file (make_music) under the whole video; '' none.")
     music_volume: float | None = Field(default=None, description="0-1, default 0.3 (it dips under the voice).")
@@ -113,6 +115,7 @@ def _export(project, shape: str, number: int | None) -> str:
 
 
 def _video(action: str = "status", project: str = "", title: str = "", scenes: list | None = None,
+           recording: str = "",
            music: str | None = None, music_volume: float | None = None, captions: bool | None = None,
            voice_lines: bool | None = None, note: str = "", version: int | None = None, aspect: str | None = None,
            shape: str | None = None, brand: bool | None = None) -> str:
@@ -125,6 +128,8 @@ def _video(action: str = "status", project: str = "", title: str = "", scenes: l
     raw = [item.model_dump() if hasattr(item, "model_dump") else dict(item) for item in scenes or []]
     try:
         if action == "create":
+            if recording and not raw:
+                raw = video_projects.scenes_from_beats(recording.strip(), conversation)
             found = video_projects.create(conversation, title, raw, music=music or "",
                                           music_volume=0.3 if music_volume is None else music_volume,
                                           captions=bool(captions), voice_lines=voice_lines is not False,
