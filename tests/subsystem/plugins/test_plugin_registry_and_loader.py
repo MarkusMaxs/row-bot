@@ -532,7 +532,7 @@ def test_loader_reports_broken_plugin_without_crashing(
         ("plugin_main.py", "from os import system\nsystem('echo bad')\n", "os.system"),
         ("plugin_main.py", "import subprocess\n", "subprocess"),
         ("plugin_main.py", "value = eval('1 + 1')\n", "eval"),
-        ("plugin_main.py", "from agent import get_agent_graph\n", "agent"),
+        ("plugin_main.py", "from app import main\n", "app"),
         ("plugin_main.py", "from row_bot.agent import get_agent_graph\n", "row_bot.agent"),
         ("plugin_main.py", "from row_bot.channels.base import Channel\n", "row_bot.channels.base"),
         ("plugin_main.py", "from nicegui import ui\n", "nicegui"),
@@ -555,6 +555,50 @@ def test_loader_security_scan_rejects_dangerous_code(
 
     assert error is not None
     assert expected in error
+
+
+@pytest.mark.parametrize(
+    ("source", "allowed"),
+    [
+        ("import subprocess\nsubprocess.run(['ffmpeg', '-version'])\n", True),
+        ("from subprocess import run\nrun(['git', 'status'])\n", True),
+        ("import os\nos.system('echo ok')\n", True),
+        ("from os import system\nsystem('echo ok')\n", True),
+        ("value = eval('1 + 1')\n", False),
+        ("from row_bot.agent import get_agent_graph\n", False),
+    ],
+)
+def test_a_plugin_that_declares_running_programs_may_run_them(
+    plugin_modules: dict[str, Any],
+    tmp_path: Path,
+    source: str,
+    allowed: bool,
+) -> None:
+    """5.3.1 A5: shell_processes in the manifest, shown when the plugin is added, lets it run programs;
+    eval, exec and Row-Bot's internals stay refused, and an undeclared plugin is still refused."""
+    loader = plugin_modules["loader"]
+    plugin_dir = tmp_path / "runner-plugin"
+    plugin_dir.mkdir()
+    (plugin_dir / "plugin_main.py").write_text(source, encoding="utf-8")
+
+    assert (loader._security_scan(plugin_dir, runs_programs=True) is None) is allowed
+    assert loader._security_scan(plugin_dir) is not None
+
+
+@pytest.mark.parametrize("module", ["models", "tools", "ui", "memory", "prompts"])
+def test_a_plugins_own_modules_may_have_generic_names(
+    plugin_modules: dict[str, Any],
+    tmp_path: Path,
+    module: str,
+) -> None:
+    """5.3.1 A5: Row-Bot's internals live under row_bot, so a plugin's own models.py is its own."""
+    loader = plugin_modules["loader"]
+    plugin_dir = tmp_path / "tidy-plugin"
+    plugin_dir.mkdir()
+    (plugin_dir / f"{module}.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (plugin_dir / "plugin_main.py").write_text(f"from {module} import VALUE\n", encoding="utf-8")
+
+    assert loader._security_scan(plugin_dir) is None
 
 
 def test_loader_security_scan_allows_plugin_api_import(

@@ -114,10 +114,6 @@
   },
   "additionalProperties": false,
   "properties": {
-    "advanced": {
-      "title": "Advanced",
-      "type": "boolean"
-    },
     "agent_profile_id": {
       "maxLength": 128,
       "title": "Agent Profile Id",
@@ -167,7 +163,6 @@
     "id",
     "revision",
     "fields",
-    "advanced",
     "agent_profile_id",
     "approval_mode",
     "conversation_id",

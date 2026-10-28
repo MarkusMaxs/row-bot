@@ -15,6 +15,7 @@ import {
   reloadDocument,
   releaseProducer,
 } from './unified-helpers';
+import { SIGNED_IN_STATE } from './signed-in';
 
 function summarizeFixtureFailure(error: unknown) {
   return {
@@ -339,6 +340,7 @@ test('navigation and a second observer retain one server generation', async ({
   const call = (await fixtureState(page)).calls.at(-1)!;
   const origin = new URL(page.url()).origin;
   const observerContext = await browser.newContext({
+    storageState: SIGNED_IN_STATE,
     baseURL: origin,
     viewport: page.viewportSize(),
     serviceWorkers: 'block',

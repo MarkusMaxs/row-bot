@@ -124,10 +124,11 @@ def test_it_sees_only_the_persons_own_messages_never_tool_results_or_events():
 def test_it_reads_the_latest_few_messages_of_the_persons_conversation(tmp_path, monkeypatch):
     from row_bot import threads
 
-    conversation = [HumanMessage(content=f"message {index}") for index in range(8)]
+    # Enough to see a request made over several messages (5.3.1 A6): the latest twelve.
+    conversation = [HumanMessage(content=f"message {index}") for index in range(16)]
     monkeypatch.setattr(threads, "get_latest_checkpoint_messages", lambda _thread_id: conversation)
     request = approval_review.current_request({"thread_id": "chat-1", "runtime_surface": "normal_chat"})
-    assert request.messages == ("message 4", "message 5", "message 6", "message 7")
+    assert request.messages == tuple(f"message {index}" for index in range(4, 16))
     assert request.source == "normal_chat" and not request.shared
 
 
@@ -147,7 +148,7 @@ def test_a_workflow_run_is_judged_by_its_saved_instructions_not_its_filled_in_pr
     request = approval_review.current_request({"thread_id": "wf-thread", "background_workflow": True})
 
     assert request.source == "workflow"
-    assert request.messages == ("Workflow: Weekly notes", "Step: Tidy my notes, then {{prev_output}}")
+    assert request.messages == ("Workflow: Weekly notes", "Message: Tidy my notes, then {{prev_output}}")
     assert _INJECTED not in json.dumps(request.messages)
 
 

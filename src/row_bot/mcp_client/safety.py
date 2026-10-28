@@ -230,11 +230,6 @@ def _sensitive_change(name: str, description: str = "") -> bool:
     return _changes(name) and bool(_SENSITIVE_RE.search(name) or _REPOSITORY_RE.search(sanitize_name_component(description)))
 
 
-def tool_enabled_by_default(is_destructive: bool) -> bool:
-    """Default selection rule after a successful server test/discovery."""
-    return not is_destructive
-
-
 def asks_first(name: str, destructive: bool, effect: str, approvals, allowed) -> bool:
     """The invocation gate. High-impact and unknown tools always ask; a routine change asks
     unless the user allowed it to run without asking (Full access, or that one tool)."""

@@ -199,3 +199,66 @@ def test_progress_ffmpeg_version_options_and_clock_words():
     assert graph_option_for("7.1-essentials_build-www.gyan.dev") == "-/filter_complex"
     assert graph_option_for("6.1.1") == graph_option_for("N-112345-gabc") == "-filter_complex_script"
     assert [clock(value) for value in (0, 42, 1.5, 62.25, 3730)] == ["0:00", "0:42", "0:01.5", "1:02.2", "1:02:10"]
+
+
+def test_voice_lines_and_ducked_music_are_laid_on_the_finished_video_at_one_loudness():
+    """5.3.1 B: a narrated video's sound in one pass: voices at their times, music under them."""
+    steps = parse_steps([
+        {"op": "trim", "start": 1},
+        {"op": "sound", "source": "scene-1.wav", "start": 0.5},
+        {"op": "sound", "source": "scene-2.wav", "start": 3},
+        {"op": "sound", "source": "music-calm.wav", "role": "music"},
+        {"op": "sound", "role": "original", "volume": 0.2},
+    ])
+    plan = build_plan([InputVideo(path="input-1.mp4", info=HD)], steps, "output.mp4",
+                      sounds={"scene-1.wav": "sound-1.wav", "scene-2.wav": "sound-2.wav",
+                              "music-calm.wav": "C:/music/calm.wav"})
+
+    sound_inputs = [plan.args[i + 1] for i, a in enumerate(plan.args) if a == "-i" and "sound" in plan.args[i + 1]]
+    assert sound_inputs == ["file:sound-1.wav", "file:sound-2.wav"] and "file:C:/music/calm.wav" in plan.args
+    assert "wav" in plan.args[plan.args.index("file:sound-1.wav") - 2], "plain audio files open as audio"
+    assert "[1:a]" in plan.graph and "adelay=500|500" in plan.graph and "adelay=3000|3000" in plan.graph
+    assert "[3:a]" in plan.graph and "volume=0.300" in plan.graph and "afade=t=out" in plan.graph
+    assert "sidechaincompress" in plan.graph, "the music dips while a voice speaks"
+    assert "volume=0.200" in plan.graph, "the video's own sound, turned down"
+    assert plan.graph.count("loudnorm=I=-16") == 1 and "atrim=0:5" in plan.graph, "one loudness, the video's length"
+    assert plan.has_audio and describe(steps) == "Trimmed, added a voice, added music and set the sound level"
+
+
+def test_a_silent_video_gets_its_narration_and_sounds_are_checked():
+    plan = build_plan([InputVideo(path="input-1.mp4", info=SILENT)],
+                      parse_steps([{"op": "sound", "source": "line.wav"}]), "output.mp4",
+                      sounds={"line.wav": "sound-1.wav"})
+    assert plan.has_audio and "-an" not in plan.args and "sidechaincompress" not in plan.graph
+
+    with pytest.raises(EditError, match="isn't a sound file Row-Bot found"):
+        build_plan([InputVideo(path="input-1.mp4", info=SILENT)],
+                   parse_steps([{"op": "sound", "source": "missing.wav"}]), "output.mp4", sounds={})
+    with pytest.raises(EditError, match="after the video ends"):
+        build_plan([InputVideo(path="input-1.mp4", info=SILENT)],
+                   parse_steps([{"op": "sound", "source": "line.wav", "start": 9}]), "output.mp4",
+                   sounds={"line.wav": "sound-1.wav"})
+    for bad, words in (({"op": "sound"}, "needs its source"), ({"op": "sound", "source": "a.wav", "role": "song"},
+                       "role is voice, music or original"), ({"op": "sound", "source": "a.wav", "volume": 9},
+                       "volume is from 0")):
+        with pytest.raises(EditError, match=words):
+            parse_steps([bad])
+
+
+def test_checks_pass_a_video_with_sound_and_list_what_needs_attention():
+    from row_bot.video_editing import check_arguments, read_checks
+
+    args = check_arguments("output.mp4", has_audio=True)
+    assert "volumedetect" in args and any("blackdetect" in a and "freezedetect" in a for a in args)
+    assert "volumedetect" not in check_arguments("output.mp4", has_audio=False)
+
+    good = read_checks("[Parsed_volumedetect_0] mean_volume: -18.2 dB\n[Parsed_volumedetect_0] max_volume: -1.0 dB\n"
+                       "black_start:0 black_end:0.6 black_duration:0.6\n"
+                       "lavfi.freezedetect.freeze_start: 12.2\nlavfi.freezedetect.freeze_duration: 4.1\n", HD)
+    assert good.passed and good.lines[1] == "Sound: present (average -18.2 dB, peak -1.0 dB)."
+    assert good.lines[2] == "Black: none.", "a fade-in at the start isn't a problem"
+    assert good.lines[3].startswith("Still: 0:12.2 for 4 s")
+
+    quiet = read_checks("mean_volume: -48.0 dB\nmax_volume: -30.0 dB\nblack_start:2 black_end:4 black_duration:2\n", HD)
+    assert not quiet.passed and "too quiet" in quiet.lines[1] and quiet.lines[2] == "Black: 0:02–0:04."
+    assert read_checks("", SILENT).lines[1].startswith("Sound: none.")

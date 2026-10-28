@@ -18,8 +18,7 @@ def reviewed_settings(client, headers, fields):
     path = f"/api/v1/tasks/{saved['task_id']}"
     response = client.get(path + '/settings', headers=headers)
     assert response.status_code == 200, response.text
-    proposed = {**response.json()['fields'], 'trigger_type': 'webhook', 'persistent_enabled': True,
-                'concurrency_group': 'synthetic-group'}
+    proposed = {**response.json()['fields'], 'trigger_type': 'webhook', 'missed_runs': 'run_once'}
     reviewed = client.post(path + '/settings-review', json=proposed, headers=headers)
     assert reviewed.status_code == 200, reviewed.text
     value = reviewed.json()
@@ -43,7 +42,7 @@ def test_review_save_private_download_rotation_and_no_execution(task_api, fields
         assert send(client, headers, command).json() == saved.json()
         secret = tasks.get_task(task_id)['trigger']['secret']
         settings = client.get(path + '/settings', headers=headers).json()
-        assert settings['webhook_configured'] and settings['conversation_id'].startswith('pt_')
+        assert settings['webhook_configured'] and settings['conversation_id'] is None  # Made by its first run.
         assert secret not in str(settings) and secret not in saved.text
         downloaded = client.get(path + '/webhook-configuration', params={'revision': settings['revision']}, headers=headers)
         assert downloaded.status_code == 200, downloaded.text

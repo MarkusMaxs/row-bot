@@ -80,8 +80,21 @@ async function agentsList(page: Page) {
   // list is the one on screen, never the hidden one (B402).
   const panel = details.or(sheet).filter({ visible: true }).first();
   const agents = panel.locator('summary', { hasText: /^Agents/ });
-  // The rail can still be opening (or its Agents section loading) just after a
-  // reload, when a check sees nothing and the toggle would close it: try again.
+  if ((page.viewportSize()?.width ?? 0) > PHONE.width) {
+    // Just after a phone-to-desktop resize the chat keeps the phone's layout
+    // for a moment, with no rail toggle state; a click then lands mid-switch
+    // and hides the rail (seen on CI). The toggle says pressed or not once the
+    // desktop layout is in place: open the rail once, then wait for it.
+    const toggle = page.locator('[data-context-toggle]');
+    await expect(toggle).toHaveAttribute('aria-pressed', /^(true|false)$/, {
+      timeout: 20_000,
+    });
+    if ((await toggle.getAttribute('aria-pressed')) === 'false')
+      await toggle.click();
+    await expect(agents).toBeVisible({ timeout: 20_000 });
+  }
+  // The phone sheet can still be opening (or its Agents section loading) just
+  // after a reload, when a check sees nothing and the toggle would close it.
   await expect(async () => {
     if (!(await details.isVisible()) && !(await sheet.isVisible()))
       await headerAction(page, 'Conversation details');

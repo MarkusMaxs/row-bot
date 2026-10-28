@@ -17,6 +17,7 @@ from row_bot.api.v1.schemas import SettingsSnapshot, TrackerEntryPage
 from row_bot.api.v1.security import ClientSecurity
 from tests.subsystem.client_protocol.test_protocol_application import _isolated_service
 from tests.subsystem.client_protocol.test_protocol_security import bootstrap
+from tests.helpers.access import person_window
 
 pytestmark = pytest.mark.subsystem
 BASE = "/api/v1/settings/snapshot"
@@ -305,8 +306,7 @@ def api(tmp_path, monkeypatch):
         service,
         security=security,
         choices=lambda: {"models": [], "capabilities": []},
-        folder_selections=FolderSelections(picker=lambda: selected_workspace),
-    )
+        folder_selections=FolderSelections(picker=lambda: selected_workspace), session_authenticator=person_window)
     with TestClient(
         app, base_url="http://localhost", client=("127.0.0.1", 12345)
     ) as client:

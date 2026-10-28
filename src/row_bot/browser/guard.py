@@ -10,8 +10,9 @@ decided here:
   only when the page's conversation has allowed that exact origin (the person
   allowed it, so its forms and uploads work too; paying, sending, deleting and
   the rest still ask first, D19);
-- every other local-network address (private, link-local and metadata IPs,
-  ``.local`` and ``.internal`` names) never runs.
+- an address on the person's network (private IPs, Tailscale, ``.local``,
+  ``.internal`` and single-label names) the same way (5.3.1 B3);
+- a cloud metadata address (link-local IPs, metadata names) never runs.
 
 Residual risk, accepted and documented: a public name that resolves to a
 local address (DNS rebinding), requests from workers and service workers,
@@ -51,7 +52,7 @@ def allowed(url: str, conversation: str | None, granted: Callable[[str, str], bo
     kind = url_host_kind(url)
     if kind in {None, "public"}:
         return True
-    if kind == "this_computer":
+    if kind in {"this_computer", "local_network"}:
         # A server's live-reload socket (ws://localhost:5173) is covered by its page's grant.
         text = str(url)
         origin = local_development_origin(

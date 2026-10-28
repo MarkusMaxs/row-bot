@@ -78,18 +78,19 @@ def test_agent_settings_save_reset_persist_and_notify(tmp_path, monkeypatch):
     with client:
         _, headers = bootstrap(client)
         before = client.get("/api/v1/settings/models/agents", headers=headers)
-        assert before.status_code == 200 and before.json()["max_iterations"] == 90
+        assert before.status_code == 200 and before.json()["max_concurrent_children"] == 3
+        assert "max_iterations" not in before.json()  # No step limit to set (F31).
         assert not agent_settings.agent_runtime_settings_path().exists()
-        invalid = {**before.json(), "max_iterations": 0}
+        invalid = {**before.json(), "max_concurrent_children": 0}
         assert client.post("/api/v1/settings/models/agents", headers=headers, json=invalid).status_code == 422
         assert notices == []
         saved = client.post("/api/v1/settings/models/agents", headers=headers,
-            json={**before.json(), "max_iterations": 121})
+            json={**before.json(), "max_concurrent_children": 5})
         assert saved.status_code == 200, saved.text
-        assert saved.json()["max_iterations"] == 121
-        assert agent_settings.load_agent_runtime_settings().max_iterations == 121
+        assert saved.json()["max_concurrent_children"] == 5
+        assert agent_settings.load_agent_runtime_settings().max_concurrent_children == 5
         reset = client.post("/api/v1/settings/models/agents/reset", headers=headers)
-        assert reset.status_code == 200 and reset.json()["max_iterations"] == 90
+        assert reset.status_code == 200 and reset.json()["max_concurrent_children"] == 3
         assert notices == ["changed", "changed"]
 
 

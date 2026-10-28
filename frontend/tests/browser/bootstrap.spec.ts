@@ -198,7 +198,7 @@ test('real host bootstrap uses the accepted API and causes no provider work', as
   await screenshot(page, testInfo, 'real-host-shell');
 });
 
-test('real host recovers after browser offline without replaying producer commands', async ({
+test('real host on this computer stays connected when the browser goes offline (#568)', async ({
   page,
   context,
   request,
@@ -252,27 +252,33 @@ test('real host recovers after browser offline without replaying producer comman
       fixture: 'context.setOffline(true) for the outage window',
     }),
   });
+  // A Wi-Fi drop makes the browser report offline, but Row-Bot on this
+  // computer is still there: the page keeps its session and its stream.
+  const wentOffline = page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        addEventListener('offline', () => setTimeout(resolve, 250), {
+          once: true,
+        }),
+      ),
+  );
   await context.setOffline(true);
   try {
-    await expect(page.locator('.connection-status')).toHaveText(
-      /reconnecting|disconnected/,
-      { timeout: 30000 },
-    );
+    await wentOffline;
+    await expect(page.locator('.connection-status')).toHaveText('Connected');
     await expect(
       page.getByRole('alert').getByText('Connection interrupted', {
         exact: true,
       }),
-    ).toBeVisible();
+    ).toHaveCount(0);
     await screenshot(page, testInfo, 'real-host-offline');
   } finally {
     await context.setOffline(false);
   }
-  await expect(page.locator('.connection-status')).toHaveText('Connected', {
-    timeout: 30000,
-  });
-  await expect.poll(() => acceptedSubscriptions, { timeout: 30000 }).toBe(2);
-  await expect.poll(() => acknowledgements, { timeout: 30000 }).toBe(2);
-  await expect.poll(() => realEventRequests, { timeout: 30000 }).toBe(2);
+  await expect(page.locator('.connection-status')).toHaveText('Connected');
+  // No new handshake or subscription: the same stream carried on.
+  expect(acceptedSubscriptions).toBe(1);
+  expect(realEventRequests).toBe(1);
   await expect(
     page.getByRole('heading', { name: 'Phase 1 conversation A', exact: true }),
   ).toBeVisible();

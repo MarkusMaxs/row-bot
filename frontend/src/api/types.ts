@@ -361,10 +361,6 @@ export interface ClientTransport {
     descriptor: Wire.ArtifactExport,
     signal?: AbortSignal,
   ): Promise<Blob>;
-  taskGraph?(
-    task: string,
-    signal?: AbortSignal,
-  ): Promise<Wire.TaskGraphSnapshot>;
   taskSettings?(
     task: string,
     signal?: AbortSignal,
@@ -434,6 +430,30 @@ export interface ClientTransport {
     command: Wire.InsightCommand,
     signal?: AbortSignal,
   ): Promise<Wire.InsightReceipt>;
+  learning?(signal?: AbortSignal): Promise<Wire.LearningSnapshot>;
+  learningTraining?(signal?: AbortSignal): Promise<Wire.LearningTraining>;
+  learningDownload?(signal?: AbortSignal): Promise<Wire.LearningDownload>;
+  learningHardware?(
+    refresh?: boolean,
+    signal?: AbortSignal,
+  ): Promise<Wire.LearningHardware>;
+  learningConversation?(
+    conversation: string,
+    signal?: AbortSignal,
+  ): Promise<Wire.LearningConversation>;
+  learningLessons?(signal?: AbortSignal): Promise<Wire.LearningLessonPage>;
+  learningVersion?(
+    version: number,
+    signal?: AbortSignal,
+  ): Promise<Wire.LearningVersionDetails>;
+  learningReceipt?(
+    command: string,
+    signal?: AbortSignal,
+  ): Promise<Wire.LearningReceipt>;
+  executeLearning?(
+    command: Wire.LearningCommand,
+    signal?: AbortSignal,
+  ): Promise<Wire.LearningReceipt>;
   customToolReceipt?(
     conversation: string,
     binding: string,
@@ -564,12 +584,6 @@ export interface ClientTransport {
     run: string,
     signal?: AbortSignal,
   ): Promise<Wire.TaskRunSummary>;
-  taskApprovals?(
-    task: string,
-    run: string,
-    cursor?: string,
-    signal?: AbortSignal,
-  ): Promise<Wire.TaskApprovalPage>;
   dictationCapability?(signal?: AbortSignal): Promise<Wire.DictationCapability>;
   startTalk?(
     conversation: string,
@@ -903,6 +917,11 @@ export interface ClientTransport {
   /** Pages the agent made (N5): every one, or one conversation's. */
   pages?(conversationId?: string, signal?: AbortSignal): Promise<Wire.PagePage>;
   page?(pageId: string, signal?: AbortSignal): Promise<Wire.PageView>;
+  /** The conversations one started or proposed, with their state (5.3.1 C). */
+  conversationLinks?(
+    conversationId: string,
+    signal?: AbortSignal,
+  ): Promise<Wire.ConversationLinkPage>;
   /** One frame address for a page in this theme, loaded once in a sandbox. */
   pageFrame?(
     pageId: string,
@@ -935,6 +954,8 @@ export interface ClientTransport {
   ): Promise<Wire.ExportSaved>;
   attention?(signal?: AbortSignal): Promise<Wire.AttentionSnapshot>;
   pendingApprovals?(signal?: AbortSignal): Promise<Wire.PendingApprovalPage>;
+  scheduledPosts?(signal?: AbortSignal): Promise<Wire.ScheduledPostPage>;
+  cancelScheduledPost?(id: string): Promise<Wire.ScheduledPostCancelled>;
   monitorLogs?(limit?: number, signal?: AbortSignal): Promise<Wire.MonitorLogs>;
   systemDiagnosis?(signal?: AbortSignal): Promise<Wire.SystemDiagnosis>;
   systemHealth?(signal?: AbortSignal): Promise<Wire.SystemDiagnosis>;

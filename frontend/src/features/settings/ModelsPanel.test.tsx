@@ -100,7 +100,6 @@ const defaultSnapshot: DefaultModelSnapshot = {
 };
 const agent: AgentRuntimeSettingsState = {
   schema_version: 1,
-  max_iterations: 90,
   max_spawn_depth: 1,
   max_concurrent_children: 3,
   max_active_children_global: 8,
@@ -254,9 +253,13 @@ it('renders actual defaults and limits while leaving catalog rows unloaded', asy
   expect(
     screen.getByText(/Current Video default is unavailable/),
   ).toBeVisible();
-  expect(screen.getByRole('spinbutton', { name: /Steps per run/ })).toHaveValue(
-    90,
-  );
+  // A run has no step limit to set: it goes on while it makes progress (F31).
+  expect(
+    screen.queryByRole('spinbutton', { name: /Steps per run/ }),
+  ).toBeNull();
+  expect(
+    screen.getByRole('spinbutton', { name: /Helpers at a time, per agent/ }),
+  ).toHaveValue(3);
   // The catalog lists its providers; model rows wait for a provider or search.
   expect(controller.modelCatalogPage).not.toHaveBeenCalled();
   expect(
@@ -269,7 +272,7 @@ it('renders actual defaults and limits while leaving catalog rows unloaded', asy
 it('has a row for every Models result of Settings search', async () => {
   show();
   await screen.findByRole('button', { name: 'Brain model' });
-  await screen.findByRole('spinbutton', { name: /Steps per run/ });
+  await screen.findByRole('spinbutton', { name: /Helper levels/ });
   const rendered = new Set(
     [...document.querySelectorAll<HTMLElement>('[data-setting-anchor]')].map(
       (element) => element.dataset.settingAnchor,
@@ -588,15 +591,17 @@ it('updates media toggles, defaults, camera, context, and delegation through the
       cap: null,
     }),
   );
-  const rounds = screen.getByRole('spinbutton', { name: /Steps per run/ });
-  fireEvent.change(rounds, { target: { value: '120' } });
+  const helpers = screen.getByRole('spinbutton', {
+    name: /Helpers at a time, in total/,
+  });
+  fireEvent.change(helpers, { target: { value: '12' } });
   // Leaving the field saves it (decision 19); there is no Save button.
   expect(screen.queryByRole('button', { name: 'Save' })).toBeNull();
-  fireEvent.blur(rounds);
+  fireEvent.blur(helpers);
   await waitFor(() =>
     expect(controller.saveAgentRuntimeSettings).toHaveBeenCalledWith(
       expect.objectContaining({
-        max_iterations: 120,
+        max_active_children_global: 12,
         child_timeout_seconds: 0,
       }),
     ),

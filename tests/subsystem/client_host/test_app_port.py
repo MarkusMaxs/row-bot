@@ -64,6 +64,49 @@ def test_launcher_local_url_and_browser_helper_use_explicit_loopback(monkeypatch
     assert opened == ["http://127.0.0.1:8123/app-v2/"]
 
 
+def _sign_in_server(answers: dict[str, str]):
+    """A loopback stand-in for the app's launcher sign-in route."""
+    import http.server
+    import threading
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802 - http.server's name
+            token = answers.get(self.headers.get("Authorization", ""))
+            body = json.dumps({"ok": True, "invitation": token} if token else {"ok": False}).encode()
+            self.send_response(200 if token else 403)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def test_the_window_and_browser_open_signed_in_only_with_this_launchers_server(monkeypatch):
+    """A0: only a window or browser the launcher opens signs in; anything else on this computer is view-only."""
+    opened = []
+    monkeypatch.setattr(launcher.webbrowser, "open", opened.append)
+    secret = "s" * 43
+    server = _sign_in_server({f"Bearer {secret}": "rbi_v1.inv/ite+token"})
+    port = server.server_address[1]
+    monkeypatch.setattr(launcher, "_LAUNCH_SECRETS", {})
+    try:
+        launcher._open_in_browser(port)
+        launcher._RowBotProcess(port).set_launch_environment({launcher.LAUNCH_SECRET_ENV: secret})
+        launcher._open_in_browser(port)
+        launcher._LAUNCH_SECRETS[port] = "w" * 43
+        launcher._open_in_browser(port)
+    finally:
+        server.shutdown()
+
+    plain = f"http://127.0.0.1:{port}/app-v2/"
+    assert opened == [plain, plain + "#sign-in=rbi_v1.inv%2Fite%2Btoken", plain]
+
+
 def test_launcher_native_window_helper_uses_explicit_loopback(monkeypatch):
     captured = {}
 

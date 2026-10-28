@@ -541,6 +541,37 @@ class ComputerUseService:
             raise ComputerError(refusal, code="denied")
         return line
 
+    def _check_command(self, session: _Session, window: Window, text: str) -> None:
+        """What's typed into a terminal runs as a command: checked as the shell tool checks one.
+
+        Blocked commands and Row-Bot's private data never run; anything that isn't plainly read-only asks
+        by the approval level, on the same card as run_command (so Allow in this chat counts commands by
+        what they do).
+        """
+
+        from row_bot.tools import registry
+        from row_bot.tools.shell_tool import PRIVATE_DATA_REFUSAL, classify_command
+
+        shell = registry.get_tool("shell")
+        command = text.strip()
+        kind = classify_command(command, shell._get_extra_blocked() if shell is not None else None)
+        if kind == "blocked":
+            raise ComputerError(f"BLOCKED: that command matches a blocked pattern, in a terminal as with the "
+                                f"shell tool: {command[:200]}", code="not_allowed")
+        if kind == "private_data":
+            raise ComputerError(PRIVATE_DATA_REFUSAL, code="not_allowed")
+        if kind == "needs_approval":
+            self._approve(
+                session,
+                {"tool": "run_command", "label": "Run shell command",
+                 "description": f"Type into {window.app} and run: {command[:2000]}",
+                 "args": {"command": command[:2000]}},
+                risks=("runs a command in a terminal on this computer",),
+                blocked_message=(f"BLOCKED: This command requires approval and cannot run in Block approval "
+                                 f"mode: {command[:200]}"),
+                cancelled_message="The person said no; Row-Bot didn't type that command.",
+            )
+
     def _done_waiting(self, session: _Session, waited: bool) -> None:
         with self._lock:
             session.mark = None
@@ -713,6 +744,9 @@ class ComputerUseService:
             refused = policy.refused_keys(*parsed_keys)
             if refused:
                 raise ComputerError(refused, code="not_allowed")
+        terminal = policy.is_terminal(window.app)
+        if terminal and policy.terminal_paste(action, parsed_keys):
+            raise ComputerError(policy.TERMINAL_PASTE_REFUSAL, code="not_allowed", fix="Use action=type.")
         if action == "type":
             if not text:
                 raise ComputerError("There's nothing to type.", code="input", fix="Put the words in text.")
@@ -720,6 +754,8 @@ class ComputerUseService:
             secret = policy.secret_field(field.role, field.label, clicked=True) if field else ""
             if secret:
                 raise ComputerError(policy.SECRET_REFUSAL[secret], code="secret")
+            if terminal:
+                self._check_command(session, window, text)
 
         consequence = policy.classify(
             action, app=window.app, window=policy.window_facts(_title_of(window), shot.labels()),

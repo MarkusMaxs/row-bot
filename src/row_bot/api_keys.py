@@ -259,7 +259,30 @@ def child_environment(environ: Mapping[str, str] | None = None, *, keep: Iterabl
     source = os.environ if environ is None else environ
     hidden = {name.upper() for name in saved_key_names() | ROW_BOT_PROCESS_SECRETS}
     hidden -= {str(name).upper() for name in keep}
-    return {name: value for name, value in source.items() if name.upper() not in hidden}
+    env = {name: value for name, value in source.items() if name.upper() not in hidden}
+    return _with_managed_ffmpeg(env)
+
+
+def _with_managed_ffmpeg(env: dict[str, str]) -> dict[str, str]:
+    """The ffmpeg Row-Bot downloaded, on the program's PATH, so a command can use it too (5.3.1 A1).
+
+    Only the reviewed program, checked against its fingerprint before each use; the person's own
+    ffmpeg on PATH comes first.
+    """
+    try:
+        from row_bot import ffmpeg_runtime
+
+        managed = ffmpeg_runtime.installed()
+    except Exception:
+        managed = None
+    if managed is None:
+        return env
+    key = next((name for name in env if name.upper() == "PATH"), "PATH")
+    folder = os.path.dirname(managed.executable)
+    current = env.get(key, "")
+    if folder not in current.split(os.pathsep):
+        env[key] = os.pathsep.join(part for part in (current, folder) if part)
+    return env
 
 
 def key_status(env_var: str) -> dict[str, Any]:

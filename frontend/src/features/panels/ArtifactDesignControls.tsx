@@ -43,6 +43,7 @@ import {
   Select,
   StatusDot,
 } from '../../ui/primitives';
+import { ATTACHMENT_LIMITS } from '../shell/attachment-limits';
 
 export type DesignBrand = {
   primary_color: string;
@@ -480,8 +481,10 @@ export default function ArtifactDesignControls(props: DesignControlsProps) {
     use: 'asset' | 'logo' | 'image' = 'asset',
   ) {
     if (!chosen || !state || operation.current || !props.visible) return;
-    if (chosen.size === 0 || chosen.size > 25 * 1024 * 1024) {
-      setError('Choose a file that is not empty and up to 25 MB.');
+    if (chosen.size === 0 || chosen.size > ATTACHMENT_LIMITS.fileBytes) {
+      setError(
+        `Choose a file that is not empty and up to ${ATTACHMENT_LIMITS.fileMegabytes} MB.`,
+      );
       return;
     }
     const token = Symbol('asset-upload');

@@ -37,7 +37,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 from row_bot.approval_policy import normalize_approval_mode
 from row_bot.brand import APP_DATA_DIR_ENV, DEFAULT_DATA_DIR_NAME
-from row_bot.data_paths import get_row_bot_data_dir, private_data_dirs
+from row_bot.data_paths import get_row_bot_data_dir, private_data_dirs, shared_data_folder
 from row_bot.process_cancellation import run_cancellable_subprocess
 from row_bot.secret_store import SERVER_SECRETS_DIR_ENV
 from row_bot.tools.base import BaseTool
@@ -63,7 +63,9 @@ _HISTORY_PATH = DATA_DIR / "shell_history.json"
 # SAFETY CLASSIFICATION
 # ═════════════════════════════════════════════════════════════════════════════
 
-# Patterns that are ALWAYS blocked (catastrophic / irreversible)
+# Patterns that are ALWAYS blocked, at every approval level: wiping a drive or the system, which
+# nobody asks an assistant for. Power, registry, install scripts piped to a shell and PowerShell's
+# Invoke-Expression are ordinary commands that follow the approval level (5.3.1 A1).
 _BLOCKED_PATTERNS: list[re.Pattern] = [
     re.compile(p, re.IGNORECASE)
     for p in [
@@ -74,14 +76,9 @@ _BLOCKED_PATTERNS: list[re.Pattern] = [
         r"\bdd\s+.*of=/dev/",                            # dd to device
         r"\bformat\s+[a-z]:",                            # Windows format drive
         r">\s*/dev/sd[a-z]",                             # overwrite disk
-        r"\b(shutdown|reboot|halt|poweroff)\b",          # system power
-        r"\breg\s+delete\b.*\\\\HKLM",                  # Windows registry delete
         r"Remove-Item\s+.*-Recurse.*\s+[A-Z]:\\$",      # PowerShell rm C:\
         r"del\s+/[sq]\s+[A-Z]:\\",                       # Windows del /s C:\
-        r":(){ :\|:& };:",                               # fork bomb
-        r"\|\s*(ba)?sh\b",                               # pipe to shell
-        r"\|\s*python[23]?\s+(-c\b|-)",                  # pipe to python -c / -
-        r"\bInvoke-Expression\b|\biex\b",                # PowerShell code exec
+        r":\(\)\s*\{\s*:\|:&\s*\};\s*:",               # fork bomb
         r"\bchmod\s+(-R\s+)?000\s+/",                    # chmod 000 /
     ]
 ]
@@ -278,7 +275,9 @@ def _is_read_only(words: list[str]) -> bool:
 
 # Ways a command can name the home folder, so "~/.row-bot" and "$env:USERPROFILE\.row-bot" both match.
 _HOME_REFERENCES = re.compile(r"(\$env:userprofile|\$env:home|%userprofile%|\$\{home\}|\$home|~)(?=/|$)")
-_DATA_DIR_SEGMENT = re.compile(r"(^|[/\s\"'=:])" + re.escape(DEFAULT_DATA_DIR_NAME.lower()) + r"($|[/\s\"'*])")
+# A relative ".row-bot" (the data folder named from the home folder). A project's own ".row-bot"
+# folder further down a path is not the data folder.
+_DATA_DIR_SEGMENT = re.compile(r"(^|[\s\"'=:])" + re.escape(DEFAULT_DATA_DIR_NAME.lower()) + r"($|[/\s\"'*])")
 PRIVATE_DATA_REFUSAL = (
     "BLOCKED: this command reads Row-Bot's private data folder (conversations, settings, keys), which agents "
     "can't read. The person can allow it, with approval each time, in Settings > System > Advanced. Connected "
@@ -291,15 +290,29 @@ def _slashes(text: str) -> str:
 
 
 def names_private_data(command: str) -> bool:
-    """True when a command names Row-Bot's data folder or the server secrets folder: a path in any common
-    spelling, or its variable."""
+    """True when a command names a private part of Row-Bot's data folder or the server secrets folder: a
+    path in any common spelling, or its variable.
+
+    The data folder's shared parts (the managed ffmpeg, recordings, exports, logs) are not private: a
+    command naming only them is classified like any other (5.3.1 A1).
+    """
     text = _slashes(command)
     if APP_DATA_DIR_ENV.lower() in text or SERVER_SECRETS_DIR_ENV.lower() in text:
         return True
     home = _slashes(str(Path.home()))
     text = _HOME_REFERENCES.sub(lambda _match: home, text)
-    folders = [_slashes(str(folder.expanduser().resolve())) for folder in private_data_dirs()]
-    return any(folder in text for folder in folders) or _DATA_DIR_SEGMENT.search(text) is not None
+    data_dir = _slashes(str(get_row_bot_data_dir(create=False).expanduser().resolve()))
+    for folder in (_slashes(str(folder.expanduser().resolve())) for folder in private_data_dirs()):
+        start = text.find(folder)
+        while start != -1:
+            rest = text[start + len(folder):]
+            inside = re.split(r"[\s\"'*;|&<>]", rest[1:], maxsplit=1)[0] if rest.startswith("/") else ""
+            # The folder itself, or anything in it but its shared parts (the secrets folder has none);
+            # ".." could climb out of a shared part.
+            if folder != data_dir or not shared_data_folder(inside) or ".." in inside.split("/"):
+                return True
+            start = text.find(folder, start + 1)
+    return _DATA_DIR_SEGMENT.search(text) is not None
 
 
 def _append_process_note(output: str, note: str) -> str:

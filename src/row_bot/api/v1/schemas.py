@@ -1240,6 +1240,28 @@ class PreferenceSettingsSnapshot(WireModel):
     migration: MigrationSettingsSnapshot
 
 
+class LearningSourcesSnapshot(WireModel):
+    my_chats: bool
+    workflows_and_goals: bool
+    past_chats: bool
+
+
+class LearningSettingsSnapshot(WireModel):
+    """Learning (preview): saved settings only; nothing acts on most of them yet."""
+
+    availability: Literal["available", "unavailable"]
+    enabled: bool
+    # On but paused: nothing new is recorded, tested or trained.
+    paused: bool
+    sources: LearningSourcesSnapshot
+    apply_mode: Literal["ask_first", "automatic"]
+    monthly_token_limit: int = Field(ge=0, le=1_000_000_000)
+    train_in_quiet_hours: bool
+    train_where: Literal["this_computer", "hugging_face"]
+    # Learning data is on this computer (kept after Learning is turned off).
+    has_data: bool
+
+
 SettingsMutationPage = Literal[
     "voice",
     "system",
@@ -1250,6 +1272,7 @@ SettingsMutationPage = Literal[
     "accounts",
     "utilities",
     "preferences",
+    "learning",
 ]
 SettingsMutationValue = str | bool | int | float | list[str] | None
 
@@ -1269,6 +1292,7 @@ class SettingsSnapshot(WireModel):
     utilities: UtilitySettingsSnapshot
     plugins: SettingsPluginSummary
     preferences: PreferenceSettingsSnapshot
+    learning: LearningSettingsSnapshot
     # Per page, what each saved field reads on a fresh profile; clients show
     # a "modified" mark and a reset for fields that differ.
     defaults: dict[SettingsMutationPage, dict[str, SettingsMutationValue]] = Field(
@@ -3528,7 +3552,6 @@ class ProfileSummary(WireModel):
     editable: bool
     revision: str = Field(pattern=r"^[1-9][0-9]{0,19}$")
     capability: Literal["read_only", "write_capable", "orchestrator"]
-    allow_tools: list[str] = Field(max_length=100)
     skills: list[str] = Field(max_length=100)
     context_mode: Literal["auto", "focused", "recent", "full", "empty", "resume"]
     workspace_mode: Literal["auto", "read_only", "single_writer", "worktree"]
@@ -3569,7 +3592,6 @@ class ProfileFields(WireModel):
     when_to_use: str = Field(max_length=2048)
     instructions: str | None = Field(max_length=49152)
     capability: Literal["read_only", "write_capable", "orchestrator"]
-    allow_tools: list[str] = Field(max_length=100)
     skills: list[str] = Field(max_length=100)
     context_mode: Literal["auto", "focused", "recent", "full", "empty", "resume"]
     workspace_mode: Literal["auto", "read_only", "single_writer", "worktree"]
@@ -3957,6 +3979,754 @@ class InsightReceipt(WireModel):
     snapshot: InsightsSnapshot
 
 
+# Learning (preview, O34): only in a build started with ROW_BOT_LEARNING_PREVIEW=1.
+
+
+class LearningSpending(WireModel):
+    used_tokens: int = Field(ge=0)
+    limit_tokens: int = Field(ge=0, le=1_000_000_000)
+    # The 1st of next month (local date): when the limit starts again.
+    resets_on: str = Field(max_length=16)
+    # The default chat model's name; Learning's own model calls use it. "" when none is chosen.
+    model_name: str = Field(max_length=256)
+    limit_reached: bool
+
+
+class LearningQuietHours(WireModel):
+    # Dream Cycle's hours, shared with Learning (D12).
+    window_start: int = Field(ge=0, le=23)
+    window_end: int = Field(ge=0, le=23)
+    # When Learning next looks for improvements, once something runs then (L3a); null until.
+    next_look_at: str | None = Field(default=None, max_length=64)
+
+
+class LearningPastChats(WireModel):
+    state: Literal["none", "reading", "waiting", "stopped", "done", "failed"]
+    total: int = Field(ge=0)
+    done: int = Field(ge=0)
+
+
+class LearningStartingModel(WireModel):
+    id: str = Field(max_length=64)
+    name: str = Field(max_length=128)
+    licence: str = Field(max_length=64)
+    download_bytes: int = Field(ge=0)
+
+
+class LearningDownload(WireModel):
+    """The personal model's download (L2b): the training engine, then the starting model."""
+
+    # none: nothing to download, or nothing asked; ready: the person said Download before and
+    # one tap starts it (O36); downloading; paused (Stop, Learning paused, Row-Bot closed);
+    # not_enough_disk; failed (with a reason and Try again).
+    state: Literal["none", "ready", "downloading", "paused", "not_enough_disk", "failed"]
+    # While downloading: the engine's files, installing it, checking it, the starting model's files.
+    phase: Literal["engine", "installing", "checking", "model"] | None = None
+    # Bytes on this computer of everything this download needs (a real denominator).
+    done_bytes: int = Field(ge=0)
+    total_bytes: int = Field(ge=0)
+    # Free space the rest needs (the download plus the unpacked engine), and what is free.
+    needs_bytes: int | None = Field(default=None, ge=0)
+    free_bytes: int | None = Field(default=None, ge=0)
+    failure: Literal["network", "mismatch", "install_failed", "check_failed", "no_cuda", "refused"] | None = None
+
+
+class LearningRuntime(WireModel):
+    """Where a personal model can run ("Runs in", D10; Row-Bot's own server, O75)."""
+
+    id: Literal["row_bot", "ollama", "lmstudio", "llama_cpp", "vllm"]
+    name: str = Field(max_length=64)
+    # Row-Bot registers the model there itself (its own server, Ollama); the others are loaded with one command.
+    automated: bool
+    # Whether the runtime is installed here (known for Row-Bot's own server and Ollama).
+    installed: bool | None = None
+    # False where it can't run on this computer (Row-Bot's own server without an NVIDIA card that can train).
+    available: bool = True
+
+
+class LearningExamples(WireModel):
+    """How much of the person's work training can use (L2c): "Needs more examples" below ``needed``."""
+
+    examples: int = Field(ge=0)
+    needed: int = Field(ge=1)
+    # Examples the newest version wasn't trained on.
+    new_examples: int = Field(ge=0)
+    left_out: int = Field(ge=0)
+
+
+class LearningVersion(WireModel):
+    """The newest personal-model version after training (L2c): being prepared to run, made ready in
+    its runtime, ready (it then waits for its comparison), or stuck with the way out."""
+
+    version: int = Field(ge=1)
+    phase: Literal["exporting", "export_failed", "making_ready", "ready", "runtime_failed", "waiting_for_you"]
+    # While preparing: merging what it learned, converting, compressing.
+    step: Literal["merge", "convert", "quantize"] | None = None
+    failure: Literal[
+        "not_enough_disk", "adapter_missing", "engine_missing", "tools_missing", "export_failed", "not_installed",
+        "not_running", "not_local", "create_failed", "not_loaded", "probe_failed", "tool_turn_failed",
+        "server_missing", "server_unavailable", "server_failed", "load_failed",
+    ] | None = None
+    runtime: Literal["row_bot", "ollama", "lmstudio", "llama_cpp", "vllm"]
+    quantization: Literal["Q8_0", "Q4_K_M"]
+    file_name: str | None = Field(default=None, max_length=128)
+    file_bytes: int = Field(ge=0)
+    # The version's folder on this computer, and the command that loads it where the person starts
+    # the runtime themselves.
+    folder: str = Field(max_length=1024)
+    command: str | None = Field(default=None, max_length=2048)
+    needs_bytes: int | None = Field(default=None, ge=0)
+    free_bytes: int | None = Field(default=None, ge=0)
+    trained_at: str | None = Field(default=None, max_length=64)
+    examples: int = Field(ge=0)
+
+
+LearningKindOfWork = Literal["document_lookups", "structured_transforms", "small_coding", "tool_workflows"]
+
+
+class LearningVersionUse(WireModel):
+    kind: LearningKindOfWork
+    state: Literal["trial", "in_use"]
+
+
+class LearningVersionRow(WireModel):
+    """One personal-model version on this computer (newest first)."""
+
+    version: int = Field(ge=1)
+    ready: bool
+    file_bytes: int = Field(ge=0)
+    trained_at: str | None = Field(default=None, max_length=64)
+    compared: bool
+    uses: list[LearningVersionUse] = Field(default_factory=list, max_length=4)
+
+
+class LearningComparisonArm(WireModel):
+    """One model in a comparison: the new version, its baseline (the version in use or the untouched
+    starting model) and the main model."""
+
+    key: str = Field(max_length=32)
+    label: str = Field(max_length=128)
+    role: Literal["new", "baseline", "main"]
+    # Tasks it ran (or whose result was kept from an earlier test, O31) and how many were kept.
+    ran: int = Field(ge=0)
+    cached: int = Field(ge=0)
+    seconds_per_task: float | None = Field(default=None, ge=0)
+    cloud_tokens_per_task: int | None = Field(default=None, ge=0)
+
+
+class LearningComparisonCell(WireModel):
+    key: str = Field(max_length=32)
+    passed: int = Field(ge=0)
+    # The tasks that counted for this model (a provider error is left out, O19).
+    counted: int = Field(ge=0)
+
+
+class LearningComparisonRow(WireModel):
+    kind: Literal["document_lookups", "structured_transforms", "small_coding", "tool_workflows", "own_work"]
+    label: str = Field(max_length=64)
+    total: int = Field(ge=0)
+    cells: list[LearningComparisonCell] = Field(max_length=3)
+    # The new version against its baseline: better, no clear difference, worse, or too few tasks to tell.
+    verdict: Literal["better", "same", "worse", "too_few"]
+
+
+class LearningComparison(WireModel):
+    """The newest ready version's comparison (UX §5 "Versions"): waiting, running with its real
+    denominator, paused or stopped (it runs again), failed, or done with its counts."""
+
+    version: int = Field(ge=1)
+    state: Literal["waiting", "running", "paused", "stopped", "failed", "done"]
+    done: int = Field(ge=0)
+    total: int = Field(ge=0)
+    compared_at: str | None = Field(default=None, max_length=64)
+    arms: list[LearningComparisonArm] = Field(max_length=3)
+    rows: list[LearningComparisonRow] = Field(max_length=5)
+    verdict: Literal["better", "mixed", "worse", "no_difference", "unclear"] | None = None
+    line: str = Field(max_length=400)
+    recommend: LearningKindOfWork | None = None
+    note: str = Field(max_length=400)
+    coding_left_out: bool
+    baseline_unavailable: bool
+    main_unavailable: Literal["no_main_model", "sign_in_unsupported", "main_failed"] | None = None
+    reviewed: bool
+
+
+class LearningUseTally(WireModel):
+    requests: int = Field(ge=0)
+    answered: int = Field(ge=0)
+    # Finished by the main model after the personal model got stuck (a cloud finish).
+    fallbacks: int = Field(ge=0)
+    seconds_per_request: float | None = Field(default=None, ge=0)
+
+
+class LearningUse(WireModel):
+    """A kind of work given to a personal-model version: on trial, or kept (in use)."""
+
+    kind: LearningKindOfWork
+    label: str = Field(max_length=64)
+    version: int = Field(ge=1)
+    state: Literal["trial", "in_use"]
+    since: str | None = Field(default=None, max_length=64)
+    # Undo goes back to this version (null: the main model).
+    previous_version: int | None = Field(default=None, ge=1)
+    trial: LearningUseTally
+    total: LearningUseTally
+    keep_due: bool
+
+
+class LearningAdvancedValues(WireModel):
+    # The starting model isn't an Advanced choice (O124): Settings › Starting model › Change… sets it.
+    rank: int = Field(ge=1, le=512)
+    learning_rate: float = Field(gt=0, le=1)
+    epochs: int = Field(ge=1, le=100)
+    context: int = Field(ge=512, le=1_048_576)
+    method: Literal["standard"] = "standard"
+
+
+class LearningAdvancedChoices(WireModel):
+    rank: list[int] = Field(max_length=8)
+    learning_rate: list[float] = Field(max_length=8)
+    epochs: list[int] = Field(max_length=8)
+    context: list[int] = Field(max_length=8)
+    method: list[Literal["standard"]] = Field(max_length=2)
+
+
+class LearningDataMixItem(WireModel):
+    id: Literal["your_work", "corrections", "practice", "general"]
+    label: str = Field(max_length=64)
+    share: int = Field(ge=0, le=100)
+    # Not available yet: corrections arrive with diagnosis, practice with practice tasks.
+    available: bool
+
+
+class LearningAdvanced(WireModel):
+    """Advanced › (D9): the next run's settings, the recommended ones and what may be chosen."""
+
+    values: LearningAdvancedValues
+    recommended: LearningAdvancedValues
+    changed: bool
+    choices: LearningAdvancedChoices
+    data_mix: list[LearningDataMixItem] = Field(max_length=4)
+
+
+class LearningCardRoom(WireModel):
+    # O112: training waited for room on the graphics card this many quiet-hours nights; what its run needs
+    # free on the card and what the card had; the next smaller model Row-Bot offers (None: none smaller).
+    nights: int = Field(ge=0, le=7)
+    need_gb: float = Field(ge=0, le=4096)
+    free_gb: float = Field(ge=0, le=4096)
+    smaller: LearningStartingModel | None = None
+
+
+class LearningPersonalModel(WireModel):
+    train_in_quiet_hours: bool
+    train_where: Literal["this_computer", "hugging_face"]
+    starting_model: LearningStartingModel
+    # The answer to the download ask: "waiting" is Download (it reads as Ready to download when
+    # nothing is downloading, O36), "not_now" is Not now.
+    download: Literal["not_asked", "waiting", "not_now"]
+    # The training engine on this computer: damaged (files missing) and outdated (from an earlier
+    # Row-Bot) download again with Repair / Update.
+    engine: Literal["not_downloaded", "installed", "damaged", "outdated"]
+    # Its size on disk while installed.
+    engine_bytes: int = Field(ge=0)
+    engine_download_bytes: int = Field(ge=0)
+    starting_model_state: Literal["not_downloaded", "downloaded", "damaged"]
+    starting_model_bytes: int = Field(ge=0)
+    download_state: LearningDownload
+    # Where personal models run (the person's choice) and the choices here.
+    runtime: Literal["row_bot", "ollama", "lmstudio", "llama_cpp", "vllm"] = "row_bot"
+    runtimes: list[LearningRuntime] = Field(default_factory=list, max_length=8)
+    # The count of usable examples once the engine is installed; null before.
+    examples: LearningExamples | None = None
+    version: LearningVersion | None = None
+    # L2c2: every version, the newest ready one's comparison, the kinds of work given to versions,
+    # Advanced and where Export… offers to save.
+    versions: list[LearningVersionRow] = Field(default_factory=list, max_length=20)
+    comparison: LearningComparison | None = None
+    uses: list[LearningUse] = Field(default_factory=list, max_length=4)
+    advanced: LearningAdvanced | None = None
+    export_folder: str = Field(default="", max_length=1024)
+    # O112: two or more quiet-hours nights without room on the card (else None).
+    room: LearningCardRoom | None = None
+    # O124: a stronger starting model this card trains than the one in use (what setup would recommend
+    # now), offered once in the Personal model view until the person switches or dismisses it (else None).
+    stronger_model: LearningStartingModel | None = None
+
+
+class LearningNeedsYou(WireModel):
+    """One line of Overview's Needs you about the personal model (UX §3, §5)."""
+
+    id: str = Field(max_length=128)
+    # compare: "Personal model v1 is ready to compare"; keep: "Keep v1 for document lookups?";
+    # retrain: "A deleted chat was used to train v1." (Retrain without it, O6).
+    type: Literal["compare", "keep", "retrain"]
+    version: int = Field(ge=1)
+    kind: LearningKindOfWork | None = None
+    title: str = Field(max_length=200)
+
+
+LearningAnyKind = Literal["document_lookups", "structured_transforms", "small_coding", "tool_workflows", "other"]
+
+
+class LearningOvernight(WireModel):
+    """Last night's look for things to improve (L3a; UX §3 Overnight), in counts the client words."""
+
+    # The quiet-hours night it ran (local date).
+    night: str = Field(max_length=16)
+    # done/nothing: it looked; stopped: the person came back, it goes on later that night; claude_plan:
+    # Learning makes no calls through the person's Claude plan (O99); no_model, limit, unavailable, failed.
+    state: Literal["done", "nothing", "stopped", "claude_plan", "no_model", "limit", "unavailable", "failed"]
+    found: int = Field(ge=0)
+    drafted: int = Field(ge=0)
+    # Ideas left out by E9 (they'd have added an address, a link, a password or a permission, or rested on
+    # no feedback from the person).
+    left_out: int = Field(ge=0)
+    needs_examples: int = Field(ge=0)
+    looks_like_bug: int = Field(ge=0)
+    # L3b: the night's tests ("Tested 3 ideas: 1 ready, 2 not better") and the changes automatic mode put
+    # into use by itself (listed with Undo); how the tests ended when they didn't finish.
+    tested: int = Field(default=0, ge=0)
+    ready: int = Field(default=0, ge=0)
+    not_better: int = Field(default=0, ge=0)
+    used: int = Field(default=0, ge=0)
+    tests_state: Literal["stopped", "limit", "claude_plan", "failed"] | None = None
+    # L4a: the night's strategy trial: a new learning method switched in by itself (with Undo), or one tried and
+    # not better (the method in use kept); the version in use after it and what the new one changes, in words.
+    method: Literal["switched", "kept"] | None = None
+    method_version: int | None = Field(default=None, ge=1)
+    method_words: str = Field(default="", max_length=200)
+
+
+class LearningMethodArm(WireModel):
+    """One method's result in a trial: the changes it accepted and how many were better on the trial's new
+    problems, what its improvement loop spent, and the ideas kept per 1M tokens."""
+
+    role: Literal["incumbent", "challenger", "control", "generation"]
+    version: int = Field(ge=1)
+    accepted: int = Field(ge=0)
+    better: int = Field(ge=0)
+    tokens: int = Field(ge=0)
+    per_million: float = Field(ge=0)
+
+
+class LearningMethodTrial(WireModel):
+    """One strategy trial (L4a): every method on the same new problems at the same budget."""
+
+    at: str = Field(max_length=64)
+    problems: int = Field(ge=0)
+    arm_tokens: int = Field(ge=0)
+    arms: list[LearningMethodArm] = Field(max_length=8)
+    # switched: a new method won and is in use; kept: the method in use stayed; final: the paper's final set.
+    outcome: Literal["switched", "kept", "final"]
+    to_version: int | None = Field(default=None, ge=1)
+
+
+class LearningMethodStep(WireModel):
+    """A line of the learning method's history: the first method, a switch, one tried and dropped, an Undo."""
+
+    at: str = Field(max_length=64)
+    version: int = Field(ge=1)
+    event: Literal["first", "switched", "tried", "undone"]
+    # What it changes from the method before, in plain words ("tries a lesson first").
+    words: str = Field(default="", max_length=200)
+    # Against which version it was tried (a dropped one).
+    against: int | None = Field(default=None, ge=1)
+    can_undo: bool = False
+
+
+class LearningNextTrial(WireModel):
+    """When the next strategy trial can run: once 30 new hidden problems have built up and the trials' share of
+    the month allows it."""
+
+    state: Literal["waiting", "ready", "running", "limit"]
+    fresh: int = Field(ge=0)
+    needed: int = Field(ge=0)
+
+
+class LearningMethod(WireModel):
+    """How Row-Bot learns (L4a; designs/learning-ux.md §6): the method in use in plain words, its trials with their
+    denominators, its history and Undo."""
+
+    version: int = Field(ge=1)
+    since: str | None = Field(default=None, max_length=64)
+    description: str = Field(max_length=600)
+    # This month: ideas tested, kept, and Learning's tokens.
+    tried: int = Field(ge=0)
+    kept: int = Field(ge=0)
+    tokens: int = Field(ge=0)
+    trials: list[LearningMethodTrial] = Field(default_factory=list, max_length=20)
+    history: list[LearningMethodStep] = Field(default_factory=list, max_length=30)
+    can_undo: bool = False
+    next_trial: LearningNextTrial
+
+
+class LearningChangeWhy(WireModel):
+    """Why a change was drafted, in counts only (never anyone's words, UX §4)."""
+
+    chats: int = Field(ge=0)
+    corrections: int = Field(ge=0)
+    stops: int = Field(ge=0)
+    retries: int = Field(ge=0)
+    denials: int = Field(ge=0)
+    failures: int = Field(ge=0)
+    # How many of them came from past chats Learning read when it was turned on.
+    imported: int = Field(ge=0)
+
+
+class LearningTestRow(WireModel):
+    """One row of a change's test (UX §4): tasks of a kind, passed without and with the change."""
+
+    label: str = Field(max_length=120)
+    total: int = Field(ge=0)
+    without: int = Field(ge=0)
+    with_change: int = Field(ge=0)
+
+
+class LearningChangeTest(WireModel):
+    """A change's test result, in counts (aggregates only, E10)."""
+
+    # better: Ready; the others are why it isn't used ("No clear difference", "Worse on other tasks").
+    verdict: Literal["better", "no_difference", "worse", "worse_elsewhere"]
+    rows: list[LearningTestRow] = Field(max_length=4)
+    # "Testing used 85K tokens · Small test, so expect some variation."
+    note: str = Field(max_length=300)
+    small: bool
+    tested_at: str | None = Field(default=None, max_length=64)
+    # Experiment details: the mean paired difference on its kind of work, in points, and its 95% interval.
+    difference: float | None = None
+    low: float | None = None
+    high: float | None = None
+
+
+class LearningChangeView(WireModel):
+    """A change Learning drafted (UX §4, §7): waiting to be tested, testing, ready, edited (test again before
+    using), in use (with Undo) or not used."""
+
+    id: str = Field(max_length=128)
+    change: Literal["lesson", "way_of_working", "skill"]
+    title: str = Field(max_length=200)
+    kind: LearningAnyKind
+    state: Literal["waiting_to_test", "testing", "ready", "edited", "in_use", "not_used"]
+    created_at: str = Field(max_length=64)
+    # The lesson or way of working in its own words, or what a skill is for.
+    text: str = Field(max_length=1200)
+    why: LearningChangeWhy
+    # It rests only on tool or web content: it never goes into use by itself (E9).
+    never_automatic: bool
+    # A way of working: what it changes, in plain words ("How Row-Bot uses its tools").
+    setting: str = Field(default="", max_length=120)
+    # A skill edit: its before/after.
+    diff: str = Field(default="", max_length=6000)
+    test: LearningChangeTest | None = None
+    # In use: who put it there (automatic mode: "Used by itself") and when.
+    used_by: Literal["person", "automatic"] | None = None
+    used_at: str | None = Field(default=None, max_length=64)
+    # Not used: tested and not better, turned down ("Don't suggest this again") or undone.
+    not_used: Literal["not_better", "turned_down", "undone"] | None = None
+    # Ready, and the person said Not now: it isn't asked about in Needs you.
+    snoozed: bool = False
+    # A lesson Row-Bot saved for itself during a chat, being tested.
+    agent_saved: bool = False
+
+
+class LearningTestingNow(WireModel):
+    """The change being tested now ("Testing 'Pick documents by ID' on 24 tasks · 9 done")."""
+
+    change_id: str = Field(max_length=128)
+    title: str = Field(max_length=200)
+    done: int = Field(ge=0)
+    total: int = Field(ge=0)
+
+
+class LearningKindState(WireModel):
+    """Where Learning stands on a kind of work (UX §3 "What Row-Bot is learning"), besides models in use."""
+
+    kind: LearningAnyKind
+    state: Literal["testing_change", "needs_examples", "change_ready", "change_in_use"]
+
+
+class LearningData(WireModel):
+    exists: bool
+    bytes: int = Field(ge=0)
+    # Of ``bytes``: the pictures kept from browser and computer use, and the most they may take (the
+    # oldest go first past it).
+    picture_bytes: int = Field(ge=0)
+    picture_cap_bytes: int = Field(ge=0)
+
+
+class LearningChannelNote(WireModel):
+    channel: str = Field(max_length=64)
+    name: str = Field(max_length=64)
+    # "Telegram chats are used once your Telegram user ID is set in Settings › Apps › Telegram."
+    note: str = Field(max_length=256)
+
+
+class LearningRunnerStatus(WireModel):
+    # What the quiet-hours runner would do now, and why not (the client words each reason).
+    state: Literal["off", "paused", "training", "waiting", "scheduled", "held", "failed", "trained", "nothing_to_do"]
+    reason: Literal[
+        "train_off", "hugging_face", "no_engine", "no_data", "quiet_hours", "after_dream", "now", "in_use", "chat",
+        "workflow", "indexing", "dream", "you", "app_closed", "worker_stopped", "out_of_gpu_memory", "out_of_disk",
+        "cannot_resume", "data_unreadable", "engine_error", "learning_off", "learning_paused", "extraction",
+        "planned", "planning", "up_to_date", "gpu_busy", "memory_busy", "comparing",
+    ] | None = None
+
+
+class LearningTraining(WireModel):
+    """The personal model's current training run (L2a), polled while it runs."""
+
+    # "none": no run planned; the others are the run's state (never a raw machine word on screen).
+    state: Literal["none", "planned", "waiting", "preparing", "running", "pausing", "paused", "evaluating", "failed"]
+    job_id: str | None = Field(default=None, max_length=128)
+    # The personal-model version this run trains ("Training v2").
+    version: int | None = Field(default=None, ge=1)
+    step: int = Field(ge=0)
+    steps_total: int | None = Field(default=None, ge=0)
+    # The newest saved step: where it continues from.
+    checkpoint_step: int | None = Field(default=None, ge=0)
+    seconds_left: int | None = Field(default=None, ge=0)
+    pause_reason: Literal[
+        "in_use", "local_gpu", "learning_paused", "learning_off", "you", "app_closed", "worker_stopped",
+    ] | None = None
+    # Paused runs: continues by itself (quiet hours, or when Row-Bot is free after Train now), or asks.
+    resumes: Literal["quiet_hours", "when_free", "ask"] | None = None
+    failure: Literal["out_of_gpu_memory", "out_of_disk", "cannot_resume", "data_unreadable", "engine_error"] | None = None
+    # The newest saved step couldn't be used: it went back to the one before, or started over.
+    recovered: Literal["previous_checkpoint", "start_over"] | None = None
+    trigger: Literal["quiet_hours", "train_now"] | None = None
+    can_train_now: bool
+    runner: LearningRunnerStatus
+
+
+class LearningSnapshot(WireModel):
+    schema_version: Literal[1]
+    # Covers the saved choices and the switched-off chats, not progress or spending.
+    revision: str = Field(pattern=r"^[0-9a-f]{64}$")
+    state: Literal["off", "on", "paused"]
+    # False when the saved settings can't be read (Learning is then off).
+    readable: bool
+    sources: LearningSourcesSnapshot
+    apply_mode: Literal["ask_first", "automatic"]
+    spending: LearningSpending
+    quiet_hours: LearningQuietHours
+    past_chats: LearningPastChats
+    personal_model: LearningPersonalModel
+    training: LearningTraining
+    data: LearningData
+    opted_out_conversations: list[Annotated[str, StringConstraints(max_length=256)]] = Field(max_length=2000)
+    owner_unset_channels: list[LearningChannelNote] = Field(max_length=8)
+    needs_you: list[LearningNeedsYou] = Field(default_factory=list, max_length=20)
+    # L3a: last night's look for things to improve, the changes it drafted and where each kind of work stands.
+    overnight: LearningOvernight | None = None
+    changes: list[LearningChangeView] = Field(default_factory=list, max_length=50)
+    kinds_learning: list[LearningKindState] = Field(default_factory=list, max_length=5)
+    # L3b: the change being tested now, if any.
+    testing_now: LearningTestingNow | None = None
+    # L4a: how Row-Bot learns (while Learning is on).
+    method: LearningMethod | None = None
+
+
+class LearningNamedValue(WireModel):
+    name: str = Field(max_length=64)
+    value: str = Field(max_length=200)
+
+
+class LearningLeftOut(WireModel):
+    reason: str = Field(max_length=80)
+    count: int = Field(ge=0)
+
+
+class LearningDetailsData(WireModel):
+    examples: int = Field(ge=0)
+    validation: int = Field(ge=0)
+    conversations: int = Field(ge=0)
+    first_at: str | None = Field(default=None, max_length=64)
+    last_at: str | None = Field(default=None, max_length=64)
+    providers: list[Annotated[str, StringConstraints(max_length=80)]] = Field(max_length=16)
+    left_out: list[LearningLeftOut] = Field(max_length=32)
+    # D7: answers from OpenAI, Anthropic or Google models are in the data.
+    terms_note: bool
+
+
+class LearningDetailsMethod(WireModel):
+    name: str = Field(max_length=64)
+    title: str = Field(max_length=80)
+    rank: int = Field(ge=0)
+    learning_rate: float = Field(ge=0)
+    epochs: int = Field(ge=0)
+    context: int = Field(ge=0)
+    quantization: str = Field(max_length=16)
+
+
+class LearningDetailsRun(WireModel):
+    suite: str = Field(max_length=80)
+    arm: str = Field(max_length=128)
+    passed: int = Field(ge=0)
+    total: int = Field(ge=0)
+
+
+class LearningFile(WireModel):
+    name: str = Field(max_length=256)
+    bytes: int = Field(ge=0)
+
+
+class LearningVersionDetails(WireModel):
+    """Experiment details of one version (UX §4, §7): data, method, versions, every test run (counts
+    only) and its files."""
+
+    version: int = Field(ge=1)
+    data: LearningDetailsData
+    method: LearningDetailsMethod
+    versions: list[LearningNamedValue] = Field(max_length=8)
+    runs: list[LearningDetailsRun] = Field(max_length=12)
+    files: list[LearningFile] = Field(max_length=16)
+    budget_tokens_per_task: int = Field(ge=0)
+    comparison_note: str = Field(max_length=400)
+
+
+class LearningGpu(WireModel):
+    name: str = Field(max_length=128)
+    memory_gb: int = Field(ge=0, le=4096)
+    # "NVIDIA GeForce RTX 5070 Laptop (8 GB)"
+    label: str = Field(max_length=160)
+
+
+class LearningTier(WireModel):
+    id: str = Field(max_length=32)
+    label: str = Field(max_length=32)
+    certified: bool
+    summary: str = Field(max_length=256)
+    # The computer's memory (RAM and virtual memory) its training needs free here, as measured (O105).
+    system_memory_gb: int | None = Field(default=None, ge=1, le=4096)
+    # The graphics memory its training needs free on the card (its measured peak with a margin, O112).
+    card_need_gb: float | None = Field(default=None, ge=0, le=4096)
+
+
+class LearningMemory(WireModel):
+    # The most RAM and virtual memory can hold (Windows' commit limit; Linux: RAM and swap), and what is
+    # free of it now; ``system`` words the advice ("raise virtual memory" or "add swap").
+    limit_gb: int = Field(ge=0, le=65536)
+    free_gb: int = Field(ge=0, le=65536)
+    system: Literal["windows", "linux", "other"]
+
+
+class LearningHardware(WireModel):
+    # old_driver: a card that fits, with an NVIDIA driver older than 570 ("Update your NVIDIA
+    # driver to train here"); container: Row-Bot's Docker image, which doesn't train (O46);
+    # low_memory: a card that could train, on a computer whose RAM and virtual memory can't hold
+    # its smallest tier's training (O105; ``tier`` says what it needs).
+    state: Literal["gpu", "old_driver", "small_gpu", "low_memory", "no_gpu", "container", "unknown"]
+    gpu: LearningGpu | None
+    # The certified recipe tier this computer trains with, and larger ones still being measured.
+    tier: LearningTier | None
+    larger_tiers: list[LearningTier] = Field(max_length=8)
+    # Certified larger tiers the card fits but the computer's memory can't hold (O105).
+    memory_short: list[LearningTier] = Field(default_factory=list, max_length=8)
+    memory: LearningMemory | None = None
+    # O112: what the card had free when checked, and the tier Row-Bot recommends for it (the largest whose
+    # need fits; None when the card's free memory couldn't be read).
+    card_free_gb: float | None = Field(default=None, ge=0, le=4096)
+    recommended: LearningTier | None = None
+    starting_models: list[LearningStartingModel] = Field(max_length=8)
+    engine_download_bytes: int = Field(ge=0)
+    free_bytes: int | None = Field(default=None, ge=0)
+
+
+class LearningConversation(WireModel):
+    conversation_id: str = Field(max_length=256)
+    # learning: Teach is offered; opted_out: "Don't learn from this chat" is ticked;
+    # not_used: never recorded (`reason` says why); paused / off: nothing is recorded now.
+    state: Literal["learning", "opted_out", "not_used", "paused", "off"]
+    reason: str = Field(max_length=256)
+
+
+class LearningLessonView(WireModel):
+    # A lesson Learning put into use: its change; one Row-Bot saved for itself: its memory.
+    id: str = Field(max_length=128)
+    title: str = Field(max_length=200)
+    text: str = Field(max_length=600)
+    # learning: tested and put into use by Learning (E5); agent_saved: Row-Bot saved it for itself during
+    # a chat (Not tested, with Test it).
+    origin: Literal["agent_saved", "learning"]
+    status: Literal["not_tested", "testing", "tested_better", "tested_not_better", "in_use", "off"]
+    kind: LearningAnyKind | None = None
+    # How often recall used it this month ("used 12 times this month").
+    used: int = Field(default=0, ge=0)
+    # The change it is (or its test), for Turn off, Undo and Experiment details.
+    change_id: str = Field(default="", max_length=128)
+    updated_at: str = Field(max_length=64)
+
+
+class LearningLessonPage(WireModel):
+    items: list[LearningLessonView] = Field(max_length=200)
+    total: int = Field(ge=0)
+
+
+class LearningSetupChoices(WireModel):
+    sources: LearningSourcesSnapshot
+    apply_mode: Literal["ask_first", "automatic"]
+    monthly_token_limit: int = Field(ge=0, le=1_000_000_000)
+    train_in_quiet_hours: bool
+    train_where: Literal["this_computer", "hugging_face"]
+    starting_model: Literal["qwen3.5-2b", "qwen3.5-9b"] = "qwen3.5-2b"
+
+
+class LearningCommand(WireModel):
+    command_id: UUID
+    client_session_id: UUID
+    revision: str = Field(pattern=r"^[0-9a-f]{64}$")
+    action: Literal[
+        "turn_on", "turn_off", "pause", "resume", "delete_data", "opt_out", "opt_in", "teach",
+        "undo_teach", "answer_download", "train_now", "stop_training", "continue_training",
+        "discard_training", "use_recommended", "start_download", "stop_download", "cancel_download",
+        "remove_engine", "delete_starting_model", "make_ready", "choose_runtime",
+        "compare_version", "stop_compare", "use_version", "keep_version", "keep_not_now", "undo_use",
+        "export_version", "delete_version", "save_advanced", "reset_advanced", "retrain_without", "dismiss",
+        "review_version", "use_smaller_model", "change_starting_model",
+        "test_change", "use_change", "undo_change", "not_now_change", "dont_suggest_change", "edit_change",
+        "test_lesson", "delete_lesson", "undo_method",
+    ]
+    setup: LearningSetupChoices | None = None
+    # use_smaller_model (O112): the smaller starting model the Personal model view offered;
+    # change_starting_model (O124): the certified starting model the person chose in Settings.
+    model: Literal["", "qwen3.5-2b", "qwen3.5-9b"] = ""
+    # L2c2: the version an action is for, the kind of work, Export…'s folder, Advanced's values and a
+    # Needs you line to dismiss.
+    version: int | None = Field(default=None, ge=1, le=100_000)
+    kind: LearningKindOfWork | None = None
+    folder: str = Field(default="", max_length=1024)
+    advanced: LearningAdvancedValues | None = None
+    item_id: str = Field(default="", max_length=128)
+    # choose_runtime: where personal models run.
+    runtime: Literal["", "row_bot", "ollama", "lmstudio", "llama_cpp", "vllm"] = ""
+    # The training run a training action is for (the one the person saw).
+    job_id: str = Field(default="", max_length=128)
+    conversation_id: str = Field(default="", max_length=256)
+    # Teach: the reply (its message id) or the failed step (its tool call id).
+    message_id: str = Field(default="", max_length=256)
+    tool_call_id: str = Field(default="", max_length=256)
+    category: Literal["wrong_answer", "wrong_tool_or_step", "ignored_instructions", "other"] | None = None
+    note: str = Field(default="", max_length=2000)
+    # Teach's optional "What should it have done?" (L3b).
+    answer: str = Field(default="", max_length=2000)
+    signal_id: str = Field(default="", max_length=128)
+    # L3b: the change an action is for (a lesson's memory for test_lesson and delete_lesson), and an Edit's
+    # new words.
+    change_id: str = Field(default="", max_length=128)
+    text: str = Field(default="", max_length=4000)
+    download: Literal["download", "not_now"] | None = None
+
+
+class LearningReceipt(WireModel):
+    command_id: UUID
+    status: Literal["completed", "failed", "uncertain"]
+    summary: str = Field(max_length=1024)
+    snapshot: LearningSnapshot
+    # The Teach that was saved, for its Undo.
+    signal_id: str | None = Field(default=None, max_length=128)
+
+
 class DeveloperRepositoryRevisionInput(WireModel):
     revision: DeveloperRepositoryRevision
 
@@ -4229,6 +4999,8 @@ class PendingApproval(WireModel):
     # A helper's approval: the conversation that started it, which shows it too (B348).
     parent_conversation_id: OpaqueId | None = None
     task_id: OpaqueId | None
+    # It sends a post or an email: Home's Review shows it in full (G3).
+    goes_out: Literal["post", "email"] | None = None
 
 
 class PendingApprovalPage(WireModel):
@@ -5020,7 +5792,6 @@ class ModelVisibilityState(WireModel):
 
 class AgentRuntimeSettingsState(WireModel):
     schema_version: Literal[1] = 1
-    max_iterations: int = Field(ge=1, le=1000000)
     max_spawn_depth: int = Field(ge=1, le=1000000)
     max_concurrent_children: int = Field(ge=1, le=1000000)
     max_active_children_global: int = Field(ge=1, le=1000000)
@@ -5134,15 +5905,26 @@ class ApprovalAnswer(WireModel):
     other: str = Field(default="", max_length=500)
 
 
+class XPostEdit(WireModel):
+    """The person's edit of an X post on its card (G2): the new text, and the files kept by their SHA-256 start."""
+
+    text: str = Field(max_length=25000)
+    media: list[Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{12}$")]] = Field(default_factory=list,
+                                                                                       max_length=4)
+
+
 class ApprovalPayload(WireModel):
-    decision: Literal["approve", "reject"]
+    # "edit" changes an X post on its card (G2): never an approval, the post asks again as edited.
+    decision: Literal["approve", "reject", "edit"]
     nonce: Annotated[str, StringConstraints(min_length=32, max_length=256)]
-    # "turn" also approves later actions of the same kind until the turn ends (F21); only kinds the view marks
-    # repeatable take it, others are approved once.
-    scope: Literal["once", "turn"] = "once"
+    # "turn" also approves later actions of the same kind until the turn ends (F21), "chat" until the
+    # conversation ends ("Allow in this chat", 5.3.1 B2); only kinds the view marks repeatable take them,
+    # others are approved once.
+    scope: Literal["once", "turn", "chat"] = "once"
     # A question card (N4): "approve" answers it with these, one per question; "reject" skips it. An answer is the
     # person's input, never an approval of an action.
     answers: list[ApprovalAnswer] | None = Field(default=None, max_length=4)
+    edit: XPostEdit | None = None
 
 
 class DeckSetupPayload(WireModel):
@@ -5169,6 +5951,10 @@ class EmptyWorkspaceSetupPayload(WireModel):
 
 class CloneWorkspaceSetupPayload(WireModel):
     repo_url: str = Field(min_length=1, max_length=2048)
+
+
+class ConversationLinkPayload(WireModel):
+    link_id: str = Field(pattern=r"^[0-9a-f]{32}$")
 
 
 class MediaSavePayload(WireModel):
@@ -5340,7 +6126,6 @@ class TaskEditorSnapshot(WireModel):
     id: OpaqueId
     revision: str = Field(min_length=1, max_length=128)
     fields: TaskEditableFields
-    advanced: bool
     agent_profile_id: str = Field(max_length=128)
     approval_mode: str = Field(max_length=64)
     conversation_id: OpaqueId | None
@@ -5364,6 +6149,12 @@ class TaskRunReview(WireModel):
     conversation_id: OpaqueId | None
 
 
+class TaskRunAction(WireModel):
+    title: str = Field(min_length=1, max_length=256)
+    result: str = Field(max_length=512)
+    link: str | None = Field(default=None, max_length=2048)
+
+
 class TaskRunSummary(WireModel):
     id: OpaqueId
     task_id: OpaqueId
@@ -5382,6 +6173,10 @@ class TaskRunSummary(WireModel):
     notice: str | None = Field(default=None, max_length=512)
     # The one thing the person can do about it: choose another code folder (it was removed).
     fix: Literal["choose_folder"] | None = None
+    # What it did outside Row-Bot, from its tools' results: posts, emails, drafts (F31).
+    actions: list[TaskRunAction] = Field(default_factory=list, max_length=16)
+    # The approval card a waiting run waits on; the person reviews and answers it there.
+    approval_id: OpaqueId | None = None
 
 
 class TaskRunPage(WireModel):
@@ -5395,56 +6190,6 @@ class TaskRunPage(WireModel):
 class TaskRunResult(WireModel):
     run: TaskRunSummary
     replayed: bool
-
-
-class TaskApprovalMedia(WireModel):
-    name: str = Field(max_length=256)
-    size: int = Field(ge=0)
-    # The first hex digits of the SHA-256 of its contents.
-    fingerprint: str = Field(pattern=r"^[0-9a-f]{6,64}$")
-    kind: Literal["image", "video", "audio", "file"]
-
-
-class TaskApprovalCard(WireModel):
-    """Exactly what a person-only ("Always ask me") approval lets happen."""
-
-    action: str = Field(max_length=1024)
-    destination: str | None = Field(default=None, max_length=1024)
-    account: str | None = Field(default=None, max_length=256)
-    text: str | None = Field(default=None, max_length=16384)
-    media: list[TaskApprovalMedia] = Field(default_factory=list, max_length=16)
-
-
-class TaskApprovalReview(WireModel):
-    id: OpaqueId
-    task_id: OpaqueId
-    run_id: OpaqueId
-    revision: str = Field(pattern=r"^[a-f0-9]{64}$")
-    message: str = Field(max_length=16384)
-    requested_at: str = Field(max_length=80)
-    expires_at: str | None = Field(max_length=80)
-    approval_mode: str = Field(max_length=64)
-    message_truncated: bool
-    response_available: bool
-    nonce: str | None = Field(default=None, max_length=128)
-    # "question": Row-Bot's question (N4), answered on its own card (/approvals/{id}), never approved here.
-    kind: Literal["approval", "question"] = "approval"
-    # The person's own "Always ask me" approval: no approval level answers it for them.
-    person_only: bool = False
-    card: TaskApprovalCard | None = None
-
-
-class TaskApprovalPage(WireModel):
-    items: list[TaskApprovalReview] = Field(max_length=100)
-    total: int = Field(ge=0)
-    revision: str = Field(pattern=r"^[a-f0-9]{64}$")
-    next_cursor: str | None = Field(max_length=2048)
-
-
-class TaskApprovalResult(WireModel):
-    approval_id: OpaqueId
-    decision: Literal["approved", "denied"]
-    run: TaskRunSummary
 
 
 class TaskStopResult(WireModel):
@@ -5709,71 +6454,12 @@ class TaskCreatePayload(WireModel):
     fields: TaskEditableFields
 
 
-class TaskGraphFields(WireModel):
-    prompt: str | None = Field(default=None, max_length=16384)
-    condition: str | None = Field(default=None, max_length=16384)
-    message: str | None = Field(default=None, max_length=16384)
-    next: str | None = Field(default=None, max_length=16384)
-    if_true: str | None = Field(default=None, max_length=16384)
-    if_false: str | None = Field(default=None, max_length=16384)
-    if_approved: str | None = Field(default=None, max_length=16384)
-    if_denied: str | None = Field(default=None, max_length=16384)
-    on_error: str | None = Field(default=None, max_length=16384)
-    task_id: str | None = Field(default=None, max_length=16384)
-    channel: str | None = Field(default=None, max_length=16384)
-    objective: str | None = Field(default=None, max_length=16384)
-    profile: str | None = Field(default=None, max_length=16384)
-    developer_workspace_id: str | None = Field(default=None, max_length=16384)
-    editing_safety: str | None = Field(default=None, max_length=16384)
-    return_mode: str | None = Field(default=None, max_length=16384)
-    context: str | None = Field(default=None, max_length=16384)
-    max_retries: int | None = Field(default=None, ge=1, le=10)
-    retry_delay_seconds: int | None = Field(default=None, ge=0, le=300)
-    timeout_minutes: int | None = Field(default=None, ge=0, le=1440)
-    timeout_seconds: int | None = Field(default=None, ge=1, le=7200)
-    pass_output: bool | None = None
-    run_ids: list[Annotated[str, StringConstraints(max_length=128)]] | None = Field(
-        default=None, max_length=100
-    )
-    apps: list[Annotated[str, StringConstraints(min_length=3, max_length=512)]] | None = Field(
-        default=None, max_length=8
-    )
-    # "Always ask me": what the step does waits for the person's own approval under every level.
-    always_ask: bool | None = None
-
-
-class TaskGraphStepEdit(WireModel):
-    id: str = Field(min_length=1, max_length=128)
-    type: str = Field(min_length=1, max_length=128)
-    fields: TaskGraphFields
-
-
-class TaskGraphStep(TaskGraphStepEdit):
-    editable: bool
-    retained_fields: bool
-
-
-class TaskGraphSnapshot(WireModel):
-    task_id: OpaqueId
-    revision: str = Field(pattern=r"^[a-f0-9]{64}$")
-    steps: list[TaskGraphStep] = Field(max_length=100)
-    notify_only: bool
-
-
-class TaskGraphUpdatePayload(WireModel):
-    task_id: OpaqueId
-    task_revision: str = Field(pattern=r"^[a-f0-9]{64}$")
-    steps: list[TaskGraphStepEdit] = Field(min_length=1, max_length=100)
-
-
 class TaskSettingsFields(WireModel):
-    concurrency_group: str | None = Field(max_length=128)
     trigger_type: Literal["none", "task_complete", "webhook"]
     trigger_task_id: str | None = Field(max_length=128)
     model_override: str | None = Field(max_length=1024)
     agent_profile_id: str = Field(min_length=1, max_length=128)
     approval_mode: ApprovalLevel
-    persistent_enabled: bool
     # The workflow's own code folder: every step runs in it. None: the conversation's.
     workspace_id: str | None = Field(default=None, max_length=128)
     # A scheduled time while Row-Bot was closed: skip it, or run once when Row-Bot starts.
@@ -5782,6 +6468,8 @@ class TaskSettingsFields(WireModel):
     always_ask: list[Annotated[str, StringConstraints(min_length=1, max_length=512)]] = Field(
         default_factory=list, max_length=16
     )
+    # When its results go to its channels: after every run, only when a run needs the person, or a daily digest.
+    send_results: Literal["every_run", "needs_me", "digest"] = "every_run"
 
 
 class TaskSettingsSnapshot(WireModel):
@@ -6218,13 +6906,6 @@ class TaskStopPayload(WireModel):
     run_id: OpaqueId
 
 
-class TaskApprovalPayload(TaskStopPayload):
-    approval_id: OpaqueId
-    approval_revision: str = Field(pattern=r"^[a-f0-9]{64}$")
-    approved: bool
-    nonce: str = Field(min_length=1, max_length=128)
-
-
 class BuddyPreferences(WireModel):
     visible: bool
     collapsed: bool
@@ -6427,18 +7108,18 @@ class Command(WireModel):
         "conversation.queue.edit",
         "conversation.queue.remove",
         "conversation.queue.dispatch",
+        "conversation.link.start",
+        "conversation.link.dismiss",
         "artifact.edit",
         "task.create",
         "task.update",
         "task.delete",
         "task.duplicate",
         "task.delivery.update",
-        "task.graph.update",
         "task.settings.update",
         "task.webhook.rotate",
         "task.run",
         "task.stop",
-        "task.approval",
         "artifact.export",
         "artifact.share",
         "workspace.edit",
@@ -6610,6 +7291,8 @@ COMMAND_PAYLOADS = {
     # The conversation's interrupted agent work: Resume runs it, Dismiss stops it.
     "agent.resume": EmptyPayload,
     "agent.dismiss": EmptyPayload,
+    "conversation.link.start": ConversationLinkPayload,
+    "conversation.link.dismiss": ConversationLinkPayload,
     "media.save": MediaSavePayload,
     "conversation.queue.edit": QueueEditPayload,
     "conversation.queue.remove": QueueItemCommand,
@@ -6617,7 +7300,6 @@ COMMAND_PAYLOADS = {
     "artifact.edit": ArtifactEditPayload,
     "artifact.export": ArtifactExportPayload,
     "artifact.share": ArtifactSharePayload,
-    "task.graph.update": TaskGraphUpdatePayload,
     "task.create": TaskCreatePayload,
     "task.update": TaskUpdatePayload,
     "task.delete": TaskDeletePayload,
@@ -6627,7 +7309,6 @@ COMMAND_PAYLOADS = {
     "task.webhook.rotate": TaskWebhookRotatePayload,
     "task.run": TaskRunPayload,
     "task.stop": TaskStopPayload,
-    "task.approval": TaskApprovalPayload,
     "workspace.edit": WorkspaceEditPayload,
     "workspace.import": WorkspaceImportPayload,
     "workspace.undo": WorkspaceUndoPayload,
@@ -7184,8 +7865,6 @@ class CommandReceipt(WireModel):
     task_run_reserved: bool = False
     task_stop_requested: bool = False
     task_run_quiesced: bool = False
-    task_approval_recorded: bool = False
-    task_approval_decision: Literal["approved", "denied"] | None = None
     task_revision: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     status: Literal[
         "accepted",
@@ -7212,6 +7891,8 @@ class CommandReceipt(WireModel):
     approval_id: OpaqueId | None = None
     attachment_ref: Reference | None = None
     saved_name: str | None = Field(default=None, max_length=128)
+    # conversation.link.start (5.3.1 C): the conversation the person started from a proposal.
+    linked_conversation_id: OpaqueId | None = None
     binding_id: OpaqueId | None = None
     code: str | None = Field(default=None, max_length=80)
     current_revision: str | None = Field(default=None, min_length=1, max_length=128)
@@ -7265,6 +7946,8 @@ class ConversationView(WireModel):
     incognito: bool = False
     updated_at: str = Field(default="", max_length=80)
     parent_conversation_id: OpaqueId | None = None
+    # A conversation another one started (5.3.1 C): that conversation's id.
+    started_from: OpaqueId | None = None
     activity_state: Literal["active", "attention", "terminal"] | None = None
     activity_phase: str = Field(default="", max_length=64)
     category: Literal["chat", "designer", "code", "workflow"] = "chat"
@@ -7425,6 +8108,8 @@ class TraceSpecialization(WireModel):
         "question_answered", "page",
         # A call the model got wrong and sent again (U11): a quiet line, never its error text.
         "request_corrected",
+        # A conversation this one started or proposed (5.3.1 C), followed live by its link id.
+        "linked_conversation",
     ]
     skill_id: str = Field(default="", max_length=180)
     display_name: str = Field(default="", max_length=180)
@@ -7462,6 +8147,8 @@ class TraceSpecialization(WireModel):
     answers: list[TraceQuestionAnswer] = Field(default_factory=list, max_length=4)
     # page (N5): the page a step made or changed; the card re-reads its title and opens it by id.
     page_id: str = Field(default="", max_length=64, pattern=r"^(page-[0-9a-f]{8})?$")
+    # linked_conversation (5.3.1 C): the card reads the link's state by this id (conversation links).
+    link_id: str = Field(default="", max_length=32, pattern=r"^([0-9a-f]{32})?$")
 
 
 class TranscriptTraceItem(WireModel):
@@ -7501,6 +8188,28 @@ class TranscriptTraceGroup(WireModel):
     ]
 
 
+class LinkedFrom(WireModel):
+    id: OpaqueId
+    title: str = Field(min_length=1, max_length=160)
+    kind: Literal["message", "reply"] = "message"
+
+
+class ConversationLinkView(WireModel):
+    """A conversation another one started or proposed, as its card shows it (5.3.1 C)."""
+
+    link_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    title: str = Field(min_length=1, max_length=160)
+    conversation_id: OpaqueId | None
+    state: Literal["proposed", "working", "waiting", "done", "dismissed", "expired"]
+    proposed: bool
+    mode: Literal["fresh", "fork"]
+
+
+class ConversationLinkPage(WireModel):
+    schema_version: Literal[1] = 1
+    items: list[ConversationLinkView] = Field(max_length=50)
+
+
 class TranscriptRow(WireModel):
     id: str = Field(min_length=1, max_length=1024)
     message_id: str | None = Field(default=None, max_length=256)
@@ -7517,13 +8226,23 @@ class TranscriptRow(WireModel):
     # A server-started follow-up (a goal step, work continuing in a resource
     # the assistant created), a delegated agent's task or its parent's
     # messages to it: the row's text is a short public note.
-    note: Literal["continuation", "agent_task", "agent_guidance", "page"] | None = None
+    # Learning (preview): "personal_model_fallback" is the quiet line where the main
+    # model finished a turn the personal model got stuck on.
+    note: Literal["continuation", "agent_task", "agent_guidance", "page", "personal_model_fallback",
+                  "linked"] | None = None
+    # A message from another conversation (5.3.1 C, note "linked"): where it came from.
+    linked_from: LinkedFrom | None = None
     # A delegated agent's approval announced in its parent conversation: the
     # row is answered in place with the approval card.
     approval_id: str | None = Field(default=None, max_length=128)
     # The provider stopped this reply at its output token limit: the client
     # says so under it. The saved reply itself is the model's own text.
     cut_short: bool = False
+    # Learning (preview): the reply came from the person's personal model ("Answered
+    # by your personal model").
+    answered_by: Literal["personal_model"] | None = None
+    # Learning (preview): its turn recalled a lesson in use ("Used a lesson").
+    used_lesson: bool = False
 
 
 class Snapshot(WireModel):
@@ -7646,6 +8365,8 @@ class ModelChoice(WireModel):
     # F10: listed first (a favourite's place, from 1) or under "More models".
     favourite_rank: int | None = Field(default=None, ge=1, le=64)
     hidden: bool = False
+    # Learning (preview, D11): one of the person's personal-model versions ("Personal model v1").
+    personal: bool = False
 
 
 class CapabilityChoice(WireModel):
@@ -7764,9 +8485,9 @@ class Limits(WireModel):
     query_rows: Literal[200] = 200
     transcript_rows: Literal[100] = 100
     stream_connections_per_session: Literal[4] = 4
-    attachment_bytes: Literal[26214400] = 26214400
+    attachment_bytes: Literal[209715200] = 209715200
     upload_chunk_bytes: Literal[1048576] = 1048576
-    upload_batch_bytes: Literal[104857600] = 104857600
+    upload_batch_bytes: Literal[1073741824] = 1073741824
     upload_chunks_in_flight: Literal[4] = 4
     upload_ttl_seconds: Literal[1800] = 1800
 
@@ -7780,6 +8501,9 @@ class HandshakeView(Choices):
     client_group_id: UUID
     csrf_token: str = Field(min_length=32, max_length=256)
     authentication_kind: Literal["local_owner", "session"]
+    # False for a window or browser on this computer that no person signed in (a program
+    # Row-Bot started, or its own browser): it may look, never change anything.
+    may_act: bool = True
     client_compatibility: Literal["current", "newer", "unknown"] = "unknown"
     application_capabilities: list[OpaqueId] = Field(
         default_factory=list, max_length=64
@@ -7820,6 +8544,32 @@ class XPostApproval(WireModel):
     # The text of the post a delete removes, when X said it.
     target_text: str = Field(default="", max_length=25000)
     media: list[XPostMedia] = Field(default_factory=list, max_length=4)
+    # How long a post the account may send (280, or 25,000 with an X subscription); 0 when X didn't say.
+    limit: int = Field(default=0, ge=0, le=25000)
+    # Its time slot (G3), local "YYYY-MM-DDTHH:MM": approving schedules it for then. "" posts at once.
+    post_at: str = Field(default="", max_length=16, pattern=r"^(\d{4}-\d\d-\d\dT\d\d:\d\d)?$")
+
+
+class ScheduledPost(WireModel):
+    """A post approved for a time slot, waiting for it (G3); Cancel stops it."""
+
+    id: str = Field(pattern=r"^xs-[0-9a-f]{12}$")
+    account_id: str = Field(pattern=r"^[0-9]{1,20}$")
+    username: str = Field(default="", pattern=r"^[A-Za-z0-9_]{0,50}$")
+    action: Literal["post", "reply", "quote"]
+    text: str = Field(default="", max_length=25000)
+    target_url: str = Field(default="", max_length=256, pattern=r"^(https://x\.com/[A-Za-z0-9_]+/status/[0-9]+)?$")
+    post_at: str = Field(pattern=r"^\d{4}-\d\d-\d\dT\d\d:\d\d$")
+    media: list[XPostMedia] = Field(default_factory=list, max_length=4)
+
+
+class ScheduledPostPage(WireModel):
+    schema_version: Literal[1]
+    items: list[ScheduledPost] = Field(max_length=200)
+
+
+class ScheduledPostCancelled(WireModel):
+    cancelled: Literal[True]
 
 
 class ApprovalView(WireModel):
@@ -7838,7 +8588,7 @@ class ApprovalView(WireModel):
     requesting_trace_id: str = Field(default="", max_length=256)
     setup: ApprovalSetup | None = None
     app: TraceAppRef | None = None
-    # Whether "approve the rest of this turn" is offered for this action (F21).
+    # Whether "Allow in this chat" is offered for this action (F21, 5.3.1 B2).
     repeatable: bool = False
     # Under Auto: why the reviewer asked the person rather than approving ("The reviewer asked you: …").
     reviewer_reason: str = Field(default="", max_length=240)
@@ -8409,16 +9159,16 @@ class DictationSnapshot(WireModel):
         "capturing", "receiving", "transcribing", "completed", "stopping", "stopped"
     ]
     quiesced: bool
-    expires_in_ms: int = Field(ge=0, le=120000)
-    max_audio_bytes: Literal[8388608] = 8388608
-    max_utterance_ms: Literal[30000] = 30000
+    expires_in_ms: int = Field(ge=0, le=360000)
+    max_audio_bytes: Literal[33554432] = 33554432
+    max_utterance_ms: Literal[300000] = 300000
 
 
 class DictationResult(WireModel):
     snapshot: DictationSnapshot
     utterance_id: UUID
     outcome: Literal["transcribed", "no_speech"]
-    text: str = Field(max_length=4000)
+    text: str = Field(max_length=20000)
 
 
 class TalkStart(WireModel):
@@ -8441,11 +9191,11 @@ class TalkSnapshot(WireModel):
         "stopped",
     ]
     quiesced: bool
-    expires_in_ms: int = Field(ge=0, le=120000)
+    expires_in_ms: int = Field(ge=0, le=360000)
     run_id: OpaqueId | None
     transport: Literal["browser_local"]
-    max_audio_bytes: Literal[8388608]
-    max_utterance_ms: Literal[30000]
+    max_audio_bytes: Literal[33554432]
+    max_utterance_ms: Literal[300000]
 
 
 class TalkResult(WireModel):

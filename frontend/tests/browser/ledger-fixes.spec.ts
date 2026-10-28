@@ -77,7 +77,7 @@ test.beforeEach(async ({ context }) => {
   await blockFixtureServiceWorkers(context);
 });
 
-test('a monthly workflow reads as Monthly, its step shows its app, and delivery lists only set-up channels (B345)', async ({
+test('a monthly workflow reads as Monthly, and delivery lists only set-up channels (B345)', async ({
   page,
 }, info) => {
   test.slow();
@@ -108,28 +108,6 @@ test('a monthly workflow reads as Monthly, its step shows its app, and delivery 
     await everywhere(page, info, 'delivery-list', () =>
       delivery.scrollIntoViewIfNeeded(),
     );
-
-    await openWorkflows(page);
-    await page
-      .locator('.workflow-grid > li')
-      .filter({ hasText: 'Month-end close' })
-      .getByRole('button', {
-        name: 'More actions for Month-end close',
-        exact: true,
-      })
-      .click();
-    await page
-      .getByRole('menuitem', { name: 'Edit workflow steps', exact: true })
-      .click();
-    await page
-      .getByRole('radiogroup', { name: 'Show steps as' })
-      .getByRole('radio', { name: 'List' })
-      .click();
-    const chips = page
-      .getByRole('list', { name: 'Workflow step order' })
-      .getByRole('list', { name: 'Apps this step uses' });
-    await expect(chips).toHaveText('CCounter');
-    await everywhere(page, info, 'step-app-chips');
   } finally {
     await seed(page, '/__s12_fixture/remove');
     await seed(page, '/__p6_fixture/views/remove');

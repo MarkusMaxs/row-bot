@@ -169,7 +169,9 @@ def _normalize_tool_policy(policy: Mapping[str, Any] | None) -> dict[str, Any]:
     result.pop("deny_memory_write", None)
     result.pop("allow_tool_groups", None)
     result["capability"] = str(result.get("capability") or "read_only")
-    result["allow_tools"] = _dedup_text_list(result.get("allow_tools"))
+    # A profile lists no tools (F31): every turn has the tools a chat has. Lists saved before are dropped.
+    result.pop("allow_tools", None)
+    result.pop("deny_tools", None)
     if "allow_delegation" in result:
         result["allow_delegation"] = bool(result.get("allow_delegation"))
     return result
@@ -199,144 +201,8 @@ def _default_approval_policy() -> dict[str, Any]:
     return {"mode": "inherit"}
 
 
-_COMMON_PROFILE_TOOLS = [
-    "memory",
-    "row_bot_status",
-    "conversation_search",
-    "duckduckgo",
-    "web_search",
-    "url_reader",
-    "filesystem",
-    "shell",
-    # Designs and code folders the work needs, and Connect cards (decision 12).
-    "conversation_setup",
-]
-
-
-def _profile_tools(*items: str) -> list[str]:
-    result: list[str] = []
-    seen: set[str] = set()
-    for item in [*_COMMON_PROFILE_TOOLS, *items]:
-        text = str(item or "").strip()
-        if text and text not in seen:
-            seen.add(text)
-            result.append(text)
-    return result
-
-
-_PLAN_TOOLS = _profile_tools(
-    "calendar",
-    "documents",
-    "gmail",
-    "outlook_calendar",
-    "outlook_mail",
-    "task",
-    "tracker",
-    "weather",
-    "calculator",
-)
-
-_RESEARCH_TOOLS = _profile_tools(
-    "arxiv",
-    "browser",
-    "documents",
-    "wiki",
-    "wikipedia",
-    "youtube",
-)
-
-_WRITE_TOOLS = _profile_tools(
-    "calendar",
-    "documents",
-    "gmail",
-    "outlook_calendar",
-    "outlook_mail",
-    "task",
-)
-
-_IDEAS_TOOLS = _profile_tools(
-    "image_gen",
-)
-
-_KNOWLEDGE_TOOLS = _profile_tools(
-    "documents",
-    "wiki",
-    "wikipedia",
-)
-
-_DATA_TOOLS = _profile_tools(
-    "calculator",
-    "chart",
-    "documents",
-    "wolfram_alpha",
-)
-
-_CREATIVE_TOOLS = _profile_tools(
-    "designer",
-    "documents",
-    "image_gen",
-    "video_gen",
-    "vision",
-)
-
-_AUTOMATE_TOOLS = _profile_tools(
-    "calendar",
-    "gmail",
-    "outlook_calendar",
-    "outlook_mail",
-    "task",
-    "tracker",
-    "weather",
-)
-
-_QUALITY_REVIEW_TOOLS = _profile_tools(
-    "documents",
-    "calculator",
-)
-
-_DEVELOP_TOOLS = _profile_tools(
-    "browser",
-    "custom_tool_builder",
-    "developer",
-    "system_info",
-    "vision",
-)
-
-_SYNTHESIS_TOOLS = _profile_tools(
-    "documents",
-)
-
-_VERIFIER_TOOLS = _profile_tools(
-    "browser",
-    "system_info",
-    "vision",
-)
-
-_CODE_REVIEW_TOOLS = _profile_tools(
-    "browser",
-    "developer",
-    "documents",
-    "system_info",
-)
-
-_WEB_UI_CHECKER_TOOLS = _profile_tools(
-    "browser",
-    "system_info",
-    "vision",
-)
-
-
-def _tool_policy(
-    capability: str,
-    *,
-    allow_tools: list[str] | None = None,
-    allow_delegation: bool = False,
-) -> dict[str, Any]:
-    return {
-        "capability": capability,
-        "allow_tools": list(allow_tools or []),
-        "allow_delegation": allow_delegation,
-    }
+def _tool_policy(capability: str, *, allow_delegation: bool = False) -> dict[str, Any]:
+    return {"capability": capability, "allow_delegation": allow_delegation}
 
 
 def _skill_policy(
@@ -385,7 +251,6 @@ def _builtin(
     ui_icon: str = "smart_toy",
     ui_color: str = "blue",
     ui_group: str = "Everyday",
-    allow_tools: list[str] | None = None,
     skills_override: list[str] | None = None,
 ) -> dict[str, Any]:
     profile = {
@@ -411,10 +276,7 @@ def _builtin(
         "created_from_workflow_id": "",
         "owner_workspace_id": "",
         "model_policy_json": _default_model_policy(),
-        "tool_policy_json": _tool_policy(
-            capability,
-            allow_tools=allow_tools,
-        ),
+        "tool_policy_json": _tool_policy(capability),
         "skill_policy_json": _skill_policy(skills_override=skills_override),
         "context_policy_json": _context_policy(context_mode),
         "workspace_policy_json": _workspace_policy(
@@ -461,7 +323,6 @@ BUILTIN_AGENT_PROFILES: tuple[dict[str, Any], ...] = (
         ui_icon="route",
         ui_color="indigo",
         ui_group="Everyday",
-        allow_tools=_PLAN_TOOLS,
         skills_override=["brain_dump", "task_automation"],
     ),
     _builtin(
@@ -478,7 +339,6 @@ BUILTIN_AGENT_PROFILES: tuple[dict[str, Any], ...] = (
         ui_icon="manage_search",
         ui_color="teal",
         ui_group="Everyday",
-        allow_tools=_RESEARCH_TOOLS,
         skills_override=["deep_research", "web_navigator"],
     ),
     _builtin(
@@ -495,7 +355,6 @@ BUILTIN_AGENT_PROFILES: tuple[dict[str, Any], ...] = (
         ui_icon="edit_note",
         ui_color="green",
         ui_group="Everyday",
-        allow_tools=_WRITE_TOOLS,
         skills_override=["humanizer", "meeting_notes"],
     ),
     _builtin(
@@ -512,7 +371,6 @@ BUILTIN_AGENT_PROFILES: tuple[dict[str, Any], ...] = (
         ui_icon="psychology",
         ui_color="amber",
         ui_group="Everyday",
-        allow_tools=_IDEAS_TOOLS,
     ),
     _builtin(
         "knowledge",
@@ -528,7 +386,6 @@ BUILTIN_AGENT_PROFILES: tuple[dict[str, Any], ...] = (
         ui_icon="library_books",
         ui_color="brown",
         ui_group="Work",
-        allow_tools=_KNOWLEDGE_TOOLS,
         skills_override=["knowledge_base", "self_reflection", "brain_dump"],
     ),
     _builtin(
@@ -545,7 +402,6 @@ BUILTIN_AGENT_PROFILES: tuple[dict[str, Any], ...] = (
         ui_icon="query_stats",
         ui_color="deep-purple",
         ui_group="Work",
-        allow_tools=_DATA_TOOLS,
         skills_override=["data_analyst"],
     ),
     _builtin(
@@ -562,7 +418,6 @@ BUILTIN_AGENT_PROFILES: tuple[dict[str, Any], ...] = (
         ui_icon="precision_manufacturing",
         ui_color="orange",
         ui_group="Work",
-        allow_tools=_AUTOMATE_TOOLS,
         skills_override=["task_automation"],
     ),
     _builtin(
@@ -579,7 +434,6 @@ BUILTIN_AGENT_PROFILES: tuple[dict[str, Any], ...] = (
         ui_icon="fact_check",
         ui_color="purple",
         ui_group="Work",
-        allow_tools=_QUALITY_REVIEW_TOOLS,
     ),
     _builtin(
         "design",
@@ -595,7 +449,6 @@ BUILTIN_AGENT_PROFILES: tuple[dict[str, Any], ...] = (
         ui_icon="palette",
         ui_color="pink",
         ui_group="Creative",
-        allow_tools=_CREATIVE_TOOLS,
         skills_override=["design_creator"],
     ),
     _builtin(
@@ -613,7 +466,6 @@ BUILTIN_AGENT_PROFILES: tuple[dict[str, Any], ...] = (
         ui_icon="terminal",
         ui_color="blue-grey",
         ui_group="Developer",
-        allow_tools=_DEVELOP_TOOLS,
     ),
     _builtin(
         "code_review",
@@ -629,7 +481,6 @@ BUILTIN_AGENT_PROFILES: tuple[dict[str, Any], ...] = (
         ui_icon="code",
         ui_color="blue-grey",
         ui_group="Developer",
-        allow_tools=_CODE_REVIEW_TOOLS,
     ),
     _builtin(
         "ui_check",
@@ -645,7 +496,6 @@ BUILTIN_AGENT_PROFILES: tuple[dict[str, Any], ...] = (
         ui_icon="bug_report",
         ui_color="red",
         ui_group="Developer",
-        allow_tools=_WEB_UI_CHECKER_TOOLS,
         skills_override=["web_navigator"],
     ),
     _builtin(
@@ -677,7 +527,6 @@ BUILTIN_AGENT_PROFILES: tuple[dict[str, Any], ...] = (
         ui_icon="hub",
         ui_color="blue",
         ui_group="Advanced/Internal",
-        allow_tools=_SYNTHESIS_TOOLS,
     ),
     _builtin(
         "verify",
@@ -694,7 +543,6 @@ BUILTIN_AGENT_PROFILES: tuple[dict[str, Any], ...] = (
         ui_icon="science",
         ui_color="orange",
         ui_group="Advanced/Internal",
-        allow_tools=_VERIFIER_TOOLS,
     ),
 )
 
@@ -1238,8 +1086,7 @@ def profile_summary(profile: Mapping[str, Any]) -> str:
     context_policy = _json_obj(profile.get("context_policy_json"), field="context_policy_json")
     capability = str(tool_policy.get("capability") or "read_only")
     context = str(context_policy.get("default_context_mode") or "auto")
-    tool_scope = "selected tools" if tool_policy.get("allow_tools") else "inherits enabled tools"
     return (
         f"{profile.get('display_name') or profile.get('slug')} "
-        f"({capability}, {tool_scope}, context={context}) - {profile.get('description') or ''}"
+        f"({capability}, context={context}) - {profile.get('description') or ''}"
     ).strip()

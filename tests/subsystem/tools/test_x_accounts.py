@@ -191,7 +191,7 @@ def test_the_card_names_the_account_and_shows_everything_that_goes_out(x, person
 
     fake, tool = x
     asked, _ = person
-    x_accounts.add(fake.sign_in(*ROWBOT))
+    x_accounts.add(fake.sign_in(*ROWBOT, subscription="Premium"))  # Posts up to 25,000 characters.
     picture = _picture(tmp_path / "launch.png")
     text = "Row-Bot 5.3 is out. " + "Every post names its account. " * 60  # Far past the reason's 1,024.
 
@@ -287,6 +287,59 @@ def test_a_changed_file_asks_again_in_a_paused_conversation(x, monkeypatch, tmp_
     assert first["x_post"]["media"][0]["sha256"] != second["x_post"]["media"][0]["sha256"]
     done = app.invoke(Command(resume=True), config)
     assert "\nPosted as @rowbot_ai: " in done["result"] and len(fake.posts) == 1
+
+
+def test_the_person_edits_a_post_on_its_card_and_approves_the_edited_post(x, monkeypatch, tmp_path):
+    """G2: an edit is never an approval: the paused tool asks again with the edited text and the files kept."""
+    from typing import TypedDict
+
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.graph import END, START, StateGraph
+    from langgraph.types import Command
+
+    fake, tool = x
+    _mode(monkeypatch, "ask")
+    x_accounts.add(fake.sign_in(*ROWBOT))
+    first, second = _picture(tmp_path / "a.png"), _picture(tmp_path / "b.png", "navy")
+
+    class State(TypedDict, total=False):
+        result: str
+
+    def call(_state):
+        return {"result": tool._x_post("post", text="Draft launch post", media_paths=[str(first), str(second)])}
+    graph = StateGraph(State)
+    graph.add_node("x_post", call)
+    graph.add_edge(START, "x_post")
+    graph.add_edge("x_post", END)
+    app = graph.compile(checkpointer=InMemorySaver())
+    config = {"configurable": {"thread_id": "g2"}}
+
+    card = app.invoke({}, config)["__interrupt__"][0].value
+    kept = card["x_post"]["media"][1]["sha256"]
+    again = app.invoke(Command(resume={"x_post_edit": {"text": "Row-Bot 5.3.1 is out.", "media": [kept]}}), config)
+
+    assert fake.posts == [], "an edit sends nothing"
+    edited = again["__interrupt__"][0].value
+    assert edited["x_post"]["text"] == "Row-Bot 5.3.1 is out." and edited["binding"] != card["binding"]
+    assert [item["name"] for item in edited["x_post"]["media"]] == ["b.png"]
+    assert edited["x_post"]["limit"] == 280  # The account's limit, read before the card.
+    done = app.invoke(Command(resume=True), config)
+
+    [sent] = fake.posts
+    assert sent["text"].startswith("Row-Bot 5.3.1 is out.") and len(sent["media_ids"]) == 1
+    assert "The person edited the post on its card, then approved it as edited:\nRow-Bot 5.3.1 is out." in done["result"]
+
+
+def test_an_edit_too_long_for_the_account_sends_nothing(x, person):
+    fake, tool = x
+    asked, answers = person
+    x_accounts.add(fake.sign_in(*ROWBOT))
+    answers.append({"x_post_edit": {"text": "Longer. " * 40, "media": []}})
+
+    result = tool._x_post("post", text="Short", account="@rowbot_ai")
+
+    assert result.startswith("The person edited the post, but it can't go out as edited: That post is 320 characters")
+    assert result.endswith("Nothing was sent to X.") and len(asked) == 1 and _creates(fake) == 0
 
 
 # ── Who approves ─────────────────────────────────────────────────────────────
@@ -511,3 +564,146 @@ def test_an_old_slot_the_keychain_cannot_delete_yet_leaves_the_account_usable(x,
     monkeypatch.setattr(keyring, "delete_password", real_delete)
     assert x_accounts.migrate().handle == "@rowbot_ai"  # The next check removes it.
     assert account_tokens.read("x") is None and [a.handle for a in x_accounts.listed()] == ["@rowbot_ai"]
+
+
+
+# ── Post length (5.3.1 G1) ───────────────────────────────────────────────────
+
+
+def test_x_counts_a_posts_length_by_weight():
+    assert x_posting.weighted_length("Row-Bot 5.3 is out") == 18
+    assert x_posting.weighted_length("Read it: https://row-bot.ai/docs/a-very-long-path?with=query") == 9 + 23
+    assert x_posting.weighted_length("東京") == 4 and x_posting.weighted_length("café — ok") == 9
+
+
+def test_a_post_too_long_for_the_account_is_refused_before_the_card(x, person):
+    fake, tool = x
+    asked, _ = person
+    x_accounts.add(fake.sign_in(*ROWBOT))  # No X subscription: 280 characters.
+    text = "Row-Bot runs on your computer. " * 10  # 310 characters.
+
+    refused = tool._x_post("post", text=text, account="@rowbot_ai")
+
+    assert refused.startswith("That post is 310 characters as X counts them (each link counts 23); @rowbot_ai can "
+                              "post up to 280 without an X subscription. Shorten it by 30")
+    assert asked == [] and _creates(fake) == 0, "no card for a post X would refuse"
+    listed = tool._x_accounts()
+    assert "@rowbot_ai · Row-Bot (ID 111): signed in; posts up to 280 characters" in listed
+    assert "Media: up to 4 pictures (5 MB each) or one GIF (15 MB) or one video (512 MB) per post." in listed
+
+
+def test_a_subscribed_account_posts_a_long_post(x, person):
+    fake, tool = x
+    x_accounts.add(fake.sign_in(*ROWBOT, subscription="Premium"))
+
+    sent = tool._x_post("post", text="A longer post about Row-Bot. " * 20, account="@rowbot_ai")
+
+    assert "https://x.com/rowbot_ai/status/" in sent and _creates(fake) == 1
+
+
+
+# ── Time slots and scheduled posts (5.3.1 G3) ────────────────────────────────
+
+
+@pytest.fixture
+def notices(monkeypatch):
+    from row_bot import notifications
+    said: list[tuple[str, str]] = []
+    monkeypatch.setattr(notifications, "notify", lambda title, message, *a, **k: said.append((title, message)))
+    return said
+
+
+def test_a_slot_is_a_local_time_ahead_and_within_a_week():
+    from datetime import datetime
+    now = datetime(2026, 10, 28, 9, 0)
+
+    assert x_posting.slot("13:00", now) == datetime(2026, 10, 28, 13, 0)
+    assert x_posting.slot("08:30", now) == datetime(2026, 10, 29, 8, 30), "a time already past today is tomorrow's"
+    assert x_posting.slot("2026-11-01T09:30", now) == datetime(2026, 11, 1, 9, 30)
+    assert x_posting.slot("", now) is None
+    for refused, words in (("2026-10-27T10:00", "has passed"), ("2026-11-05T09:01", "up to 7 days ahead"),
+                           ("tomorrow", "a local time like 13:00")):
+        with pytest.raises(x_posting.XPostError, match=words):
+            x_posting.slot(refused, now)
+
+
+def test_an_approved_post_with_a_slot_goes_out_at_its_time_once(x, person, notices, tmp_path):
+    from datetime import datetime, timedelta
+    fake, tool = x
+    asked, _ = person
+    x_accounts.add(fake.sign_in(*ROWBOT))
+    picture = _picture(tmp_path / "chart.png")
+    when = (datetime.now() + timedelta(hours=2)).replace(second=0, microsecond=0)
+
+    result = tool._x_post("post", text="Tonight's chart", media_paths=[str(picture)], account="@rowbot_ai",
+                          post_at=when.isoformat(timespec="minutes"))
+
+    [card] = asked
+    assert card["x_post"]["post_at"] == when.isoformat(timespec="minutes")
+    assert card["binding"].endswith("@" + when.isoformat(timespec="minutes")), "the approval is for that time"
+    assert f"Approved for its time: it goes out as @rowbot_ai at {when:%H:%M}" in result
+    assert _creates(fake) == 0, "nothing is on X before its time"
+    [waiting] = x_posting.scheduled_posts()
+    assert (waiting["username"], waiting["text"], waiting["post_at"]) == ("rowbot_ai", "Tonight's chart",
+                                                                          when.isoformat(timespec="minutes"))
+    assert waiting["media"][0]["name"] == "chart.png" and str(tmp_path) not in str(waiting)
+
+    assert x_posting.send_due(when - timedelta(minutes=1)) == []
+    [sent] = x_posting.send_due(when)
+    assert sent["status"] == "posted" and sent["url"].startswith("https://x.com/rowbot_ai/status/")
+    assert x_posting.send_due(when + timedelta(minutes=1)) == [] and _creates(fake) == 1
+    assert x_posting.scheduled_posts() == []
+    assert notices == [("Posted on X as @rowbot_ai", sent["url"])]
+
+
+def test_a_scheduled_post_never_goes_out_cancelled_changed_or_long_missed(x, person, notices, tmp_path):
+    from datetime import datetime, timedelta
+    fake, tool = x
+    x_accounts.add(fake.sign_in(*ROWBOT))
+    picture = _picture(tmp_path / "chart.png")
+    when = (datetime.now() + timedelta(hours=1)).replace(second=0, microsecond=0)
+    for text in ("Cancelled", "Changed file", "Missed"):
+        tool._x_post("post", text=text, media_paths=[str(picture)] if text == "Changed file" else None,
+                     account="@rowbot_ai", post_at=when.isoformat(timespec="minutes"))
+    cancelled, changed, missed = x_posting.scheduled_posts()
+
+    assert x_posting.cancel_scheduled(cancelled["id"]) and not x_posting.cancel_scheduled(cancelled["id"])
+    _picture(picture, "navy")
+    done = {item["id"]: item for item in x_posting.send_due(when)}
+    assert done[changed["id"]]["status"] == "failed"
+    assert done[changed["id"]]["result"] == "A file changed after you approved the post, so it wasn't posted."
+    assert done[missed["id"]]["status"] == "posted"  # On time.
+
+    tool._x_post("post", text="Late", account="@rowbot_ai", post_at=when.isoformat(timespec="minutes"))
+    [late] = x_posting.send_due(when + timedelta(hours=13))
+    assert late["status"] == "missed" and "wasn't posted. Approve it again to post it." in late["result"]
+    assert cancelled["id"] not in done and _creates(fake) == 1
+    assert [title for title, _ in notices] == ["A scheduled post as @rowbot_ai didn't go out", "Posted on X as @rowbot_ai",
+                                               "A scheduled post as @rowbot_ai didn't go out"]
+
+
+def test_a_delete_has_no_time_slot(x, person):
+    fake, tool = x
+    asked, _ = person
+    x_accounts.add(fake.sign_in(*ROWBOT))
+    refused = tool._x_post("delete", tweet_id="123", account="@rowbot_ai", post_at="13:00")
+    assert refused == "A delete happens at once; leave post_at out." and asked == []
+
+
+# ── Numbers (5.3.1 G7) ───────────────────────────────────────────────────────
+
+
+def test_an_accounts_recent_posts_come_with_their_numbers_and_totals(x):
+    fake, tool = x
+    x_accounts.add(fake.sign_in(*ROWBOT))
+    for text, views, likes in (("Pages are out", 1200, 30), ("Workflows run as chats", 340, 1)):
+        fake.post("111", text)["public_metrics"] = {"impression_count": views, "like_count": likes,
+                                                    "retweet_count": 2, "reply_count": 1, "quote_count": 0,
+                                                    "bookmark_count": 5}
+
+    read = tool._x_read("timeline", account="@rowbot_ai")
+
+    assert ("Together, these 2 posts: 1,540 views · 31 likes · 4 reposts · 2 replies · 0 quotes · 10 bookmarks. "
+            "Most viewed: ") in read
+    assert "1,200 views · 30 likes · 2 reposts · 1 reply · 0 quotes · 5 bookmarks" in read
+    assert "340 views · 1 like · 2 reposts · 1 reply" in read

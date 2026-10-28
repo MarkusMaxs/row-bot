@@ -30,14 +30,9 @@ def freeze_profile(configurable: dict[str, Any], *, frozen: bool = False) -> Non
     configurable["agent_profile_id"] = str(snapshot.get("id") or reference)
     configurable["agent_profile_snapshot"] = snapshot
     configurable["agent_profile_frozen"] = True
-    policy = snapshot.get("tool_policy_json") or {}
-    allowed = [str(value).strip() for value in (policy.get("allow_tools") or []) if str(value).strip()] if isinstance(policy, dict) else []
-    # A profile's empty list means inherit, matching the retained owner. An
-    # explicit runtime [] remains deny-all rather than becoming unrestricted.
+    # A profile lists no tools (F31): a turn has every tool a chat has. An explicit runtime list
+    # from elsewhere is kept as given; [] stays deny-all rather than becoming unrestricted.
     if "tool_allowlist" in configurable and configurable["tool_allowlist"] is not None:
         existing = configurable["tool_allowlist"]
         existing = [existing] if isinstance(existing, str) else list(existing)
-        configurable["tool_allowlist"] = [str(value).strip() for value in existing
-                                            if str(value).strip() and (not allowed or str(value).strip() in allowed)]
-    elif allowed:
-        configurable["tool_allowlist"] = list(dict.fromkeys(allowed))
+        configurable["tool_allowlist"] = [str(value).strip() for value in existing if str(value).strip()]

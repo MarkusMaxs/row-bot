@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 
 from tests.subsystem.client_protocol.test_protocol_application import service  # noqa: F401
 from tests.subsystem.client_protocol.test_protocol_security import _native_proof, bootstrap, client_app
+from tests.helpers.access import person_window
 
 pytestmark = pytest.mark.subsystem
 
@@ -113,7 +114,7 @@ def test_the_picked_folder_is_bound_and_the_paused_turn_goes_on_in_it(service, t
 
     service.stream_factory, service.resume_factory = stream, resume
     app = create_client_platform_app(service, choices=lambda: {"models": [], "capabilities": []},
-                                     folder_selections=FolderSelections(picker=lambda: picked))
+                                     folder_selections=FolderSelections(picker=lambda: picked), session_authenticator=person_window)
     with TestClient(app, base_url="http://localhost", client=("127.0.0.1", 12345)) as client:
         _, headers = bootstrap(client)
         created =client.post("/api/v1/conversations/commands", headers={**headers, "Idempotency-Key": str(uuid4())},

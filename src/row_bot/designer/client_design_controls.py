@@ -20,6 +20,7 @@ from row_bot.designer import brand, fonts, history, hotspot_recorder, review, st
 from row_bot.designer.client_editing import _paged, _selected, _text_targets, element_targets
 from row_bot.designer.client_service import ArtifactError, _identifier, read_artifact
 from row_bot.designer.state import BrandConfig, DesignerAsset, DesignerProject
+from row_bot.application.attachments import MAX_ATTACHMENT_BYTES
 
 _COLORS = {'primary_color', 'secondary_color', 'accent_color', 'bg_color', 'text_color'}
 _LOGO_OPTIONS = {'logo_mode': {'auto', 'manual'}, 'logo_scope': {'all', 'first'},
@@ -614,13 +615,13 @@ def _asset_bytes(project, asset):
         path = resolve_managed_path(root, asset.stored_name)
         before, parent = path.lstat(), root.stat()
         if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
-                or not 0 < before.st_size <= 25 * 1024 * 1024):
+                or not 0 < before.st_size <= MAX_ATTACHMENT_BYTES):
             raise ValueError
         with path.open('rb') as handle:
             opened = os.fstat(handle.fileno())
             if not os.path.samestat(before, opened):
                 raise ValueError
-            data = handle.read(25 * 1024 * 1024 + 1)
+            data = handle.read(MAX_ATTACHMENT_BYTES + 1)
             finished = os.fstat(handle.fileno())
         named = path.lstat()
         if (not os.path.samestat(opened, named) or not os.path.samestat(parent, root.stat())
@@ -664,7 +665,7 @@ def _asset_metadata(data: bytes, filename: str):
     a video codec/playability probe and never launches ffmpeg or a provider.
     """
     from PIL import Image
-    if not isinstance(data, bytes) or not 0 < len(data) <= 25 * 1024 * 1024:
+    if not isinstance(data, bytes) or not 0 < len(data) <= MAX_ATTACHMENT_BYTES:
         raise ArtifactError('asset_too_large')
     _plain(filename, 200, empty=False)
     if any(char in filename for char in '/\\:\r\n') or filename in {'.', '..'}:

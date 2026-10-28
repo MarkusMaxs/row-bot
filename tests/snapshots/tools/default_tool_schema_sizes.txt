@@ -1,5 +1,5 @@
 agent_message: 526
-agent_profile_save: 1590
+agent_profile_save: 1446
 agent_profiles: 508
 agent_promote: 469
 agent_retry: 301
@@ -12,6 +12,9 @@ ask_person: 1104
 calculate: 1020
 check_process: 638
 clone_repository: 608
+conversation_links: 205
+conversation_send: 524
+conversation_start: 894
 create_chart: 1950
 create_code_folder: 639
 create_design: 931
@@ -43,7 +46,7 @@ developer_workspace_info: 233
 developer_write_file: 719
 documents: 438
 duckduckgo: 368
-edit_video: 2641
+edit_video: 3283
 explore_connections: 474
 export_to_pdf: 687
 get_current_weather: 418
@@ -54,6 +57,7 @@ goal_update: 1053
 link_memories: 578
 list_conversations: 280
 list_memories: 453
+make_music: 657
 page_create: 1053
 page_read: 560
 page_update: 918
@@ -76,17 +80,19 @@ save_memory: 732
 search_conversations: 703
 search_memory: 620
 send_file: 885
-start_process: 1299
+speak: 797
+start_process: 1300
 stop_process: 332
 suggest_apps: 861
-task_create: 4268
+task_create: 3877
 task_delete: 277
 task_list: 286
 task_run_now: 263
-task_update: 1869
+task_update: 1639
 tracker_delete: 308
 tracker_log: 1539
 tracker_query: 597
+transcribe: 447
 update_memory: 1056
 use_code_folder: 628
 wiki_export_conversation: 344
@@ -94,12 +100,13 @@ wiki_read: 397
 wiki_rebuild: 301
 wiki_stats: 239
 wikipedia: 517
-workspace_copy_file: 516
-workspace_file_search: 545
-workspace_list_directory: 396
-workspace_move_file: 518
+workspace_copy_file: 525
+workspace_file_delete: 384
+workspace_file_search: 554
+workspace_list_directory: 405
+workspace_move_file: 527
 workspace_read_file: 867
-workspace_write_file: 547
+workspace_write_file: 556
 youtube_search: 660
 youtube_transcript: 725
-TOTAL (104 tools): 74039
+TOTAL (111 tools): 77870

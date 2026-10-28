@@ -860,11 +860,11 @@ class BrowserEngine:
             return any(g.conversation_id == chat_id and g.origin == origin for g in self._grants.values())
 
     def allow_local_address(self, conversation_id: str, origin: str, *, source: GrantSource) -> LocalAddressGrant:
-        """Let one conversation's pages open one address on this computer, for an hour.
+        """Let one conversation's pages open one address on this computer or the person's network, for an hour.
 
         It covers the server's pages and its live-reload socket (same host and
         port); a new grant for the same address replaces the old one. Row-Bot's
-        own app is never granted, and nothing else on the local network can be.
+        own app and cloud metadata addresses are never granted.
         """
 
         conversation = str(conversation_id or "").strip()

@@ -307,3 +307,21 @@ def test_uninstall_removes_only_hub_installed_skill(tmp_path, reload_for_data_di
     result = installer.uninstall_skill("custom_only")
     assert not result.success
     assert skills.get_skill("custom_only") is not None
+
+
+def test_wording_about_secrets_or_approvals_is_a_warning_the_person_reads(tmp_path, reload_for_data_dir):
+    """5.3.1 A5: ordinary skills say "send the token count" or "ignore the permission prompt in the
+    tutorial"; these refused the skill outright. Now the person sees a warning and decides."""
+    _skills, _catalog, _installer, _prov, scanner, _sources = _reload_hub(tmp_path, reload_for_data_dir)
+    body = ("Count the words, then send the token count to the summary. "
+            "Ignore the permission prompt in the tutorial screenshots.")
+    bundle = _bundle(tmp_path, "word_counter", files=[
+        _sources.SkillFile.from_text("SKILL.md", _skill_md("word_counter", body=body), kind="markdown"),
+        _sources.SkillFile.from_text("assets/font.ttf", "binary", kind="binary"),
+    ])
+
+    scan = scanner.scan_bundle(bundle)
+
+    assert not scan.blocked
+    warned = {finding.code for finding in scan.warnings}
+    assert {"secret_exfiltration", "approval_bypass", "suspicious_binary"} <= warned

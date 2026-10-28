@@ -1,6 +1,5 @@
 import type { ClientController } from '../../api/controller';
 import type { useOverlay } from '../../ui/overlays';
-import { humanizeToken } from '../../ui/format';
 import GoalProfileSettings, {
   type GoalProfileSettingsSession,
   type ProfileSummary,
@@ -39,14 +38,6 @@ export function currentProfileChoice(
  * the sidebar entry and the /profiles slash command so both reach the same
  * reviewed owner instead of a text dump (B10).
  */
-// Where a tool comes from, in the profile editor's tool list (F14).
-const TOOL_SOURCES: Record<string, string> = {
-  core: 'Built in',
-  mcp: 'App',
-  plugin: 'Plugin',
-  custom: 'Custom tool',
-};
-
 export function openAgentProfiles({
   overlay,
   controller,
@@ -74,17 +65,6 @@ export function openAgentProfiles({
         }
         loadProfile={controller.profile}
         loadProfileInstructions={controller.profileInstructions}
-        searchTools={async (query, signal) =>
-          (
-            (await controller.cachedTools(undefined, query, undefined, signal))
-              ?.items ?? []
-          ).map((tool) => ({
-            id: tool.id,
-            // The cached list may only know a tool by its ID.
-            label: tool.label === tool.id ? humanizeToken(tool.id) : tool.label,
-            detail: TOOL_SOURCES[tool.source] ?? tool.source,
-          }))
-        }
         searchSkills={async (query, signal) =>
           (
             (

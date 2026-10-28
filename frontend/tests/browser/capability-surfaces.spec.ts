@@ -418,12 +418,12 @@ test('the Browser pane is one reviewed live-control panel with a sanitized recov
 
   // Reviewed: Row-Bot checks each address the person types before its
   // browser opens it, and says why one never opens.
-  await address.fill('http://192.168.1.20/router');
+  await address.fill('http://169.254.169.254/latest/meta-data/');
   await address.press('Enter');
   await expect(
     page.locator('.toast').filter({
       hasText:
-        "Row-Bot's browser can't open that address. Addresses on your local network, and Row-Bot itself, never open there.",
+        "Row-Bot's browser can't open that address. Cloud metadata addresses, and Row-Bot itself, never open there.",
     }),
   ).toBeVisible();
   await expect(address).toHaveValue('');

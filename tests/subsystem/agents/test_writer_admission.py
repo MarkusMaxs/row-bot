@@ -460,12 +460,10 @@ def test_real_writer_commit_is_released_before_failed_admission_returns(
 
 
 @pytest.mark.parametrize("resume", [False, True])
-@pytest.mark.parametrize("failure", ["release-event", "waiter-notification"])
 def test_worker_teardown_drains_capacity_after_real_release_failure(
     tmp_path,
     monkeypatch,
     resume,
-    failure,
     reload_for_data_dir,
 ):
     from tests.fixtures.tasks import fresh_tasks_module
@@ -486,20 +484,14 @@ def test_worker_teardown_drains_capacity_after_real_release_failure(
         write_lock_key="synthetic-workspace",
     )
     original_append = agent_runs.append_agent_event
-    notifications, released = [], []
+    released = []
 
     def publish(run_id, event_type, *args, **kwargs):
         if event_type == "write_lock.released":
             assert agent_runs.get_agent_write_lock("synthetic-workspace") is None
             released.append(run_id)
-            if failure == "release-event":
-                raise RuntimeError("Synthetic teardown failure")
-        return original_append(run_id, event_type, *args, **kwargs)
-
-    def notify(run_id):
-        notifications.append(run_id)
-        if failure == "waiter-notification":
             raise RuntimeError("Synthetic teardown failure")
+        return original_append(run_id, event_type, *args, **kwargs)
 
     def invoke(*args, **kwargs):
         assert runner._DISPATCH_ACTIVE == {"worker": "top-level"}
@@ -511,7 +503,6 @@ def test_worker_teardown_drains_capacity_after_real_release_failure(
     monkeypatch.setattr(agent_runs, "append_agent_event", publish)
     monkeypatch.setattr(runner, "_invoke_agent", invoke)
     monkeypatch.setattr(runner, "_resume_invoke_agent", invoke)
-    monkeypatch.setattr(runner, "_notify_child_agent_waiters", notify)
     with pytest.raises(RuntimeError, match="Synthetic teardown failure"):
         if resume:
             runner._resume_agent_thread("worker", [], {}, [], threading.Event())
@@ -526,7 +517,6 @@ def test_worker_teardown_drains_capacity_after_real_release_failure(
                 write_lock_key="synthetic-workspace",
             )
     assert released == ["worker"]
-    assert notifications == ["worker"]
     assert agent_runs.get_agent_run("worker")["status"] == "completed"
     assert agent_runs.get_agent_write_lock("synthetic-workspace") is None
     assert runner._DISPATCH_QUEUE == []
@@ -535,11 +525,9 @@ def test_worker_teardown_drains_capacity_after_real_release_failure(
     assert runner._ACTIVE_AGENT_RUNS == {}
 
 
-@pytest.mark.parametrize("failure", ["finish", "notification"])
 def test_rejected_entry_cleans_reservation_even_if_domain_cleanup_fails(
     dispatcher,
     monkeypatch,
-    failure,
 ):
     d = dispatcher
     d.runner._DISPATCH_QUEUE.append(("rejected", "parent"))
@@ -550,19 +538,12 @@ def test_rejected_entry_cleans_reservation_even_if_domain_cleanup_fails(
 
     def finish(*args, **kwargs):
         calls.append("finish")
-        if failure == "finish":
-            raise RuntimeError("Synthetic entry cleanup failure")
-
-    def notify(*args, **kwargs):
-        calls.append("notification")
-        if failure == "notification":
-            raise RuntimeError("Synthetic entry cleanup failure")
+        raise RuntimeError("Synthetic entry cleanup failure")
 
     monkeypatch.setattr(d.runs, "finish_agent_run", finish)
-    monkeypatch.setattr(d.runner, "_notify_child_agent_waiters", notify)
     with pytest.raises(RuntimeError, match="Synthetic entry cleanup failure"):
         d.runner._agent_entry_failed("rejected", InterruptedError())
-    assert calls == ["finish", "notification"]
+    assert calls == ["finish"]
     assert d.runner._DISPATCH_QUEUE == []
     assert d.runner._DISPATCH_WRITER_KEYS == {}
     assert d.runner._DISPATCH_ACTIVE == {"other": "other-parent"}

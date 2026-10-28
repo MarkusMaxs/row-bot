@@ -6,8 +6,8 @@ and quick timers via natural language.
 
 from __future__ import annotations
 
+import json
 import logging
-import uuid
 from datetime import datetime
 from typing import Literal
 
@@ -36,12 +36,6 @@ _SCHEDULE_FORMATS = (
     "'interval_minutes:M' or 'cron:EXPR' (e.g. 'cron:0 9 * * mon-fri')"
 )
 _TEMPLATE_VARIABLES = "{{date}}, {{day}}, {{time}}, {{month}}, {{year}} and {{task_id}} (this task's own id)"
-# The step format in brief; the whole of it is the Workflow guide (tool_guides/workflow_guide).
-_STEPS_SHORT = (
-    "a list of {'type': 'prompt'|'condition'|'approval'|'subtask'|'notify', ...}, e.g. "
-    "{'type': 'prompt', 'prompt': str}, {'type': 'notify', 'message': str}."
-)
-_STEPS_HELP = " The step format is in the Workflow guide: skill_load('workflow_guide')."
 _TASK_LIST_CHARS = 30_000  # Beyond this the list is saved, and read on with read_tool_output.
 
 
@@ -50,8 +44,9 @@ class _TaskCreateInput(BaseModel):
     prompts: list[str] = Field(
         default=[],
         description=(
-            "Prompts the agent runs in order, in a background conversation. Empty for a notify-only "
-            f"reminder. Template variables: {_TEMPLATE_VARIABLES}."
+            "The messages each run sends, in order, as chat turns in the workflow's own conversation "
+            "(usually one). Say any branching in words ('if nothing is new, stop and say so'). Empty for a "
+            f"notify-only reminder. Template variables: {_TEMPLATE_VARIABLES}."
         ),
     )
     description: str = Field(default="", description="Optional longer description.")
@@ -89,25 +84,12 @@ class _TaskCreateInput(BaseModel):
         description="Model for this task: provider-qualified or pinned. Empty uses the current Brain model.",
     )
     agent_profile: str | None = Field(default=None, description="Agent Profile slug or id (default: Default).")
-    steps: list[dict] | None = Field(
-        default=None,
-        description=(
-            "Pipeline steps instead of prompts, for branching, approvals or notifications: "
-            f"{_STEPS_SHORT} The Workflow guide (skill_load('workflow_guide')) has every field; load it first."
-        ),
-    )
     approval_mode: ApprovalModeChoice | None = Field(
         default=None,
         description=(
-            "Destructive tools: block (default), approve (pause for the person) or auto (a reviewer approves "
-            "what matches the workflow; otherwise it pauses for the person)."
-        ),
-    )
-    persistent_thread: bool = Field(
-        default=False,
-        description=(
-            "Share one conversation across runs so each run sees earlier results (monitoring, price "
-            "tracking). Default: a fresh conversation per run."
+            "What its runs may do, as a chat's approval level: block (default: reads only), approve (each "
+            "action asks the person on its card) or auto (a reviewer approves what matches the workflow; "
+            "otherwise it asks the person)."
         ),
     )
 
@@ -135,11 +117,7 @@ class _TaskUpdateInput(BaseModel):
         default=None,
         description="Move the task to one new local time 'YYYY-MM-DDTHH:MM'; replaces any schedule.",
     )
-    prompts: list[str] | None = Field(default=None, description="New prompts (replaces all of them).")
-    steps: list[dict] | None = Field(
-        default=None,
-        description="New pipeline steps (replaces all of them), in task_create's format.",
-    )
+    prompts: list[str] | None = Field(default=None, description="New messages (replaces all of them).")
     approval_mode: ApprovalModeChoice | None = Field(default=None, description="New approval mode.")
     enabled: bool | None = Field(default=None, description="false pauses the task, true resumes it.")
     model: str | None = Field(default=None, description="New model; '' uses the default model.")
@@ -147,9 +125,9 @@ class _TaskUpdateInput(BaseModel):
         default=None,
         description="Agent Profile slug or id; '' uses the Default profile.",
     )
-    persistent_thread: bool | None = Field(
+    notes: str | None = Field(
         default=None,
-        description="true keeps one conversation across runs; false uses a fresh one each run.",
+        description="A workflow's notes for its next run, replacing the old ones; '' clears them.",
     )
 
 
@@ -170,18 +148,6 @@ def _local_run_at(value: str) -> str:
     return moment.isoformat(timespec="minutes")
 
 
-def _named_step_apps(steps: list[dict] | None) -> list[dict] | None:
-    """Prompt steps keep the apps they name as the apps' ids, so the step shows and uses them (B345)."""
-    if not steps:
-        return steps
-    from row_bot.integrations.scope import apps_named
-    for step in steps:
-        if isinstance(step, dict) and str(step.get("type") or "prompt") == "prompt" and step.get("apps"):
-            names = step["apps"] if isinstance(step["apps"], list) else [step["apps"]]
-            step["apps"] = apps_named([str(name) for name in names])
-    return steps
-
-
 def _task_create(
     name: str,
     prompts: list[str] | None = None,
@@ -196,27 +162,19 @@ def _task_create(
     delivery_target: str | None = None,
     model: str | None = None,
     agent_profile: str | None = None,
-    steps: list[dict] | None = None,
     approval_mode: str | None = None,
     safety_mode: str | None = None,
-    persistent_thread: bool = False,
 ) -> str:
     """Create a new task or quick timer."""
     try:
         at = _local_run_at(run_at) if run_at else None
         # Default to notify_only for a timer or a one-off time with no prompts
-        if (delay_minutes or at) and not prompts and not steps:
+        if (delay_minutes or at) and not prompts:
             notify_only = True
-
-        # Generate persistent_thread_id if requested
-        p_thread_id = None
-        if persistent_thread:
-            p_thread_id = f"pt_{uuid.uuid4().hex[:10]}"
         effective_approval_mode = legacy_safety_mode_to_approval_mode(approval_mode or safety_mode or "block")
         if effective_approval_mode == "full":
             return _FULL_AUTONOMY_REFUSAL
 
-        steps = _named_step_apps(steps)
         task_id = tasks_db.create_task(
             name=name,
             prompts=prompts or [],
@@ -230,8 +188,6 @@ def _task_create(
             delivery_channel=delivery_channel,
             delivery_target=delivery_target,
             model_override=model or None,
-            persistent_thread_id=p_thread_id,
-            steps=steps,
             safety_mode=effective_approval_mode,
             agent_profile_id=agent_profile or tasks_db.DEFAULT_WORKFLOW_AGENT_PROFILE_ID,
             apply_default_skills=False,
@@ -241,7 +197,7 @@ def _task_create(
         if not task:
             return f"Task created with ID: {task_id}"
 
-        parts = [f"Task created successfully."]
+        parts = ["Task created successfully."]
         parts.append(f"  ID: {task_id}")
         parts.append(f"  Name: {task['icon']} {task['name']}")
         if task.get("schedule"):
@@ -249,28 +205,17 @@ def _task_create(
         if task.get("at"):
             parts.append(f"  Fires at: {task['at']}")
         if task.get("notify_only"):
-            parts.append(f"  Type: Notification only")
-        elif task.get("steps"):
-            step_types = [s.get("type", "prompt") for s in task["steps"]]
-            parts.append(f"  Pipeline: {len(task['steps'])} steps ({', '.join(set(step_types))})")
+            parts.append("  Type: Notification only")
         else:
-            parts.append(f"  Steps: {len(task['prompts'])}")
+            parts.append(f"  Messages: {len(task['prompts'])}")
         if task.get("safety_mode") and task["safety_mode"] != "block":
             parts.append(f"  Approval: {approval_label(task['safety_mode'])}")
         if task.get("delivery_channel"):
             parts.append(f"  Delivery: {task['delivery_channel']} → {task.get('delivery_target', 'default')}")
 
-        # Include Mermaid flow diagram for pipeline tasks
-        if task.get("steps"):
-            from row_bot.tasks import generate_pipeline_mermaid
-            mermaid = generate_pipeline_mermaid(task["steps"])
-            if mermaid:
-                parts.append(f"\nPipeline flow:\n```mermaid\n{mermaid}\n```")
-                parts.append("\nIMPORTANT: Always include the pipeline flow diagram above in your response to the user.")
-
         return "\n".join(parts)
     except ValueError as exc:
-        return f"Error creating task: {exc}" + (_STEPS_HELP if steps else "")
+        return f"Error creating task: {exc}"
     except Exception as exc:
         logger.error("task_create error: %s", exc, exc_info=True)
         return f"Error creating task: {exc}"
@@ -297,11 +242,8 @@ def _task_list(include_history: bool = False) -> str:
             entry["fires_at"] = t["at"]
         if t.get("notify_only"):
             entry["type"] = "notification_only"
-        elif t.get("steps"):
-            entry["pipeline_steps"] = len(t["steps"])
-            entry["step_types"] = list(set(s.get("type", "prompt") for s in t["steps"]))
         else:
-            entry["steps"] = len(t.get("prompts", []))
+            entry["messages"] = len(t.get("prompts", []))
         if t.get("safety_mode") and t["safety_mode"] != "block":
             entry["approval_mode"] = t["safety_mode"]
         if t.get("delivery_channel"):
@@ -311,11 +253,14 @@ def _task_list(include_history: bool = False) -> str:
         if include_history:
             runs = tasks_db.get_run_history(t["id"], limit=3)
             if runs:
+                # How each run ended, from what its tools returned: a finished run is not proof that
+                # anything was posted or sent; its actions say what went out (F31).
                 entry["recent_runs"] = [
                     {
                         "status": r["status"],
                         "started": r["started_at"][:16],
-                        "steps": f"{r['steps_done']}/{r['steps_total']}",
+                        "outcome": r.get("notice") or "",
+                        "actions": _run_actions(r),
                     }
                     for r in runs
                 ]
@@ -324,6 +269,15 @@ def _task_list(include_history: bool = False) -> str:
     from row_bot.tool_outputs import bounded, compact_json
 
     return bounded(compact_json(entries), tool_name="task_list", max_chars=_TASK_LIST_CHARS)
+
+
+def _run_actions(run: dict) -> list[str]:
+    try:
+        saved = json.loads(run.get("actions_json") or "[]")
+    except (TypeError, ValueError):
+        return []
+    return [" ".join(part for part in (item.get("result"), item.get("link")) if part)
+            for item in saved if isinstance(item, dict)][:8]
 
 
 def _task_delete(task_id: str) -> str:
@@ -341,20 +295,27 @@ def _task_update(
     name: str | None = None,
     schedule: str | None = None,
     prompts: list[str] | None = None,
-    steps: list[dict] | None = None,
     approval_mode: str | None = None,
     safety_mode: str | None = None,
     enabled: bool | None = None,
     model: str | None = None,
     agent_profile: str | None = None,
-    persistent_thread: bool | None = None,
     run_at: str | None = None,
+    notes: str | None = None,
 ) -> str:
     """Update fields on an existing task."""
     task = tasks_db.get_task(task_id)
     if not task:
         return f"Task '{task_id}' not found. Use task_list to see available tasks."
 
+    noted = ""
+    if notes is not None:
+        from row_bot import workflow_turns
+
+        kept = workflow_turns.save_notes(task_id, notes)
+        noted = (f"  Notes: {len(kept):,} characters kept for the next run"
+                 + (f" (cut to {workflow_turns.NOTES_LIMIT:,})" if len(notes.strip()) > len(kept) else "")
+                 if kept else "  Notes: cleared")
     updates: dict = {}
     if name is not None:
         updates["name"] = name
@@ -368,11 +329,6 @@ def _task_update(
         updates["schedule"] = None
     if prompts is not None:
         updates["prompts"] = prompts
-    if steps is not None:
-        try:
-            updates["steps"] = _named_step_apps(steps)
-        except ValueError as exc:
-            return f"Error updating task: {exc}"
     if approval_mode is not None or safety_mode is not None:
         updates["safety_mode"] = legacy_safety_mode_to_approval_mode(approval_mode or safety_mode or "block")
         if updates["safety_mode"] == "full":
@@ -383,16 +339,12 @@ def _task_update(
         updates["model_override"] = model if model else None
     if agent_profile is not None:
         updates["agent_profile_id"] = agent_profile or tasks_db.DEFAULT_WORKFLOW_AGENT_PROFILE_ID
-    if persistent_thread is not None:
-        if persistent_thread:
-            # Only generate a new ID if one doesn't already exist
-            if not task.get("persistent_thread_id"):
-                updates["persistent_thread_id"] = f"pt_{uuid.uuid4().hex[:10]}"
-        else:
-            updates["persistent_thread_id"] = None
 
     if not updates:
-        return "No fields to update. Provide at least one of: name, schedule, prompts, steps, approval_mode, enabled, model, persistent_thread."
+        if noted:
+            return f"Updated task '{task['icon']} {task['name']}'.\n{noted}"
+        return ("No fields to update. Provide at least one of: name, schedule, prompts, approval_mode, enabled, "
+                "model, notes.")
 
     try:
         tasks_db.update_task(task_id, **updates)
@@ -405,21 +357,14 @@ def _task_update(
         elif "schedule" in updates:
             parts.append(f"  Schedule: {task.get('schedule') or 'manual'}")
         if "prompts" in updates:
-            parts.append(f"  Steps: {len(task['prompts'])}")
-        if "steps" in updates:
-            parts.append(f"  Pipeline: {len(task.get('steps', []))} steps")
+            parts.append(f"  Messages: {len(task['prompts'])}")
         if "safety_mode" in updates:
             parts.append(f"  Approval: {approval_label(task.get('safety_mode', 'block'))}")
         if "enabled" in updates:
             parts.append(f"  Enabled: {task.get('enabled', True)}")
+        if noted:
+            parts.append(noted)
 
-        # Include Mermaid flow diagram when steps are updated
-        if "steps" in updates and task.get("steps"):
-            from row_bot.tasks import generate_pipeline_mermaid
-            mermaid = generate_pipeline_mermaid(task["steps"])
-            if mermaid:
-                parts.append(f"\nPipeline flow:\n```mermaid\n{mermaid}\n```")
-                parts.append("\nIMPORTANT: Always include the pipeline flow diagram above in your response to the user.")
 
         return "\n".join(parts)
     except ValueError as exc:
@@ -439,11 +384,11 @@ def _task_run_now(task_id: str) -> str:
 
     thread_id = tasks_db._prepare_task_thread(task)
     enabled = [t.name for t in tool_registry.get_enabled_tools()]
-    tasks_db.run_task_background(task_id, thread_id, enabled, notification=True)
+    tasks_db.run_task_background(task_id, thread_id, enabled, trigger="Run now")
 
     return (
-        f"Task '{task['icon']} {task['name']}' started.\n"
-        f"It will run in the background and you'll be notified when done."
+        f"Task '{task['icon']} {task['name']}' started in its own conversation.\n"
+        f"task_list(include_history=true) shows how it ended and what it posted or sent."
     )
 
 
@@ -491,12 +436,14 @@ class TaskTool(BaseTool):
                     "('remind me at 9am on 8 October' -> run_at='2026-10-08T09:00'), never minutes worked out "
                     "from now; add notify_only=true for a plain notification. To move a reminder, use "
                     "task_update with run_at instead of deleting and re-creating it. "
-                    "Recurring work: a schedule plus prompts. A task that should do something (check the "
-                    "weather, search news, read email) needs prompts; notify_only is only for passive "
-                    "reminders. Monitoring ('check X and tell me when Y', 'alert me if W changes'): "
-                    "schedule='interval_minutes:M', prompts, persistent_thread=true, and a prompt that ends "
-                    "it with task_update(task_id='{{task_id}}', enabled=false) once done. "
-                    "Branching, approvals or notifications: steps (the Workflow guide has their format)."
+                    "Recurring work (a workflow): a schedule plus prompts, the messages each run sends. "
+                    "A run is a chat turn in the workflow's own conversation, so it sees earlier runs, has "
+                    "every tool, and its approval level decides what it may do. Say branching in words. "
+                    "Posting, emailing or any other action asks the person on its own card with the exact "
+                    "account, recipient and text, so don't ask for approval in the message. notify_only is "
+                    "only for passive reminders. Monitoring ('alert me if W changes'): "
+                    "schedule='interval_minutes:M' and a prompt that ends it with "
+                    "task_update(task_id='{{task_id}}', enabled=false) once done."
                 ),
                 args_schema=_TaskCreateInput,
             ),

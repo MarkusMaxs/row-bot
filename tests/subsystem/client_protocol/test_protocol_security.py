@@ -13,6 +13,7 @@ from row_bot.access.request_context import RequestContextResolver, SessionIdenti
 from row_bot.api.v1.routes import create_client_platform_app
 from row_bot.api.v1.schemas import Command, Event
 from row_bot.api.v1.security import ClientSecurity, ProtocolError
+from tests.helpers.access import person_window
 
 pytestmark = pytest.mark.subsystem
 
@@ -40,7 +41,8 @@ def client_app(*, remote=False):
     def authenticate(scope, provenance):
         if remote and active["value"]:
             return SessionIdentity("fixture-device", "fixture-session")
-        return None
+        # On this computer the fixture is the person's own window, signed in (A0).
+        return None if remote else person_window(scope, provenance)
     app = create_client_platform_app(service, access_config=config, session_authenticator=authenticate,
                                      choices=lambda: {"models": [], "capabilities": [], "catalog_stale": True})
     return TestClient(app, base_url="http://localhost", client=("127.0.0.1", 12345)), service, active
@@ -76,7 +78,7 @@ def test_many_windows_never_lock_out_a_new_one_and_the_one_in_use_stays_signed_i
     app = create_client_platform_app(
         Service(), access_config=AccessConfig(deployment_mode=DeploymentMode.DESKTOP),
         security=ClientSecurity("fixture", clock=lambda: now[0]),
-        choices=lambda: {"models": [], "capabilities": []})
+        choices=lambda: {"models": [], "capabilities": []}, session_authenticator=person_window)
     with TestClient(app, base_url="http://localhost", client=("127.0.0.1", 12345)) as client:
         _, first = bootstrap(client)
         _, in_use = bootstrap(client)
@@ -530,7 +532,7 @@ def test_typing_in_the_terminal_is_not_rate_limited_and_keeps_the_stop_reserve(m
     app = create_client_platform_app(
         service, access_config=AccessConfig(deployment_mode=DeploymentMode.DESKTOP),
         security=ClientSecurity("fixture", clock=lambda: now[0]),
-        choices=lambda: {"models": [], "capabilities": []})
+        choices=lambda: {"models": [], "capabilities": []}, session_authenticator=person_window)
     with TestClient(app, base_url="http://localhost", client=("127.0.0.1", 12345)) as client:
         proof, headers = _native_proof(client)
         terminal = client.post("/api/v1/native/terminal/open", headers={"Origin": "http://localhost"},
@@ -734,7 +736,7 @@ def test_forty_observer_switches_keep_stop_available_through_public_routes():
     def missing(*_):
         raise ProtocolError("not_found", 404)
     service.receipt = missing
-    app = create_client_platform_app(service, security=security, choices=lambda: {"models": [], "capabilities": []})
+    app = create_client_platform_app(service, security=security, choices=lambda: {"models": [], "capabilities": []}, session_authenticator=person_window)
     with TestClient(app, base_url="http://localhost", client=("127.0.0.1", 1234)) as client:
         data, headers = bootstrap(client)
         for index in range(40):
@@ -762,7 +764,7 @@ def test_idle_event_stream_flushes_acceptance_before_replay_or_heartbeat():
     service.snapshot = lambda conversation: {"conversation_id": conversation, "server_epoch": service.server_epoch,
         "projection_revision": "0", "cursor": "0", "checkpoint_revision": "", "rows": [], "generation": None}
     service.events_since = lambda *_: {"server_epoch": service.server_epoch, "snapshot_required": False, "events": []}
-    app = create_client_platform_app(service, security=security, choices=lambda: {"models": [], "capabilities": []})
+    app = create_client_platform_app(service, security=security, choices=lambda: {"models": [], "capabilities": []}, session_authenticator=person_window)
     with TestClient(app, base_url="http://localhost", client=("127.0.0.1", 1234)) as client:
         _, headers = bootstrap(client)
         response = client.post("/api/v1/conversations/idle/subscriptions", headers=headers)
@@ -805,7 +807,7 @@ def test_approval_response_uses_control_reserve_after_mutation_saturation():
         raise ProtocolError("not_found", 404)
     service.receipt = missing
     security = ClientSecurity("fixture-instance", clock=lambda: 10)
-    app = create_client_platform_app(service, security=security, choices=lambda: {"models": [], "capabilities": []})
+    app = create_client_platform_app(service, security=security, choices=lambda: {"models": [], "capabilities": []}, session_authenticator=person_window)
     with TestClient(app, base_url="http://localhost", client=("127.0.0.1", 1234)) as client:
         handshake, headers = bootstrap(client)
         nonce = client.get("/api/v1/approvals/fixture-approval", headers=headers).json()["nonce"]

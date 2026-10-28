@@ -9,6 +9,7 @@ import type {
 import TranscriptTrace, { type LiveActivity } from './TranscriptTrace';
 import { writingLabel } from './tool-activity';
 import { answerStreaming } from './transcript-model';
+import { TeachContext } from '../learning/chat-learning';
 
 const messageText = vi.fn();
 const writeClipboard = vi.fn();
@@ -924,6 +925,34 @@ it.each([
     expect(within(ran).getByText(line)).toBeVisible();
   },
 );
+
+it('offers Teach Row-Bot on a failed step while Learning uses the chat, attaching that step', () => {
+  const teach = vi.fn();
+  const failed: TranscriptTraceGroup[] = [
+    {
+      ...groups[0],
+      status: 'failed',
+      items: [{ ...groups[0].items[0], status: 'failed' }],
+    },
+  ];
+  const { rerender } = render(
+    <TeachContext.Provider value={teach}>
+      <TranscriptTrace conversation="conversation-a" groups={failed} />
+    </TeachContext.Provider>,
+  );
+  openRow();
+  fireEvent.click(screen.getByText("Couldn't read a file").closest('summary')!);
+  fireEvent.click(screen.getByRole('button', { name: 'Teach Row-Bot' }));
+  expect(teach).toHaveBeenCalledWith({ toolCallId: 'call-1' });
+
+  // A step that worked offers nothing to teach.
+  rerender(
+    <TeachContext.Provider value={teach}>
+      <TranscriptTrace conversation="conversation-a" groups={groups} />
+    </TeachContext.Provider>,
+  );
+  expect(screen.queryByRole('button', { name: 'Teach Row-Bot' })).toBeNull();
+});
 
 const browserTurn: TranscriptTraceGroup[] = [
   {

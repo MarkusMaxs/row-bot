@@ -37,6 +37,7 @@ import { useClientState, useRuntime } from '../../runtime';
 import { useLive } from '../../live';
 import { fallbackDue } from '../../api/live-updates';
 import AttentionIndicator from './AttentionIndicator';
+import ViewOnlyNotice from './ViewOnlyNotice';
 import { useShellSettled } from '../../shell-settled';
 import { useOverlay } from '../../ui/overlays';
 import {
@@ -77,6 +78,7 @@ import {
   type ConversationType,
 } from './conversation-groups';
 import { absoluteTime, ariaKeyShortcut } from '../../ui/format';
+import { useLearningChatMenu } from '../learning/chat-learning';
 
 const PREVIEW_COUNT = 10;
 const PINNED_PREVIEW_COUNT = 5;
@@ -313,6 +315,8 @@ export default function Navigation({
   const { controller, platform, conversationActionsOwner, goalProfileOwner } =
     useRuntime();
   const overlay = useOverlay();
+  // Learning (preview): "Don't learn from this chat" while Learning is on.
+  const learningMenuItem = useLearningChatMenu();
   const navigate = useNavigate();
   const location = useLocation();
   // Navigate before closing: closing the compact drawer pops its same-URL
@@ -620,7 +624,13 @@ export default function Navigation({
           <Button
             variant="ghost"
             className="nav-conversation-link"
-            aria-label={conversation.incognito ? `${title} (incognito)` : title}
+            aria-label={
+              conversation.incognito
+                ? `${title} (incognito)`
+                : conversation.started_from
+                  ? `${title} (started by another conversation)`
+                  : title
+            }
             aria-current={
               location.pathname === `/conversations/${conversation.id}`
                 ? 'page'
@@ -708,6 +718,13 @@ export default function Navigation({
                 icon: <FileText size={16} />,
                 onSelect: () => openActions(conversation, 'pdf'),
               },
+              ...[
+                learningMenuItem({
+                  id: conversation.id,
+                  title,
+                  incognito: conversation.incognito,
+                }),
+              ].filter((item) => item !== null),
               {
                 label: 'Delete…',
                 icon: <Trash2 size={16} />,
@@ -883,6 +900,7 @@ export default function Navigation({
       </div>
       {/* What needs the person (an approval, a problem, an update) sits up here: in the footer it grew the
           sticky footer over the last rows of the list. */}
+      <ViewOnlyNotice />
       <AttentionIndicator
         load={controller.attention}
         loadApprovals={controller.pendingApprovals}
@@ -1232,6 +1250,7 @@ export function NavigationRail({
         )}
       </div>
       <div className="navigation-rail-group navigation-rail-footer">
+        <ViewOnlyNotice compact />
         <AttentionIndicator
           load={controller.attention}
           loadApprovals={controller.pendingApprovals}

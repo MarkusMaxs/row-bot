@@ -230,7 +230,6 @@ def test_no_read_starts_the_github_cli_and_an_explicit_check_does(owners, keycha
                                            state="connected", authenticated=True, token_valid=True)))
     monkeypatch.setattr(github_account, "check_github_anonymous_access", lambda timeout=10: pytest.fail("not anonymous"))
     monkeypatch.setattr(scope, "_mcp_items", lambda strict=False: [])
-    monkeypatch.setattr(scope, "_profile_allow", lambda conversation_id: None)
     monkeypatch.setattr("row_bot.threads.get_thread_apps_off", lambda conversation_id: [])
     github_account.clear_github_caches()
     try:

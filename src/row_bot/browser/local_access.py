@@ -65,11 +65,20 @@ def _loopback_literal(host: str) -> bool:
     return address.is_loopback
 
 
-def local_development_origin(url: str) -> str | None:
-    """The exact origin of an http(s) address on this computer, else None.
+def _unspecified_literal(host: str) -> bool:
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_unspecified
+    except ValueError:
+        return False
 
-    ``http://localhost:5173/app?x=1`` gives ``http://localhost:5173``.
+
+def local_development_origin(url: str) -> str | None:
+    """The exact origin of an http(s) address on this computer or the person's network, else None.
+
+    ``http://localhost:5173/app?x=1`` gives ``http://localhost:5173``; a router, a NAS, another
+    computer, a Tailscale address or an intranet name count too (5.3.1 B3). Cloud metadata never does.
     """
+    from row_bot.browser.addresses import url_host_kind
 
     try:
         parsed = urlsplit(str(url or "").strip())
@@ -80,7 +89,8 @@ def local_development_origin(url: str) -> str | None:
         return None
     if scheme not in {"http", "https"} or not host or parsed.username or parsed.password:
         return None
-    if not (is_loopback_name(host) or _loopback_literal(host)):
+    if not (is_loopback_name(host) or _loopback_literal(host)) and (
+            url_host_kind(str(url).strip()) != "local_network" or _unspecified_literal(host)):
         return None
     default = 443 if scheme == "https" else 80
     port = port or default
@@ -105,25 +115,30 @@ def origin_port(origin: str) -> int:
     return parsed.port or (443 if parsed.scheme == "https" else 80)
 
 
+def on_this_computer(origin: str) -> bool:
+    host = (urlsplit(origin).hostname or "").casefold()
+    return is_loopback_name(host) or _loopback_literal(host)
+
+
 def is_row_bot_origin(origin: str) -> bool:
     """Whether the address is Row-Bot's own app, which its browser must never open (it could answer its own approvals)."""
 
     from row_bot.app_port import get_app_port
 
-    return origin_port(origin) == get_app_port()
+    return on_this_computer(origin) and origin_port(origin) == get_app_port()
 
 
 def private_network_target(url: str) -> bool:
-    """Whether the address is on the local network but isn't this computer.
+    """Whether the address is a cloud metadata service (link-local IPs, metadata names), which never opens.
 
-    Private, link-local and metadata IPs, and ``.local``/``.internal`` names,
-    never open. A public name that resolves to one (DNS rebinding) isn't
-    caught here; Chromium's own local-network protection covers that.
+    Addresses on this computer and the person's network open once a chat allows them (5.3.1 B3). A public
+    name that resolves to a metadata address (DNS rebinding) isn't caught here; Chromium's own
+    local-network protection covers that.
     """
 
     from row_bot.browser.addresses import url_host_kind
 
-    return url_host_kind(str(url or "").strip()) == "local_network"
+    return url_host_kind(str(url or "").strip()) == "metadata"
 
 
 def unspecified_refusal(url: str) -> str:
@@ -148,8 +163,8 @@ def unspecified_refusal(url: str) -> str:
 
 
 PRIVATE_NETWORK_REFUSAL = (
-    "BLOCKED: Row-Bot's browser can't open addresses on your local network, such as other computers, "
-    "routers or cloud metadata. Only addresses on this computer (like localhost:5173) can be allowed."
+    "BLOCKED: Row-Bot's browser never opens a cloud metadata address: it hands out a computer's own "
+    "credentials. Addresses on this computer and your network can be allowed in a chat."
 )
 
 
@@ -164,17 +179,21 @@ def question(origin: str) -> str:
     return f"Allow Row-Bot's browser to open {address_label(origin)} in this chat?"
 
 
+def _where(origin: str) -> str:
+    return "on this computer" if on_this_computer(origin) else "on your network"
+
+
 def approval_request(origin: str, *, tool: str = "browser_navigate") -> dict[str, Any]:
     """The approval for opening one local address in this conversation."""
 
     label = address_label(origin)
     return {
         "tool": tool,
-        "label": "Open a local address",
+        "label": "Open a local address" if on_this_computer(origin) else "Open an address on your network",
         "action": "open_local_address",
         "question": question(origin),
         "description": (
-            f"{label} is on this computer. Allowing it lets Row-Bot's browser open only this address, "
+            f"{label} is {_where(origin)}. Allowing it lets Row-Bot's browser open only this address, "
             "only in this chat, for up to an hour. You can remove it sooner in the browser panel."
         ),
         "origin_and_path": origin,

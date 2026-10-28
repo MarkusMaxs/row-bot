@@ -11,9 +11,6 @@ from row_bot.application.task_controls import (
     TaskControlError, TaskEditableFields, create_saved_task, get_task_editor, update_saved_task,
 )
 from row_bot.runtime import admissions
-from row_bot.application.task_graph_controls import (
-    TaskGraphError, TaskGraphFields, TaskGraphStepEdit, get_task_graph, update_saved_task_graph,
-)
 from row_bot.application.task_settings_controls import (
     TaskSettingsError, TaskSettingsFields, get_task_settings, update_saved_task_settings, rotate_task_webhook,
 )
@@ -39,7 +36,6 @@ def execute_task_command(*, owner_id: str, key: str, command: dict,
     creating = command["type"] == "task.create" or duplicating
     deleting = command["type"] == "task.delete"
     delivery = command["type"] == "task.delivery.update"
-    graph = command["type"] == "task.graph.update"
     settings = command["type"] in {"task.settings.update", "task.webhook.rotate"}
     task_id = (
         str(uuid.uuid5(uuid.UUID(command["command_id"]), "task"))
@@ -129,7 +125,7 @@ def execute_task_command(*, owner_id: str, key: str, command: dict,
                 raise TaskControlError("task_revision_conflict")
             duplicate_task(payload["task_id"], new_task_id=task_id, validate=validate,
                            record_commit=record_commit)
-        elif previous and not graph and not settings:
+        elif previous and not settings:
             from row_bot.tasks import sync_task_schedule
             sync_task_schedule(task_id, validate=validate)
         elif not previous and settings:
@@ -141,14 +137,6 @@ def execute_task_command(*, owner_id: str, key: str, command: dict,
                     expected_revision=payload["task_revision"], expected_profile_revision=payload["profile_revision"],
                     validate=validate, record_commit=record_commit,
                     confirm_full_autonomy=bool(payload.get("confirm_full_autonomy")))
-        elif not previous and graph:
-            steps = tuple(TaskGraphStepEdit(step["id"], step["type"], TaskGraphFields(**{
-                **step["fields"], "run_ids": None if step["fields"].get("run_ids") is None
-                else tuple(step["fields"]["run_ids"]),
-                "apps": None if step["fields"].get("apps") is None else tuple(step["fields"]["apps"]),
-            })) for step in payload["steps"])
-            update_saved_task_graph(task_id, steps, expected_revision=payload["task_revision"],
-                                    validate=validate, record_commit=record_commit)
         elif not previous:
             values = payload["fields"]
             fields = TaskEditableFields(**{**values, "prompts": tuple(values["prompts"]),
@@ -158,7 +146,7 @@ def execute_task_command(*, owner_id: str, key: str, command: dict,
             else:
                 update_saved_task(task_id, fields, expected_revision=payload["task_revision"],
                                   validate=validate, record_commit=record_commit)
-        current = get_task_settings(task_id) if settings else get_task_graph(task_id) if graph else get_task_editor(task_id)
+        current = get_task_settings(task_id) if settings else get_task_editor(task_id)
         validate()
         result = {**progress, "status": "completed", "task_revision": current.revision}
         admissions.complete_command(owner_id, key, result)
@@ -168,11 +156,11 @@ def execute_task_command(*, owner_id: str, key: str, command: dict,
         # before the domain caller could report success. Never repeat the edit.
         saved = admissions.receipt(owner_id, command["command_id"])
         if saved and saved.get("task_saved"):
-            code = exc.code if isinstance(exc, (TaskControlError, TaskGraphError, TaskSettingsError)) else "task_saved_read_unconfirmed"
+            code = exc.code if isinstance(exc, (TaskControlError, TaskSettingsError)) else "task_saved_read_unconfirmed"
             result = {**progress, "status": "partial", "code": code}
             admissions.command_progress(owner_id, key, result)
             return result
-        if isinstance(exc, (TaskControlError, TaskGraphError, TaskSettingsError)):
+        if isinstance(exc, (TaskControlError, TaskSettingsError)):
             admissions.reject_command(owner_id, key, exc.code)
             raise ClientPlatformError(exc.code) from exc
         if isinstance(exc, ClientPlatformError):

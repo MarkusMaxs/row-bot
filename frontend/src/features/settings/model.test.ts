@@ -12,6 +12,7 @@ import {
   settingsRowHref,
   settingsRows,
   THREAD_SETTINGS,
+  visibleLeaves,
 } from './model';
 
 describe('settings navigation metadata', () => {
@@ -167,7 +168,7 @@ describe('settings navigation metadata', () => {
       searchSettingsRows(query).map((row) => row.label);
     expect(found('camera')).toEqual(['Vision model']);
     expect(found('claude')).toEqual(['Subscriptions', 'API providers']);
-    expect(found('steps')).toEqual(['Limits for long work']);
+    expect(found('helper levels')).toEqual(['Limits for long work']);
     expect(found('reading limit')).toEqual(['Reading limit']);
     expect(found('blocked')).toEqual(['Blocked commands']);
     expect(found('api key')).toEqual([
@@ -192,5 +193,32 @@ describe('settings navigation metadata', () => {
         searchSettingsRows(old).map((row) => row.label),
         old,
       ).toContain(label);
+  });
+});
+
+describe('Learning (preview)', () => {
+  it('is a page only in a build with its flag, and "Learn new skills" moves there (D29)', () => {
+    expect(visibleLeaves(false).map((leaf) => leaf.id)).not.toContain(
+      'learning',
+    );
+    expect(visibleLeaves(true).map((leaf) => leaf.id)).toContain('learning');
+    expect(searchSettings('learning').map((leaf) => leaf.id)).not.toContain(
+      'learning',
+    );
+    expect(searchSettings('learning', true).map((leaf) => leaf.id)).toContain(
+      'learning',
+    );
+    expect(
+      searchSettingsRows('learn new skills').map((row) => row.leaf),
+    ).toEqual(['preferences']);
+    expect(
+      searchSettingsRows('learn new skills', true).map((row) => [
+        row.leaf,
+        row.label,
+      ]),
+    ).toEqual([['learning', 'Create skills while chatting']]);
+    expect(searchSettingsRows('personal model').map((row) => row.leaf)).toEqual(
+      [],
+    );
   });
 });
