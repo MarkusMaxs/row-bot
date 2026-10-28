@@ -41,9 +41,19 @@ def settle(platform, *conversations: str) -> None:  # noqa: F811
     """Wait until no turn runs in these conversations and nothing waits to be delivered to them."""
     from row_bot.application.client_platform import settle_background
 
+    from contextlib import closing
+
+    import row_bot.linked_conversations as linked
+
+    def pending(conversation: str) -> bool:
+        # A message still running counts: its turn has ended a moment before its reply is queued.
+        with closing(linked._conn()) as conn:
+            return conn.execute("SELECT 1 FROM conversation_links WHERE (target_id = ? OR source_id = ?) AND "
+                                "kind IN ('message', 'reply') AND status IN ('queued', 'running') LIMIT 1",
+                                (conversation, conversation)).fetchone() is not None
+
     for _ in range(400):
-        import row_bot.linked_conversations as linked
-        if not any(platform.registry.active(c) or linked._waiting(c) for c in conversations):
+        if not any(platform.registry.active(c) or pending(c) for c in conversations):
             break
         threading.Event().wait(0.025)
     assert settle_background(10)

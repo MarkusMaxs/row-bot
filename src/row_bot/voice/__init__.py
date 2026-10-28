@@ -466,6 +466,20 @@ class VoiceService:
         return " ".join(s.text.strip() for s in segs).strip()
 
 
+    def transcribe_words(self, audio_bytes: bytes) -> tuple[list, str]:
+        """16 kHz mono signed-16 PCM as stretches of speech with each word's time, and the language heard
+        (a recording or a clip for video work, 5.3.1 B). The model must be installed: nothing downloads here."""
+        from row_bot.sound import Segment
+
+        model = self._ensure_whisper(allow_download=False)
+        f32 = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+        segments, info = model.transcribe(f32, beam_size=5, vad_filter=True, word_timestamps=True)
+        found = [Segment(float(s.start), float(s.end), s.text.strip(),
+                         tuple((float(w.start), float(w.end), w.word.strip()) for w in (s.words or ())))
+                 for s in segments if s.text.strip()]
+        return found, str(getattr(info, "language", "") or "")
+
+
 # ── Singleton ────────────────────────────────────────────────────────────────
 _instance: VoiceService | None = None
 _instance_lock = threading.Lock()

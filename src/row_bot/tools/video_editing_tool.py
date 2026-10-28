@@ -72,6 +72,54 @@ def _resolve_videos(inputs: list[str], conversation: str):
     return sources
 
 
+def _sounds(steps) -> dict:
+    """The voice and music files the sound steps name: name -> (path, bytes, suffix)."""
+    from row_bot.tools.sound_tool import _source
+    from row_bot.video_editing import sound_sources
+
+    found = {}
+    for name in sound_sources(steps):
+        _label, path, data, suffix = _source(name)
+        found[name] = (path, data or b"", suffix)
+    return found
+
+
+def _check(inputs: list[str]) -> str:
+    """Read a finished video: sound level, black and still stretches (the review card's checks)."""
+    import subprocess
+
+    from row_bot import ffmpeg_runtime, video_edits
+    from row_bot.media_sources import SourceError
+    from row_bot.video_editing import check_arguments, read_checks
+
+    if len(inputs) != 1:
+        return "Check one video at a time: name it in inputs (edit-…, rec-…, a file in this chat or a path)."
+    conversation = _conversation()
+    try:
+        source = _resolve_videos(inputs, conversation)[0]
+    except SourceError as exc:
+        return str(exc)
+    ffmpeg = ffmpeg_runtime.find()
+    if ffmpeg is None:
+        return "Checking a video needs ffmpeg: make an edit first (it offers to download it)."
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="row-bot-check-") as folder:
+        path = Path(folder) / "video.mp4"
+        if source.ref:
+            path.write_bytes(source.read_bytes(limit=2 * 1024 ** 3))
+        else:
+            path = Path(source.path)
+        info = video_edits.probe_video(ffmpeg, str(path), Path(folder))
+        try:
+            done = subprocess.run(ffmpeg.command(*check_arguments(path, has_audio=info.has_audio)),
+                                  capture_output=True, text=True, timeout=1800, check=False)
+        except subprocess.TimeoutExpired:
+            return "Checking took too long: check a shorter part (trim it first)."
+    checks = read_checks(done.stderr or "", info)
+    return f"Checks for {source.label}:\n" + "\n".join(f"- {line}" for line in checks.lines)
+
+
 def _start(action: str, inputs: list[str], steps: list, name: str, count: int, times: list[float]) -> str:
     from row_bot import ffmpeg_runtime, video_edits
     from row_bot.media_sources import SourceError
@@ -95,6 +143,7 @@ def _start(action: str, inputs: list[str], steps: list, name: str, count: int, t
                 return f"At most {MAX_INPUTS} videos can be joined in one edit."
             parsed = parse_steps(steps)
         sources = _resolve_videos(inputs, conversation)
+        sounds = _sounds(parsed)
     except (EditError, SourceError) as exc:
         return str(exc)
     line = ""
@@ -124,6 +173,7 @@ def _start(action: str, inputs: list[str], steps: list, name: str, count: int, t
         count=count or (0 if times else DEFAULT_FRAMES),
         times=[float(value) for value in times or []],
         download=download,
+        sounds=sounds,
     )
     edit = video_edits.start(request)
     _wait(edit, INLINE_SECONDS)
@@ -291,7 +341,7 @@ def _save(edit_id: str, path: str) -> str:
 
 
 class _Step(BaseModel):
-    op: Literal["trim", "speed", "text", "zoom", "crop", "captions"]
+    op: Literal["trim", "speed", "text", "zoom", "crop", "captions", "sound"]
     start: float | None = Field(default=None, description="Seconds.")
     end: float | None = Field(default=None, description="Seconds.")
     factor: float | None = Field(default=None, description="speed: 2 = twice as fast, 0.5 = half.")
@@ -300,10 +350,14 @@ class _Step(BaseModel):
     position: Literal["top-left", "top", "top-right", "center", "bottom-left", "bottom", "bottom-right"] | None = None
     style: Literal["badge", "title", "caption"] | None = None
     region: list[float] | None = Field(default=None, description="zoom, crop: [x, y, width, height], 0-1.")
+    source: str = Field(default="", description="sound: a voice or music file by name (speak, make_music).")
+    role: Literal["voice", "music", "original"] | None = Field(
+        default=None, description="sound: voice at start; music under it (ducked); original = the video's own.")
+    volume: float | None = Field(default=None, description="sound: 1 as it is, 0.3 music default, 0 silent.")
 
 
 class _EditInput(BaseModel):
-    action: Literal["edit", "frames", "status", "stop", "save"] = "edit"
+    action: Literal["edit", "frames", "check", "status", "stop", "save"] = "edit"
     inputs: list[str] = Field(default_factory=list, description=(
         "Videos, in order (several are joined): rec-…, edit-…, a file in this chat by name, or a workspace path."))
     steps: list[_Step] = Field(default_factory=list, description=(
@@ -322,13 +376,15 @@ def _edit_video(action: str = "edit", inputs: list[str] | None = None, steps: li
     action = str(action or "edit").strip().casefold()
     if action in {"edit", "frames"}:
         return _start(action, list(inputs or []), list(steps or []), name, int(count or 0), list(times or []))
+    if action == "check":
+        return _check(list(inputs or []))
     if action == "status":
         return _status(edit_id)
     if action == "stop":
         return _stop(edit_id)
     if action == "save":
         return _save(edit_id, path)
-    return "Use action edit, frames, status, stop or save."
+    return "Use action edit, frames, check, status, stop or save."
 
 
 class VideoEditingTool(BaseTool):
@@ -362,9 +418,11 @@ class VideoEditingTool(BaseTool):
                 name="edit_video",
                 description=(
                     "Edit videos with ffmpeg into one H.264 MP4 saved to this chat (shown with a player): trim, "
-                    "join, speed (with a 2× label), text badges or titles, zoom (punch-in), crop, captions (SRT). "
-                    "action=frames saves stills; status/stop follow an edit that carries on in the background; "
-                    "save copies a finished edit into the workspace. The first use may ask to download ffmpeg."
+                    "join, speed (with a 2× label), text badges or titles, zoom (punch-in), crop, captions (SRT), "
+                    "sound (voice lines at times, music ducked under them, one loudness). action=frames saves "
+                    "stills; check reads a finished video's sound, black and still stretches: never say a video "
+                    "is done before it passes. status/stop follow an edit in the background; save copies it into "
+                    "the workspace. The first use may ask to download ffmpeg."
                 ),
                 args_schema=_EditInput,
             )

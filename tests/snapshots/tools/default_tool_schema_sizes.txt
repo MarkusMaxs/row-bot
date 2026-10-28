@@ -46,7 +46,7 @@ developer_workspace_info: 233
 developer_write_file: 719
 documents: 438
 duckduckgo: 368
-edit_video: 2641
+edit_video: 3283
 explore_connections: 474
 export_to_pdf: 687
 get_current_weather: 418
@@ -57,6 +57,7 @@ goal_update: 1053
 link_memories: 578
 list_conversations: 280
 list_memories: 453
+make_music: 657
 media_bring: 305
 media_find: 576
 media_tag: 456
@@ -82,6 +83,7 @@ save_memory: 732
 search_conversations: 703
 search_memory: 620
 send_file: 885
+speak: 797
 start_process: 1300
 stop_process: 332
 suggest_apps: 861
@@ -93,6 +95,7 @@ task_update: 1639
 tracker_delete: 308
 tracker_log: 1539
 tracker_query: 597
+transcribe: 447
 update_memory: 1056
 use_code_folder: 628
 wiki_export_conversation: 344
@@ -109,4 +112,4 @@ workspace_read_file: 867
 workspace_write_file: 556
 youtube_search: 660
 youtube_transcript: 725
-TOTAL (111 tools): 76664
+TOTAL (114 tools): 79207
