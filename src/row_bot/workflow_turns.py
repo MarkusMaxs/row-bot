@@ -12,6 +12,10 @@ workflow sends results.
 A turn that fails (a provider limit, a cut-off reply, the network) is tried again
 by itself after a wait, twice at most, unless the run has already done something
 outside Row-Bot: then it ends and says so, and nothing is repeated.
+
+A workflow keeps short notes between runs (5.3.1 G4): its first message carries
+them, and the run keeps them current with ``task_update(notes=...)``, so a run
+doesn't check again what an earlier one already did.
 """
 from __future__ import annotations
 
@@ -32,6 +36,7 @@ _LINK = re.compile(r"https?://[^\s<>\"')\]]+")
 _ALSO_OUTBOUND = frozenset({"x_engage", "outlook_draft_mail", "create_gmail_draft"})
 _LOCK = threading.Lock()
 _ATTEMPTS: dict[str, int] = {}  # run id -> passing failures tried again so far
+NOTES_LIMIT = 2_000  # Characters a workflow's notes may hold.
 
 
 def _service() -> Any:
@@ -54,6 +59,52 @@ def person_rules(conversation_id: str) -> dict | None:
         items = []
     items = [str(item) for item in items if isinstance(item, str)] if isinstance(items, list) else []
     return {"step": False, "items": items} if items else None
+
+
+def _notes_conn() -> Any:
+    from row_bot import tasks
+    conn = tasks._get_conn()
+    conn.execute("CREATE TABLE IF NOT EXISTS workflow_notes (task_id TEXT PRIMARY KEY, text TEXT NOT NULL, "
+                 "updated_at TEXT NOT NULL)")
+    return conn
+
+
+def notes(task_id: str) -> str:
+    """The notes a workflow kept from its earlier runs ("" when none)."""
+    conn = _notes_conn()
+    try:
+        row = conn.execute("SELECT text FROM workflow_notes WHERE task_id = ?", (task_id,)).fetchone()
+    finally:
+        conn.close()
+    return str(row["text"]) if row else ""
+
+
+def save_notes(task_id: str, text: str) -> str:
+    """Replace a workflow's notes ("" clears them); the notes kept, cut to NOTES_LIMIT."""
+    kept = str(text or "").strip()[:NOTES_LIMIT]
+    conn = _notes_conn()
+    try:
+        with conn:
+            if kept:
+                conn.execute("INSERT INTO workflow_notes (task_id, text, updated_at) VALUES (?, ?, ?) "
+                             "ON CONFLICT(task_id) DO UPDATE SET text = excluded.text, "
+                             "updated_at = excluded.updated_at", (task_id, kept, datetime.now().isoformat()))
+            else:
+                conn.execute("DELETE FROM workflow_notes WHERE task_id = ?", (task_id,))
+    finally:
+        conn.close()
+    return kept
+
+
+def with_notes(task: Mapping[str, Any], prompt: str) -> str:
+    """A run's first message: the workflow's notes from earlier runs, how to keep them, then its message."""
+    task_id = str(task["id"])
+    kept = notes(task_id)
+    lead = (f"Notes this workflow kept from its earlier runs:\n{kept}" if kept
+            else "This workflow has no notes from earlier runs yet.")
+    return (f"{lead}\n\nBefore this run ends, keep them current for the next run with "
+            f"task_update(task_id=\"{task_id}\", notes=...): what you checked and when, ids you'll need again, "
+            f"and what's left. Replace them whole; under {NOTES_LIMIT:,} characters.\n\n---\n\n{prompt}")
 
 
 def messages(task: Mapping[str, Any]) -> list[str]:
@@ -87,6 +138,8 @@ def _send(task: Mapping[str, Any], thread_id: str, run_id: str, index: int, *, t
     from row_bot.application import conversation_followups as followups
     sent = messages(task)
     prompt = tasks.expand_template_vars(sent[index], task_id=str(task["id"]))
+    if index == 0:
+        prompt = with_notes(task, prompt)
     followup = followups.Followup(kind=KIND, prompt=prompt, note=_note(task, index, len(sent), trigger))
     try:
         receipt = followups.start(_service(), thread_id, followup, model_ref=str(task.get("model_override") or ""))

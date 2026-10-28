@@ -200,8 +200,44 @@ def test_each_message_is_its_own_turn_in_order(workflows, platform):  # noqa: F8
     fake = Recording(reply("Found three creators."), reply("Wrote to the first."))
     task = create(workflows, "Find three creators.", "Draft a note to the first one.")
     done = run(workflows, platform, fake, task)
-    assert fake.prompts == ["Find three creators.", "Draft a note to the first one."]
+    assert fake.prompts[0].endswith("\n\n---\n\nFind three creators.")  # After the workflow's notes (G4).
+    assert fake.prompts[1] == "Draft a note to the first one."
     assert (done["status"], done["steps_done"], done["steps_total"]) == ("completed", 2, 2)
+
+
+def test_a_workflow_keeps_notes_its_next_run_reads_first(workflows, platform):  # noqa: F811
+    """G4: a run keeps short notes with task_update(notes=...); the next run's first message carries them."""
+    from row_bot.tools.task_tool import _task_update
+    fake = Recording(reply("Checked the 5.3.0 release."), reply("Nothing new since."), reply("Posted."),
+                     reply("Said what went out."))
+    task = create(workflows, "Check what's new and post about it.", "Then say what you posted.")
+
+    run(workflows, platform, fake, task)
+    kept = _task_update(task["id"], notes="Release 5.3.0 checked 27 Oct. Last post ids: 2114329103603990962.")
+    second = run(workflows, platform, fake, workflows.get_task(task["id"]))
+
+    assert fake.prompts[0].startswith("This workflow has no notes from earlier runs yet.")
+    assert f'task_update(task_id="{task["id"]}", notes=...)' in fake.prompts[0]
+    assert kept.endswith("Notes: 65 characters kept for the next run")
+    assert fake.prompts[2].startswith("Notes this workflow kept from its earlier runs:\nRelease 5.3.0 checked 27 Oct. "
+                                      "Last post ids: 2114329103603990962.\n\n")
+    assert fake.prompts[2].endswith("Check what's new and post about it.")
+    assert second["status"] == "completed"
+    notes = [row["blocks"][0]["text"] for row in platform.snapshot(second["thread_id"])["rows"]
+             if row.get("note") == "continuation"]
+    assert not any("Notes this workflow kept" in note for note in notes), "the chat shows the run, not its notes"
+
+
+def test_workflow_notes_are_cut_to_their_limit_and_cleared_with_empty_text(workflows):
+    from row_bot import workflow_turns
+    from row_bot.tools.task_tool import _task_update
+    task = create(workflows, "Check the release.")
+
+    cut = _task_update(task["id"], notes="x" * 2_500)
+    assert cut.endswith("Notes: 2,000 characters kept for the next run (cut to 2,000)")
+    assert len(workflow_turns.notes(task["id"])) == 2_000
+    assert _task_update(task["id"], notes="").endswith("Notes: cleared")
+    assert workflow_turns.notes(task["id"]) == ""
 
 
 def test_a_passing_failure_tries_again_but_never_after_something_went_out(workflows, platform, monkeypatch):  # noqa: F811
