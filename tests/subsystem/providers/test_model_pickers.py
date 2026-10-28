@@ -285,3 +285,18 @@ def test_a_starred_model_is_listed_in_every_picker_for_its_jobs_and_unstarring_t
     assert TERRA not in _options("brain")
     # Vision still lists it while it is Vision's current model.
     assert TERRA in _options("vision")
+
+
+def test_with_nothing_pinned_or_starred_a_picker_lists_the_ready_models_for_its_job(saved_state, tmp_path):
+    """A new profile that just connected ChatGPT isn't shown "No models yet" beside a catalog of ready models."""
+    from row_bot.providers import model_visibility
+
+    saved = json.loads(config.CONFIG_PATH.read_text(encoding="utf-8"))
+    config.CONFIG_PATH.write_text(json.dumps({**saved, "quick_choices": []}), encoding="utf-8")
+
+    brain = _options("brain")
+    assert {SOL, LUNA, TERRA} <= set(brain) and UNCONNECTED not in brain, "ready ones only"
+    assert all(option["available"] for option in brain.values())
+
+    model_visibility.update_model_visibility("favourite", LUNA)
+    assert set(_options("brain")) == {LUNA}, "a star keeps the list to the starred"

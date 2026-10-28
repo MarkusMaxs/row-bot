@@ -71,6 +71,20 @@ def test_the_card_says_what_will_happen_on_which_site():
     assert upload["description"].startswith("Row-Bot will upload leak.jpg on homeserve.co.uk.")
 
 
+def test_a_send_in_a_sandbox_names_the_sandbox_and_says_nothing_leaves_the_computer(monkeypatch):
+    from row_bot import sandboxes
+
+    page = PageFacts(url="http://127.0.0.1:62293/app-v2/conversations/x", title="Row-Bot")
+    monkeypatch.setattr(sandboxes, "name_at", lambda url: "Fernleaf Teas" if ":62293/" in url else "")
+    card = approval_request("browser_click", classify(action="click", control="Send", page=page), url=page.url)
+
+    assert card["question"] == "Send in the Fernleaf Teas sandbox?"
+    assert card["description"] == ('Row-Bot will click "Send" in the Fernleaf Teas sandbox. It stays in the '
+                                   "sandbox's made-up data: nothing leaves this computer.")
+    elsewhere = PageFacts(url="http://127.0.0.1:8000/", title="Shop")
+    assert classify(action="click", control="Send", page=elsewhere).question() == "Send on 127.0.0.1?"
+
+
 @pytest.mark.parametrize(("url", "decision"), [
     ("https://accounts.example.com/sign-in?continue=https%3A%2F%2Fapp.example.com%2F&session=abc123", "allow"),
     ("https://www.google.com/search?q=" + "a" * 900, "allow"),  # Long sign-in and search addresses open.
