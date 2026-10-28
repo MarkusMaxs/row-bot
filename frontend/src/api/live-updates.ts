@@ -20,6 +20,8 @@ import type { LiveFrame } from './types';
  * - `monitor`: what Monitor lists as needing the person.
  * - `models`: the saved model catalog: refreshed, or a provider connected or
  *   disconnected (B411).
+ * - `notices`: a new background notice, for windows with no conversation
+ *   stream to carry it (Home, a new chat).
  * - `learning`: Row-Bot Learning (preview): a version, a comparison, the
  *   vault, a setting or a personal model's use changed.
  *
@@ -40,6 +42,7 @@ export type LiveTopic =
   | 'processes'
   | 'monitor'
   | 'models'
+  | 'notices'
   | 'learning';
 
 /** How often a screen re-reads anyway, for when the live stream is unavailable. */

@@ -15,6 +15,11 @@ import { SIGNED_IN_STATE } from './signed-in';
 
 const PHONE = { width: 390, height: 844 };
 const DESKTOP = { width: 1280, height: 900 };
+// A resize to a phone can put the pane over the chat just after a settle saw
+// the chat: an action then waits for a step the pane hides. Bounded, it fails
+// and the settle's retry goes back to the conversation; unbounded, it waited
+// out the test (seen on CI).
+test.use({ actionTimeout: 15_000 });
 type Still = 'account' | 'claim' | 'sign-in' | 'checkout';
 
 const RUNNING = {
