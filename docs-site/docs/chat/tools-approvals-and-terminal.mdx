@@ -159,6 +159,14 @@ Row-Bot can edit videos you already have: its recordings, files in the conversat
 - **Into the workspace**: ask Row-Bot to save a finished edit there. Replacing a file that's already there asks first; in a code folder, files are never replaced and each new one is recorded as a change you can undo.
 - Edits stop when their conversation is deleted and when Row-Bot quits. A result larger than a conversation can hold (200 MB) isn't saved; Row-Bot says how to make it smaller.
 
+### Voice, Music And Transcripts
+
+Three tools make the pieces a video needs, on this computer, and save each in the chat's files by name, so a video edit or **Send to my phone** uses it.
+
+- **Voice files** (`speak`): Row-Bot's local voice reads a script whole, never cut short like a spoken reply. Choose a voice and a speed, and say how to pronounce words (for example "Qwen" as "Kwen"). It needs the Kokoro voice from **Settings › Voice**.
+- **Music** (`make_music`): original, royalty-free background music for a video's length, made on this computer from no samples. Pick a mood (calm, upbeat, focused or warm) and the moments it should build.
+- **Transcripts** (`transcribe`): local Whisper writes down what's said in a recording or a clip, with each line's time, and saves subtitles (`.srt`). It needs the Whisper model from **Settings › Voice** and ffmpeg.
+
 ### ffmpeg
 
 Video editing uses [ffmpeg](https://ffmpeg.org). Row-Bot doesn't include it: it uses the ffmpeg already on this computer (on `PATH`) when there is one. Otherwise, the first time it's needed, Row-Bot asks "Video editing needs ffmpeg (about 30 MB) from PyPI. Download it now?" as a network download: **Ask** asks, **Auto**'s reviewer may approve it when you asked for an edit, **Hands-off** allows it, and **Block** refuses.
