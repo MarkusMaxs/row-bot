@@ -73,6 +73,9 @@ class Sandbox:
     status: str = "stopped"
     port: int = 0
     problem: str = ""
+    # Its process, by id and start time: one a crash of this Row-Bot left running is ended before it starts again.
+    pid: int = 0
+    pid_birth: float = 0.0
 
     @property
     def url(self) -> str:
@@ -105,7 +108,8 @@ def _load(path: Path) -> Sandbox | None:
         return Sandbox(sandbox_id=data["sandbox_id"], name=str(data.get("name") or "Sandbox")[:60],
                        pack=str(data.get("pack") or "empty"), created_at=float(data.get("created_at") or 0),
                        status=str(data.get("status") or "stopped"), port=int(data.get("port") or 0),
-                       problem=str(data.get("problem") or "")[:300])
+                       problem=str(data.get("problem") or "")[:300], pid=int(data.get("pid") or 0),
+                       pid_birth=float(data.get("pid_birth") or 0))
     except (OSError, ValueError, TypeError, KeyError):
         return None
 
@@ -115,9 +119,22 @@ def get(sandbox_id: str) -> Sandbox | None:
         return None
     sandbox = _load(_folder(sandbox_id) / "sandbox.json")
     if sandbox is not None and sandbox.status in {"running", "starting"} and sandbox_id not in _PROCESSES:
-        # Its process ended with the Row-Bot that started it.
+        # Its process ended with the Row-Bot that started it (one a crash left running is ended at its next start).
         sandbox.status, sandbox.port = "stopped", 0
     return sandbox
+
+
+def _end_left_over(sandbox: Sandbox) -> bool:
+    """A sandbox process a crash of this Row-Bot left running, still the one it started: ended. True if one was."""
+    from row_bot.background_processes import _same_process
+    from row_bot.process_cancellation import kill_process_tree
+
+    left = _same_process(sandbox.pid, sandbox.pid_birth or None) if sandbox.pid else None
+    if left is None:
+        return False
+    kill_process_tree(left)
+    logger.info("Ended a sandbox a crash left running")
+    return True
 
 
 def list_sandboxes() -> list[Sandbox]:
@@ -210,6 +227,7 @@ def start(sandbox_id: str) -> Sandbox:
             raise SandboxError("That sandbox is no longer here.")
         if sandbox_id in _PROCESSES and _PROCESSES[sandbox_id].poll() is None:
             return sandbox
+        _end_left_over(sandbox)  # Never two on one data folder.
         port, secret = _free_port(), secrets.token_urlsafe(32)
         folder = _folder(sandbox_id)
         log = open(folder / "sandbox.log", "ab")  # noqa: SIM115 - the process writes to it while it runs.
@@ -222,7 +240,10 @@ def start(sandbox_id: str) -> Sandbox:
         finally:
             log.close()
         _PROCESSES[sandbox_id], _SECRETS[sandbox_id] = process, secret
+        from row_bot.background_processes import _birth
+
         sandbox.status, sandbox.port, sandbox.problem = "starting", port, ""
+        sandbox.pid, sandbox.pid_birth = int(process.pid or 0), float(_birth(process.pid) or 0)
         _save(sandbox)
     threading.Thread(target=_follow, args=(sandbox_id, process, port, secret), daemon=True,
                      name=f"row-bot-{sandbox_id}").start()
@@ -240,7 +261,7 @@ def _follow(sandbox_id: str, process: subprocess.Popen, port: int, secret: str) 
     problem = ("It stopped while starting: its log is in the sandbox's folder." if process.poll() is not None
                else "It didn't answer in time.")
     _end(sandbox_id)
-    _set(sandbox_id, status="failed", port=0, problem=problem)
+    _set(sandbox_id, status="failed", port=0, problem=problem, pid=0, pid_birth=0.0)
 
 
 def _set(sandbox_id: str, **changes: Any) -> None:
@@ -282,7 +303,7 @@ def stop(sandbox_id: str) -> Sandbox:
         if get(sandbox_id) is None:
             raise SandboxError("That sandbox is no longer here.")
         _end(sandbox_id)
-        _set(sandbox_id, status="stopped", port=0, problem="")
+        _set(sandbox_id, status="stopped", port=0, problem="", pid=0, pid_birth=0.0)
     return get(sandbox_id)  # type: ignore[return-value]
 
 
@@ -307,7 +328,7 @@ def stop_all() -> int:
         ids = list(_PROCESSES)
         for sandbox_id in ids:
             _end(sandbox_id)
-            _set(sandbox_id, status="stopped", port=0)
+            _set(sandbox_id, status="stopped", port=0, pid=0, pid_birth=0.0)
     return len(ids)
 
 
@@ -338,6 +359,29 @@ def running_ports() -> set[int]:
     with _LOCK:
         ids = [sandbox_id for sandbox_id, process in _PROCESSES.items() if process.poll() is None]
     return {sandbox.port for sandbox_id in ids if (sandbox := get(sandbox_id)) is not None and sandbox.port}
+
+
+def end_left_overs() -> int:
+    """At start-up: sandboxes a crash of this Row-Bot left running are ended. How many were."""
+    ended = 0
+    for sandbox in list_sandboxes():
+        if sandbox.sandbox_id not in _PROCESSES and _end_left_over(sandbox):
+            _set(sandbox.sandbox_id, status="stopped", port=0, problem="", pid=0, pid_birth=0.0)
+            ended += 1
+    return ended
+
+
+def name_at(url: str) -> str:
+    """The name of the running sandbox serving *url* (its own port on this computer), or ""."""
+    from urllib.parse import urlparse
+
+    parsed = urlparse(str(url or ""))
+    if parsed.hostname not in {"127.0.0.1", "localhost", "::1"} or not parsed.port:
+        return ""
+    with _LOCK:
+        ids = [sandbox_id for sandbox_id, process in _PROCESSES.items() if process.poll() is None]
+    return next((sandbox.name for sandbox_id in ids
+                 if (sandbox := get(sandbox_id)) is not None and sandbox.port == parsed.port), "")
 
 
 def wait_running(sandbox_id: str, seconds: float) -> Sandbox | None:

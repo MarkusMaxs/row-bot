@@ -375,6 +375,8 @@ def test_a_phone_signs_in_to_x_through_the_public_address(tmp_path, monkeypatch,
     fake = FakeXApi()  # X names who signed in (/2/users/me): the sign-in is that account's.
     fake.users["fixture-x-access"] = {"id": "111", "username": "rowbot_ai", "name": "Row-Bot"}
     monkeypatch.setattr(x_accounts, "transport", fake.transport())
+    from row_bot.tools import registry
+    registry.set_enabled("x", False)
     phone, browser, _ = _phone()
     with phone, browser:
         _, headers = bootstrap(phone)
@@ -398,6 +400,7 @@ def test_a_phone_signs_in_to_x_through_the_public_address(tmp_path, monkeypatch,
     saved = account_tokens.read("x:111")
     assert saved["access_token"] == "fixture-x-access" and saved["expires_at"] > 0
     assert account_tokens.read("x") is None
+    assert registry.is_enabled("x") is True, "F30: a first sign-in turns on the access its setup reviewed"
 
 
 def test_the_desktop_app_keeps_the_loopback_sign_in_and_x_callback(tmp_path, monkeypatch, keychain):

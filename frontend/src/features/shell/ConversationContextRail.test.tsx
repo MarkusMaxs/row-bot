@@ -39,6 +39,8 @@ vi.mock('../../runtime', () => ({
     artifactDesignSessions: { get: () => runtime.designSession },
   }),
 }));
+// Waiting, Running, Workflow and Linked conversations have their own tests (ContextLive.test.tsx).
+vi.mock('./ContextLive', () => ({ ContextLive: () => null }));
 vi.mock('./MediaPreview', () => ({
   MediaPreview: () => <span>Media preview</span>,
 }));

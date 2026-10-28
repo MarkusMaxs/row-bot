@@ -59,6 +59,26 @@ const TUNNEL = open('access', 'Tunnel', 'tunnel');
 const REMOTE_ACCESS = open('access', 'Devices & remote access');
 
 const CATALOG: Record<string, Entry> = {
+  registry_entry_removed: [
+    "This app is no longer listed in the MCP Registry, so Row-Bot can't set it up from there.",
+    'none',
+    MCP,
+  ],
+  registry_recipe_changed: [
+    'Its MCP Registry listing changed since you opened it. Open it again to see it as it is now.',
+    'review',
+    MCP,
+  ],
+  registry_recipe_unsupported: [
+    "Its MCP Registry listing asks for setup Row-Bot can't do safely.",
+    'none',
+    MCP,
+  ],
+  registry_identity_missing: [
+    "Its MCP Registry listing doesn't say which server it is.",
+    'none',
+    MCP,
+  ],
   plan_changed: [
     'Something changed since you agreed. Review it again before continuing.',
     'review',
