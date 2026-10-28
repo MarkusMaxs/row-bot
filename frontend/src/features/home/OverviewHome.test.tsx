@@ -37,6 +37,8 @@ const runtime = vi.hoisted(() => ({
   taskRunReview: vi.fn(),
   command: vi.fn(),
   taskRun: vi.fn(),
+  waits: vi.fn(async () => ({ schema_version: 1, items: [] as unknown[] })),
+  stopWait: vi.fn(async () => ({ schema_version: 1, items: [] })),
 }));
 vi.mock('../../runtime', () => ({
   useRuntime: () => ({ controller: runtime }),
@@ -915,6 +917,45 @@ it('omits the hide control when Home cannot hide the reminder', () => {
   ).toBeNull();
 });
 
+// Waiting (5.3.1) -----------------------------------------------------------------
+
+it('lists what conversations wait for under Waiting, not Needs you, each with Stop', async () => {
+  const user = userEvent.setup();
+  runtime.waits.mockResolvedValueOnce({
+    schema_version: 1,
+    items: [
+      {
+        wait_id: 'a1b2c3d4e5f6',
+        conversation_id: 'ship',
+        conversation_title: 'Ship 5.3.1',
+        kind: 'check',
+        label: 'CI on PR 590 is green',
+        how: 'checks every 2 min',
+        until: '2026-09-26T11:30',
+        status: 'waiting',
+      },
+    ],
+  });
+  show();
+
+  const waiting = await screen.findByRole('list', { name: 'Waiting' });
+  expect(waiting).toHaveTextContent(
+    'CI on PR 590 is greenShip 5.3.1 · checks every 2 min',
+  );
+  expect(screen.queryByRole('list', { name: 'Needs you' })).toBeNull();
+  await user.click(
+    within(waiting).getByRole('button', { name: 'Open Ship 5.3.1' }),
+  );
+  expect(handlers.onOpenConversation).toHaveBeenCalledWith('ship');
+  await user.click(
+    within(waiting).getByRole('button', { name: 'Stop waiting' }),
+  );
+  expect(runtime.stopWait).toHaveBeenCalledWith('a1b2c3d4e5f6');
+  await waitFor(() =>
+    expect(screen.queryByRole('list', { name: 'Waiting' })).toBeNull(),
+  );
+});
+
 // Ask box and quick starts -------------------------------------------------------
 
 it('starts a new chat from the Ask box on Enter with the text as its first message', async () => {
@@ -1331,4 +1372,92 @@ it('reads the checks again once an approval is answered, so the Workflows warnin
   } finally {
     live.stop();
   }
+});
+
+it('Review shows each post or email waiting to go out in full, sets one aside, and cancels a scheduled post (G3)', async () => {
+  runtime.approval.mockImplementation(async (id: string) => ({
+    id,
+    status: 'pending',
+    revision: '0',
+    nonce: `nonce-${id}`,
+    policy_revision: '1',
+    action_label: id === 'approval-post' ? 'x_post' : 'send_gmail_message',
+    question:
+      id === 'approval-post'
+        ? 'Post to X as @rowbot_ai?'
+        : 'Send an email to Riverside Flour?',
+    reason: 'To orders@riverside.example: Reorder for next week: 40 kg rye',
+    x_post:
+      id === 'approval-post'
+        ? {
+            account_id: '111',
+            username: 'rowbot_ai',
+            action: 'post',
+            text: 'Row-Bot 5.3.1 is out.',
+            post_at: '2026-09-26T13:00',
+          }
+        : null,
+  }));
+  const cancel = vi.fn().mockResolvedValue({ cancelled: true });
+  show({
+    loadApprovals: vi
+      .fn()
+      .mockResolvedValue(
+        approvals(
+          approval({ id: 'approval-post', goes_out: 'post', title: 'Daily X' }),
+          approval({ goes_out: 'email' }),
+          approval({ id: 'approval-file', title: 'Delete notes.txt' }),
+        ),
+      ),
+    loadScheduledPosts: vi.fn().mockResolvedValue({
+      schema_version: 1,
+      items: [
+        {
+          id: 'xs-0123456789ab',
+          account_id: '111',
+          username: 'rowbot_ai',
+          action: 'post',
+          text: 'Morning post about local AI.',
+          post_at: '2026-09-26T18:00',
+          media: [],
+        },
+      ],
+    }),
+    onCancelScheduledPost: cancel,
+  });
+  const review = await screen.findByRole('list', {
+    name: 'Waiting to go out',
+  });
+  // Needs you keeps one row for them, and the approval that isn't going out.
+  expect(
+    await screen.findByRole('button', { name: 'Go to Review' }),
+  ).toHaveTextContent('1 post and 1 email to review');
+  expect(within(list('Needs you')).getByText('Delete notes.txt')).toBeVisible();
+  const post = await within(review).findByRole('complementary', {
+    name: 'Approval required: Post to X as @rowbot_ai?',
+  });
+  expect(within(post).getByText('Row-Bot 5.3.1 is out.')).toBeVisible();
+  expect(within(post).getByText(/^Goes out at/)).toBeVisible();
+  expect(
+    within(post).getByRole('button', { name: 'Approve for then' }),
+  ).not.toHaveAttribute('aria-keyshortcuts');
+  await within(review).findByRole('complementary', {
+    name: 'Approval required: Send an email to Riverside Flour?',
+  });
+
+  fireEvent.click(within(post).getByRole('button', { name: 'Not now' }));
+  expect(within(review).getAllByRole('complementary')).toHaveLength(1);
+  expect(
+    screen.getByRole('button', { name: /1 set aside · Show/ }),
+  ).toBeVisible();
+
+  const scheduled = list('Scheduled posts');
+  expect(within(scheduled).getByText(/^Today, .* · @rowbot_ai$/)).toBeVisible();
+  await act(async () => {
+    fireEvent.click(
+      within(scheduled).getByRole('button', { name: 'Cancel this post' }),
+    );
+  });
+  expect(cancel).toHaveBeenCalledWith('xs-0123456789ab');
+  expect(screen.queryByRole('list', { name: 'Scheduled posts' })).toBeNull();
 });

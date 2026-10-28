@@ -295,10 +295,22 @@
         "decision": {
           "enum": [
             "approve",
-            "reject"
+            "reject",
+            "edit"
           ],
           "title": "Decision",
           "type": "string"
+        },
+        "edit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/XPostEdit"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "nonce": {
           "maxLength": 256,
@@ -2144,6 +2156,95 @@
         "payload"
       ],
       "title": "ConversationIncognitoCommand",
+      "type": "object"
+    },
+    "ConversationLinkDismissCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "client_session_id": {
+          "format": "uuid",
+          "title": "Client Session Id",
+          "type": "string"
+        },
+        "command_id": {
+          "format": "uuid",
+          "title": "Command Id",
+          "type": "string"
+        },
+        "expected_revision": {
+          "pattern": "^(0|[1-9][0-9]{0,19})$",
+          "title": "Expected Revision",
+          "type": "string"
+        },
+        "payload": {
+          "$ref": "#/$defs/ConversationLinkPayload"
+        },
+        "type": {
+          "const": "conversation.link.dismiss",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command_id",
+        "client_session_id",
+        "expected_revision",
+        "type",
+        "payload"
+      ],
+      "title": "ConversationLinkDismissCommand",
+      "type": "object"
+    },
+    "ConversationLinkPayload": {
+      "additionalProperties": false,
+      "properties": {
+        "link_id": {
+          "pattern": "^[0-9a-f]{32}$",
+          "title": "Link Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "link_id"
+      ],
+      "title": "ConversationLinkPayload",
+      "type": "object"
+    },
+    "ConversationLinkStartCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "client_session_id": {
+          "format": "uuid",
+          "title": "Client Session Id",
+          "type": "string"
+        },
+        "command_id": {
+          "format": "uuid",
+          "title": "Command Id",
+          "type": "string"
+        },
+        "expected_revision": {
+          "pattern": "^(0|[1-9][0-9]{0,19})$",
+          "title": "Expected Revision",
+          "type": "string"
+        },
+        "payload": {
+          "$ref": "#/$defs/ConversationLinkPayload"
+        },
+        "type": {
+          "const": "conversation.link.start",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "command_id",
+        "client_session_id",
+        "expected_revision",
+        "type",
+        "payload"
+      ],
+      "title": "ConversationLinkStartCommand",
       "type": "object"
     },
     "ConversationPinCommand": {
@@ -9412,6 +9513,16 @@
           ],
           "title": "Model Override"
         },
+        "send_results": {
+          "default": "every_run",
+          "enum": [
+            "every_run",
+            "needs_me",
+            "digest"
+          ],
+          "title": "Send Results",
+          "type": "string"
+        },
         "trigger_task_id": {
           "anyOf": [
             {
@@ -10703,6 +10814,31 @@
       ],
       "title": "WriteTarget",
       "type": "object"
+    },
+    "XPostEdit": {
+      "additionalProperties": false,
+      "description": "The person's edit of an X post on its card (G2): the new text, and the files kept by their SHA-256 start.",
+      "properties": {
+        "media": {
+          "items": {
+            "pattern": "^[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "maxItems": 4,
+          "title": "Media",
+          "type": "array"
+        },
+        "text": {
+          "maxLength": 25000,
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "title": "XPostEdit",
+      "type": "object"
     }
   },
   "discriminator": {
@@ -10732,6 +10868,8 @@
       "conversation.create": "#/$defs/ConversationCreateCommand",
       "conversation.delete": "#/$defs/ConversationDeleteCommand",
       "conversation.incognito": "#/$defs/ConversationIncognitoCommand",
+      "conversation.link.dismiss": "#/$defs/ConversationLinkDismissCommand",
+      "conversation.link.start": "#/$defs/ConversationLinkStartCommand",
       "conversation.pin": "#/$defs/ConversationPinCommand",
       "conversation.queue.dispatch": "#/$defs/ConversationQueueDispatchCommand",
       "conversation.queue.edit": "#/$defs/ConversationQueueEditCommand",
@@ -10941,6 +11079,12 @@
     },
     {
       "$ref": "#/$defs/AgentDismissCommand"
+    },
+    {
+      "$ref": "#/$defs/ConversationLinkStartCommand"
+    },
+    {
+      "$ref": "#/$defs/ConversationLinkDismissCommand"
     },
     {
       "$ref": "#/$defs/MediaSaveCommand"

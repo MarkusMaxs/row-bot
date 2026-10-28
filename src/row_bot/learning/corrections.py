@@ -171,6 +171,16 @@ def withdraws(text: str) -> bool:
 
 
 _TURN_CONTEXT_KEY = "row_bot_turn_context"
+_NOTE_KEY = "row_bot_note"  # Row-Bot's own note to the model (5.3.1's progress nudge), never the person's
+
+
+def is_row_bot_note(message: Mapping[str, Any]) -> bool:
+    """Whether a captured message (``message_to_dict``) is a note Row-Bot sent the model itself: kept in the
+    request exactly as sent, but never the person's words."""
+
+    data = message.get("data") if isinstance(message.get("data"), Mapping) else message
+    kwargs = data.get("additional_kwargs")
+    return isinstance(kwargs, Mapping) and bool(kwargs.get(_NOTE_KEY))
 
 
 def _content_text(content: Any) -> str:
@@ -187,11 +197,11 @@ def _content_text(content: Any) -> str:
 
 def person_texts(request: Mapping[str, Any] | None) -> list[str]:
     """What the person sent, oldest first, from a captured request (``capture.read_request``): human
-    messages without Row-Bot's turn context (its own message, or a block it appended)."""
+    messages without Row-Bot's turn context (its own message, or a block it appended) or its notes."""
 
     found: list[str] = []
     for item in (request or {}).get("messages") or ():
-        if not isinstance(item, Mapping) or item.get("type") != "human":
+        if not isinstance(item, Mapping) or item.get("type") != "human" or is_row_bot_note(item):
             continue
         data = item.get("data") or {}
         kwargs = data.get("additional_kwargs") if isinstance(data, Mapping) else None
@@ -487,6 +497,7 @@ __all__ = [
     "confirm",
     "corrected_decisions",
     "first_call",
+    "is_row_bot_note",
     "judge",
     "person_text",
     "precision",

@@ -17,9 +17,11 @@ import {
   ChevronRight,
   Code2,
   HeartPulse,
+  Hourglass,
   MessageSquare,
   Palette,
   Paperclip,
+  Send,
   ShieldAlert,
   Workflow,
   X,
@@ -32,11 +34,15 @@ import type {
   OnboardingSnapshot,
   PendingApproval,
   PendingApprovalPage,
+  ScheduledPost,
+  ScheduledPostPage,
   SystemDiagnosis,
   TaskSummary,
   TaskSummaryPage,
 } from '../../api/types';
+import { clientError } from '../../api/errors';
 import { Hint, IconButton } from '../../ui/primitives';
+import ApprovalCard from '../shell/ApprovalCard';
 import { fallbackDue } from '../../api/live-updates';
 import { useLive, useLiveUpdate } from '../../live';
 import { parseTimestamp, relativeTime } from '../../ui/format';
@@ -56,6 +62,7 @@ import {
 } from '../shell/needs';
 import { usePendingApprovals } from '../shell/pending-approvals';
 import FixAction, { RunAgain } from './FixAction';
+import { useWaits } from '../shell/Waits';
 import { When, greeting, plural } from './home-format';
 
 export type OverviewHomeProps = {
@@ -72,6 +79,9 @@ export type OverviewHomeProps = {
   loadApprovals?: (signal?: AbortSignal) => Promise<PendingApprovalPage>;
   /** What needs the person, the sidebar indicator's shared read (B383). */
   loadAttention?: (signal?: AbortSignal) => Promise<AttentionSnapshot>;
+  /** Posts approved for a time slot, waiting for it: Review lists them (G3). */
+  loadScheduledPosts?: (signal?: AbortSignal) => Promise<ScheduledPostPage>;
+  onCancelScheduledPost?: (id: string) => Promise<unknown>;
   /** Buddy's live avatar beside the greeting. */
   buddy?: ReactNode;
   /**
@@ -145,6 +155,18 @@ function working(row: ConversationView) {
 }
 
 const titleOf = (row: ConversationView) => row.title || 'Untitled conversation';
+
+/** "Today, 1:00 PM" or "Thu 30 Oct, 9:30 AM": when a scheduled post goes out. */
+function slotWords(at: string, now: Date) {
+  const when = new Date(at);
+  const time = when.toLocaleTimeString(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+  return when.toDateString() === now.toDateString()
+    ? `Today, ${time}`
+    : `${when.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })}, ${time}`;
+}
 
 /** "A", "A and B", "A, B and C". */
 function listWords(items: readonly string[]) {
@@ -346,6 +368,8 @@ export default function OverviewHome({
   onDismissAgentWork,
   now: suppliedNow,
   refreshKey,
+  loadScheduledPosts,
+  onCancelScheduledPost,
 }: OverviewHomeProps) {
   const navigate = useNavigate();
   const [tasks, setTasks] = useState<readonly TaskSummary[] | null>(null);
@@ -360,6 +384,35 @@ export default function OverviewHome({
   const reduced = useReducedMotion();
   const approvalsFeed = usePendingApprovals(loadApprovals);
   const attentionFeed = useAttention(loadAttention);
+  // Review (G3): each post or email waiting to go out, in full, and the posts scheduled for later.
+  const [later, setLater] = useState<ReadonlySet<string>>(() => new Set());
+  const [scheduled, setScheduled] = useState<readonly ScheduledPost[]>([]);
+  const [scheduleError, setScheduleError] = useState('');
+  const reviewKey = (approvalsFeed.page?.items ?? [])
+    .filter((item) => item.goes_out)
+    .map((item) => item.id)
+    .join('|');
+  useEffect(() => {
+    if (!loadScheduledPosts) return;
+    const abort = new AbortController();
+    loadScheduledPosts(abort.signal).then(
+      (page) => {
+        if (!abort.signal.aborted) setScheduled(page.items);
+      },
+      () => undefined,
+    );
+    return () => abort.abort();
+  }, [loadScheduledPosts, reviewKey, refreshKey]);
+  async function cancelScheduled(post: ScheduledPost) {
+    if (!onCancelScheduledPost) return;
+    setScheduleError('');
+    try {
+      await onCancelScheduledPost(post.id);
+      setScheduled((items) => items.filter((item) => item.id !== post.id));
+    } catch (cause) {
+      setScheduleError(clientError(cause).message);
+    }
+  }
   const refixed = () => {
     setFixed((value) => value + 1);
     attentionFeed.refresh();
@@ -457,7 +510,19 @@ export default function OverviewHome({
     setupDone + setupSkipped < setup.steps.length;
 
   // Needs you: the same items, and the same number, as the sidebar (B383).
+  // What goes out (a post, an email) shows in full under Review, with one row here.
   const waiting = approvalsFeed.page?.items ?? [];
+  const review = waiting.filter((item) => item.goes_out);
+  const reviewShown = review.filter((item) => !later.has(item.id));
+  const reviewAside = review.length - reviewShown.length;
+  const reviewWords = listWords(
+    [
+      ['post', review.filter((item) => item.goes_out === 'post').length],
+      ['email', review.filter((item) => item.goes_out === 'email').length],
+    ]
+      .filter(([, count]) => count)
+      .map(([word, count]) => plural(count as number, word as string)),
+  );
   const problems = attentionFeed.value?.problems ?? [];
   const attention = needsCount({
     approvals: approvalsFeed.page,
@@ -548,10 +613,35 @@ export default function OverviewHome({
     };
   });
   const needRows = [
-    ...waiting.map((approval) => ({
-      key: `approval:${approval.id}`,
-      approval,
-    })),
+    ...(review.length
+      ? [
+          {
+            key: 'review',
+            item: {
+              key: 'review',
+              icon: <Send size={16} />,
+              tone: 'warning' as const,
+              title: `${reviewWords} to review`,
+              meta: 'Shown in full under Review',
+              label: 'Go to Review',
+              onOpen: () =>
+                document
+                  .getElementById('overview-review')
+                  ?.closest('section')
+                  ?.scrollIntoView({
+                    behavior: reduced ? 'auto' : 'smooth',
+                    block: 'start',
+                  }),
+            },
+          },
+        ]
+      : []),
+    ...waiting
+      .filter((approval) => !approval.goes_out)
+      .map((approval) => ({
+        key: `approval:${approval.id}`,
+        approval,
+      })),
     ...conversationNeeds.map((item) => ({ key: item.key, item })),
     ...problemNeeds.map((item) => ({ key: item.key, item })),
   ];
@@ -635,6 +725,27 @@ export default function OverviewHome({
     tasksFailed && 'workflows',
     healthFailed && 'health checks',
   ].filter((name): name is string => Boolean(name));
+
+  // What conversations wait for (5.3.1): nothing needs the person; they carry on by themselves.
+  const { waits, stop: stopWait } = useWaits();
+  const waitRows = waits.map((wait): Item => ({
+    key: wait.wait_id,
+    icon: <Hourglass size={15} aria-hidden />,
+    tone: '3',
+    title: wait.label,
+    meta: `${wait.conversation_title || 'A conversation'} · ${wait.how}`,
+    label: `Open ${wait.conversation_title || 'the conversation'}`,
+    onOpen: () => onOpenConversation(wait.conversation_id),
+    actions: (
+      <IconButton
+        size="sm"
+        label="Stop waiting"
+        onClick={() => void stopWait(wait.wait_id)}
+      >
+        <X size={15} aria-hidden />
+      </IconButton>
+    ),
+  }));
 
   const recent = conversations
     .filter((row) => !row.parent_conversation_id)
@@ -841,6 +952,103 @@ export default function OverviewHome({
               )}
             </div>
           )}
+        </Section>
+      )}
+
+      {!needsModel && (review.length > 0 || scheduled.length > 0) && (
+        <Section
+          id="overview-review"
+          className="overview-review"
+          order={1}
+          title={
+            <>
+              Review
+              {review.length ? (
+                <span className="overview-count">{review.length}</span>
+              ) : null}
+            </>
+          }
+        >
+          {reviewShown.length > 0 && (
+            <ul
+              className="overview-review-cards"
+              aria-label="Waiting to go out"
+            >
+              {reviewShown.map((item) => (
+                <li key={item.id}>
+                  <ApprovalCard
+                    id={item.id}
+                    conversationId={item.conversation_id ?? undefined}
+                    shortcut={false}
+                    onLater={() => setLater((ids) => new Set(ids).add(item.id))}
+                    onResolved={approvalsFeed.refresh}
+                  />
+                </li>
+              ))}
+            </ul>
+          )}
+          {reviewAside > 0 && (
+            <button
+              type="button"
+              className="overview-needs-more"
+              onClick={() => setLater(new Set())}
+            >
+              {reviewAside} set aside · Show
+              <ChevronRight size={13} aria-hidden />
+            </button>
+          )}
+          {scheduled.length > 0 && (
+            <>
+              <h4 className="overview-review-heading">Scheduled</h4>
+              <ul className="overview-rows" aria-label="Scheduled posts">
+                {scheduled.map((post) => (
+                  <li
+                    key={post.id}
+                    className="overview-row overview-row-approval"
+                  >
+                    <div className="overview-row-body">
+                      <Tile tone="4">
+                        <CalendarClock size={16} />
+                      </Tile>
+                      <span className="overview-row-text">
+                        <strong className="overview-row-title">
+                          {slotWords(post.post_at, now)}
+                          {post.username && ` · @${post.username}`}
+                        </strong>
+                        <span className="overview-row-meta overview-review-text">
+                          {post.text}
+                        </span>
+                      </span>
+                    </div>
+                    <div className="overview-row-actions">
+                      <IconButton
+                        size="sm"
+                        label="Cancel this post"
+                        onClick={() => void cancelScheduled(post)}
+                      >
+                        <X size={15} aria-hidden />
+                      </IconButton>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+          {scheduleError && (
+            <p role="alert" className="overview-setup-error">
+              {scheduleError}
+            </p>
+          )}
+        </Section>
+      )}
+
+      {!needsModel && waitRows.length > 0 && (
+        <Section id="overview-waiting" title="Waiting" order={2}>
+          <ul className="overview-rows" aria-label="Waiting">
+            {waitRows.map((item) => (
+              <Row key={item.key} item={item} />
+            ))}
+          </ul>
         </Section>
       )}
 

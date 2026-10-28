@@ -1,3 +1,4 @@
+import { SandboxSettings } from './SandboxSettings';
 import BuddySurface from '../buddy/BuddySurface';
 import {
   useCallback,
@@ -529,6 +530,7 @@ export default function SettingRoute() {
               part={leaf.id}
               skillsMoved={learningPreview}
             />
+            {leaf.id === 'data' && <SandboxSettings />}
             {leaf.id === 'data' && settingsSnapshot && (
               <DataDangerZone
                 snapshot={settingsSnapshot}

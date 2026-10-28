@@ -1248,10 +1248,12 @@ test('Buddy keeps appearance edits through navigation and serves bundled media w
     await page
       .getByRole('button', { name: 'Toggle navigation', exact: true })
       .click();
+  // Buddy's avatar opens its peek; Settings is there on every device.
+  await navigation.getByRole('button', { name: /^Open / }).click();
   await activateRoute(
     page,
-    navigation.getByRole('button', {
-      name: 'Buddy settings',
+    page.getByRole('dialog').getByRole('button', {
+      name: 'Settings',
       exact: true,
     }),
     { path: '/app-v2/settings/buddy', headingName: 'Buddy' },
@@ -1398,7 +1400,7 @@ test('Buddy plays the saved bundled motion and switches to its still for reduced
       .click();
   await expect(navigation).toBeVisible();
   await expect(
-    navigation.getByRole('button', { name: 'Buddy settings', exact: true }),
+    navigation.getByRole('button', { name: /^Open / }),
   ).toBeVisible();
   const [stillResponse, motionResponse] = await Promise.all([
     bundledStill,
@@ -1859,7 +1861,9 @@ test('MCP tested tools retain their review and accept the saved catalog without 
   // Allow accepts the tools that were tested, then connects with them.
   await access.getByRole('button', { name: 'Allow', exact: true }).click();
   await expect(access).toBeHidden();
-  await expect(page.getByText('Ready', { exact: true })).toBeVisible();
+  await expect(
+    page.getByTestId('conversation-pane').getByText('Ready', { exact: true }),
+  ).toBeVisible();
   await expect(
     page.getByText('3 of 3 actions on · Ask before changes', { exact: true }),
   ).toBeVisible();
@@ -1889,7 +1893,9 @@ test('MCP connection setup survives navigation and turns the owned fake session 
   // and connects, Turn off disconnects and Turn on connects again.
   const access = await continueSetup(page);
   await access.getByRole('button', { name: 'Allow', exact: true }).click();
-  const ready = page.getByText('Ready', { exact: true });
+  const ready = page
+    .getByTestId('conversation-pane')
+    .getByText('Ready', { exact: true });
   await expect(ready).toBeVisible();
   await expectSession(page, true);
   // The connection's state is read again, not repeated, after navigation.

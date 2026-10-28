@@ -59,6 +59,26 @@ const TUNNEL = open('access', 'Tunnel', 'tunnel');
 const REMOTE_ACCESS = open('access', 'Devices & remote access');
 
 const CATALOG: Record<string, Entry> = {
+  registry_entry_removed: [
+    "This app is no longer listed in the MCP Registry, so Row-Bot can't set it up from there.",
+    'none',
+    MCP,
+  ],
+  registry_recipe_changed: [
+    'Its MCP Registry listing changed since you opened it. Open it again to see it as it is now.',
+    'review',
+    MCP,
+  ],
+  registry_recipe_unsupported: [
+    "Its MCP Registry listing asks for setup Row-Bot can't do safely.",
+    'none',
+    MCP,
+  ],
+  registry_identity_missing: [
+    "Its MCP Registry listing doesn't say which server it is.",
+    'none',
+    MCP,
+  ],
   plan_changed: [
     'Something changed since you agreed. Review it again before continuing.',
     'review',
@@ -637,6 +657,15 @@ const CATALOG: Record<string, Entry> = {
   ],
   approval_expired: [
     'This approval expired. Close this and answer the current approval.',
+    'review',
+  ],
+  media_unavailable: ["That item isn't in the media library any more.", 'none'],
+  scheduled_post_unavailable: [
+    'That post already went out or was cancelled.',
+    'none',
+  ],
+  approval_edit_invalid: [
+    "That edit can't be used for this post. Close it and edit the post on its current card.",
     'review',
   ],
   question_answer_invalid: [
@@ -1750,6 +1779,33 @@ const CATALOG: Record<string, Entry> = {
   process_unavailable: ['That command is no longer running.', 'none'],
   recording_unavailable: ['That recording is no longer listed.', 'none'],
   video_edit_unavailable: ['That video edit is no longer listed.', 'none'],
+  video_project_unavailable: ['That video is no longer here.', 'none'],
+  video_project_stale: [
+    'The video changed meanwhile. Look at the new version, then change it again.',
+    'review',
+  ],
+  video_project_invalid: [
+    "One of the scenes' videos can't be used any more. Ask Row-Bot to swap it.",
+    'none',
+  ],
+  row_bot_sandbox_unavailable: ['That sandbox is no longer here.', 'none'],
+  wait_unavailable: ['That wait has already ended.', 'none'],
+  row_bot_sandbox_refused: [
+    'The sandbox can’t do that now: start it first, or delete one (five at most).',
+    'none',
+  ],
+  video_brand_invalid: [
+    'The brand kit couldn’t be saved: pick its logo from your pictures again.',
+    'none',
+  ],
+  video_project_not_made: [
+    'Make this version first: its other shapes come from it.',
+    'none',
+  ],
+  video_project_needs_ffmpeg: [
+    'Making the video needs ffmpeg. Ask Row-Bot to make it once, and it offers to download ffmpeg.',
+    'none',
+  ],
   sent_file_unavailable: ['That file is no longer here to download.', 'none'],
   sent_file_expired: [
     'This download has ended: sent files stay for 7 days. Ask Row-Bot to send it again.',

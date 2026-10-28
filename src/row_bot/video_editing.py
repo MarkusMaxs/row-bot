@@ -1,4 +1,5 @@
-"""Building ffmpeg commands for video edits (F3): trim, join, speed, text, zoom, crop, captions, frames.
+"""Building ffmpeg commands for video edits (F3): trim, join, speed, text, zoom, crop, captions, frames;
+voice and music laid on the finished timeline, and the checks a video passes before it's done (5.3.1 B).
 
 Everything here is pure: it reads what ffmpeg says about a video (``probe``) and turns the
 agent's steps into one ffmpeg command and one filter graph, so a whole edit is one encode to
@@ -21,8 +22,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Literal
 
-Op = Literal["trim", "speed", "text", "zoom", "crop", "captions"]
-OPS: tuple[str, ...] = ("trim", "speed", "text", "zoom", "crop", "captions")
+Op = Literal["trim", "speed", "text", "zoom", "crop", "captions", "sound"]
+OPS: tuple[str, ...] = ("trim", "speed", "text", "zoom", "crop", "captions", "sound")
+# sound: a voice line or music laid on the finished video, or the video's own sound turned up or down.
+ROLES = ("voice", "music", "original")
+MAX_SOUNDS = 40
+MAX_VOLUME = 4.0
+# Loudness the finished mix is brought to: speech-forward, as video platforms play it.
+LOUDNESS = "loudnorm=I=-16:TP=-1.5:LRA=11"
 POSITIONS = ("top-left", "top", "top-right", "center", "bottom-left", "bottom", "bottom-right")
 STYLES = ("badge", "title", "caption")
 VIDEO_SUFFIXES = frozenset({".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi", ".gif"})
@@ -36,6 +43,8 @@ MIN_SPEED, MAX_SPEED = 0.25, 16.0
 MAX_FRAMES = 48
 # Containers a person's video may be read as: never playlists or other demuxers that open more files.
 INPUT_FORMATS = "mov,mp4,m4a,3gp,3g2,mj2,matroska,webm,avi,mpegts,flv,gif,ogg,asf"
+# A voice line or music: the same, plus plain audio files.
+SOUND_FORMATS = INPUT_FORMATS + ",wav,mp3,flac,aac"
 
 
 class EditError(ValueError):
@@ -97,6 +106,11 @@ def input_arguments(path: Path | str) -> list[str]:
     return ["-protocol_whitelist", "file", "-format_whitelist", INPUT_FORMATS, "-i", file_argument(path)]
 
 
+def sound_input_arguments(path: Path | str) -> list[str]:
+    """Open a voice line or music file: local files only, as an audio or video container."""
+    return ["-protocol_whitelist", "file", "-format_whitelist", SOUND_FORMATS, "-i", file_argument(path)]
+
+
 def probe_command(path: Path | str) -> list[str]:
     return ["-hide_banner", "-nostdin", *input_arguments(path)]
 
@@ -118,6 +132,55 @@ class Step:
     y: float | None = None
     width: float | None = None
     height: float | None = None
+    # sound: the file (as the agent named it), its role, its loudness and whether music ducks under voices.
+    source: str = ""
+    role: str = ""
+    volume: float | None = None
+    duck: bool = True
+    # scenes (a video project's, 5.3.1 B3; never the agent's own step): the pieces, in order, and the shape
+    # the video is reframed to ("16:9", "1:1", "9:16"; "" keeps the first input's).
+    scenes: list["SceneCut"] = field(default_factory=list)
+    aspect: str = ""
+    # scenes: the brand kit's look (cards, badges, captions, intro, outro, logo); text: a card's fill colour
+    # and whether it's drawn without its box (a bold caption, or a title on a coloured card).
+    look: "Look | None" = None
+    fill: tuple[int, int, int, int] | None = None
+    plain: bool = False
+
+
+@dataclass(frozen=True)
+class SceneCut:
+    """One scene of a video project: a piece of an input, its speed, a zoom, a card, its line and voice."""
+
+    input: int
+    start: float = 0.0
+    end: float | None = None
+    speed: float = 1.0
+    zoom: tuple[float, float, float, float] | None = None
+    card: str = ""
+    line: str = ""
+    voice: str = ""
+    # Where the action is when there's no zoom (the recording's pointer, 0–1 across): a square or tall cut
+    # is centred there, so what's being used stays in frame.
+    focus: tuple[float, float] | None = None
+
+
+CARD_SECONDS = 3.0
+BOOKEND_SECONDS = 2.0
+
+
+@dataclass(frozen=True)
+class Look:
+    """The brand kit as the renderer uses it (5.3.1 B3)."""
+
+    colour: tuple[int, int, int] = (31, 41, 55)
+    # How lines show under their scenes: "box" (a dark box), "bold" (large, outlined) or "title" (centred).
+    captions: str = "box"
+    logo: bytes | None = None
+    logo_corner: str = "top-left"
+    intro: str = ""
+    outro: str = ""
+ASPECTS = {"16:9": 16 / 9, "1:1": 1.0, "9:16": 9 / 16}
 
 
 def _number(value: Any, name: str) -> float | None:
@@ -189,11 +252,34 @@ def parse_steps(raw: Iterable[Any] | None) -> list[Step]:
             if op == "crop" and (start is not None or end is not None):
                 raise EditError(f"Step {index}: crop applies to the whole video; use zoom for part of it.")
         label = item.get("label")
+        sound: dict[str, Any] = {}
+        if op == "sound":
+            role = str(item.get("role") or "voice").strip().casefold()
+            if role not in ROLES:
+                raise EditError(f"Step {index}: a sound's role is voice, music or original (the video's own sound).")
+            source = _clean_text(item.get("source"), 300)
+            if role != "original" and not source:
+                raise EditError(f"Step {index}: sound needs its source: a voice or music file by name.")
+            volume = _number(item.get("volume"), f"Step {index}'s volume")
+            if volume is not None and not 0 <= volume <= MAX_VOLUME:
+                raise EditError(f"Step {index}: volume is from 0 (silent) to {MAX_VOLUME:g} (1 keeps it as it is).")
+            duck = item.get("duck")
+            sound = {"source": source if role != "original" else "", "role": role, "volume": volume,
+                     "duck": True if duck is None else bool(duck)}
         steps.append(Step(op=op, start=start, end=end, factor=factor, label=True if label is None else bool(label),
-                          text=text, position=position, style=style, **region))
-    if len(steps) > MAX_STEPS:
+                          text=text, position=position, style=style, **region, **sound))
+    if len([step for step in steps if step.op != "sound"]) > MAX_STEPS:
         raise EditError(f"At most {MAX_STEPS} steps fit in one edit.")
+    if len([step for step in steps if step.op == "sound"]) > MAX_SOUNDS:
+        raise EditError(f"At most {MAX_SOUNDS} sounds fit in one edit: join voice lines into fewer files.")
     return steps
+
+
+def sound_sources(steps: list[Step]) -> list[str]:
+    """The sound files an edit lays, each once, in the order the steps name them."""
+    names = [step.source for step in steps if step.op == "sound" and step.source]
+    names += [scene.voice for step in steps if step.op == "scenes" for scene in step.scenes if scene.voice]
+    return list(dict.fromkeys(names))
 
 
 def speed_words(factor: float) -> str:
@@ -216,6 +302,8 @@ def describe(steps: list[Step], inputs: int = 1) -> str:
             "zoom": "zoomed in",
             "crop": "cropped",
             "captions": "captioned",
+            "sound": {"voice": "added a voice", "music": "added music"}.get(step.role, "set the sound level"),
+            "scenes": f"cut {len(step.scenes)} scene{'s' if len(step.scenes) != 1 else ''}",
         }[step.op]
         if word not in words:
             words.append(word)
@@ -332,12 +420,16 @@ class Overlay:
 _STYLE_SIZES = {"badge": 0.05, "title": 0.08, "caption": 0.052}
 
 
-def render_text(text: str, style: str, frame_width: int, frame_height: int) -> tuple[bytes, int, int]:
-    """Draw text as a picture: a rounded dark badge, a large title, or a caption box."""
+def render_text(text: str, style: str, frame_width: int, frame_height: int, *,
+                fill: tuple[int, int, int, int] | None = None, plain: bool = False) -> tuple[bytes, int, int]:
+    """Draw text as a picture: a rounded dark badge, a large title, or a caption box; in a brand's colour
+    (``fill``), or ``plain``: no box, the letters outlined so they read on any picture."""
     from PIL import Image, ImageDraw
 
     style = style or "badge"
-    size = max(12, round(frame_height * _STYLE_SIZES[style]))
+    # Sized as on a 16:9 picture of this width, so a square or tall cut fits the same words on a line.
+    reference = min(frame_height, frame_width * 9 / 16)
+    size = max(12, round(reference * _STYLE_SIZES[style] * (1.3 if plain and style == "caption" else 1)))
     typeface = font(size)
     probe = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
     max_width = int(frame_width * (0.86 if style != "badge" else 0.6))
@@ -350,13 +442,16 @@ def render_text(text: str, style: str, frame_width: int, frame_height: int) -> t
     picture = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(picture)
     radius = height // 2 if style == "badge" and len(lines) == 1 else round(size * 0.45)
-    fill = (17, 24, 39, 214) if style != "caption" else (0, 0, 0, 178)
-    draw.rounded_rectangle((0, 0, width - 1, height - 1), radius=radius, fill=fill)
+    if not plain:
+        box = fill or ((17, 24, 39, 214) if style != "caption" else (0, 0, 0, 178))
+        draw.rounded_rectangle((0, 0, width - 1, height - 1), radius=radius, fill=box)
+    outline = max(2, round(size * 0.08)) if plain else 0
     for index, line in enumerate(lines):
         line_width = probe.textlength(line, font=typeface)
         left = (width - line_width) / 2
         top = pad_y + index * line_height + (line_height - size) / 2 - size * 0.1
-        draw.text((left, top), line, font=typeface, fill=(255, 255, 255, 255))
+        draw.text((left, top), line, font=typeface, fill=(255, 255, 255, 255), stroke_width=outline,
+                  stroke_fill=(0, 0, 0, 230))
     output = io.BytesIO()
     picture.save(output, format="PNG", optimize=True)
     return output.getvalue(), width, height
@@ -375,10 +470,25 @@ def place(position: str, width: int, height: int, frame_width: int, frame_height
 
 def text_overlay(step: Step, frame_width: int, frame_height: int) -> Overlay:
     style = step.style or "badge"
-    png, width, height = render_text(step.text, style, frame_width, frame_height)
+    png, width, height = render_text(step.text, style, frame_width, frame_height, fill=step.fill, plain=step.plain)
     default = {"badge": "top-right", "title": "center", "caption": "bottom"}[style]
     x, y = place(step.position or default, width, height, frame_width, frame_height)
     return Overlay(png, width, height, x, y, step.start, step.end)
+
+
+def logo_overlay(png: bytes, corner: str, frame_width: int, frame_height: int) -> Overlay:
+    """A brand's logo, a tenth of the picture's height, in its corner for the whole video."""
+    from PIL import Image
+
+    picture = Image.open(io.BytesIO(png)).convert("RGBA")
+    height = max(16, round(frame_height * 0.1))
+    width = max(16, round(picture.width * height / max(1, picture.height)))
+    if width > frame_width // 3:
+        width, height = frame_width // 3, max(16, round(picture.height * (frame_width // 3) / max(1, picture.width)))
+    output = io.BytesIO()
+    picture.resize((width, height), Image.LANCZOS).save(output, format="PNG", optimize=True)
+    x, y = place(corner, width, height, frame_width, frame_height)
+    return Overlay(output.getvalue(), width, height, x, y, None, None)
 
 
 # ── The plan ────────────────────────────────────────────────────────────────
@@ -406,6 +516,8 @@ class Plan:
     has_audio: bool
     summary: str
     outputs: list[str] = field(default_factory=list)
+    # A project's scenes: where each starts on the finished video, then where it ends.
+    marks: list[float] = field(default_factory=list)
 
 
 def _even(value: float) -> int:
@@ -444,6 +556,10 @@ class _Builder:
         self.duration = sum(item.info.duration for item in inputs)
         self.video = ""
         self.audio: str | None = None
+        self.lengths = [item.info.duration for item in inputs]
+        # Voice lines a project's scenes lay: (when on the finished video, the file).
+        self.voice_cues: list[tuple[float, str]] = []
+        self.marks: list[float] = []
 
     def label(self, kind: str) -> str:
         self.count += 1
@@ -647,6 +763,180 @@ class _Builder:
         self.video = out
         self.width, self.height = cw, ch
 
+    def sound(self, step: Step) -> None:
+        """Laid on the finished timeline once every picture step is done (``mix``)."""
+
+    def scenes(self, step: Step) -> None:
+        """A video project's scenes in order: each piece cut from its input, at its speed, with its zoom,
+        its card for the first seconds and its line as a caption (``style="caption"``); its voice line
+        is laid at the scene's start on the finished video."""
+        if not step.scenes:
+            raise EditError("A video needs at least one scene.")
+        offsets = [sum(self.lengths[:index]) for index in range(len(self.lengths))]
+        cuts: list[tuple[float, float]] = []
+        for number, scene in enumerate(step.scenes, 1):
+            if not 0 <= scene.input < len(self.lengths):
+                raise EditError(f"Scene {number}: its video isn't one of the inputs.")
+            length = self.lengths[scene.input]
+            start = min(max(0.0, scene.start), length)
+            end = length if scene.end is None else min(scene.end, length)
+            if end - start < 0.05:
+                raise EditError(f"Scene {number}: {_seconds_text(start)}–{_seconds_text(end)} s is outside its "
+                                f"video, which is {_seconds_text(length)} s long.")
+            cuts.append((offsets[scene.input] + start, offsets[scene.input] + end))
+        videos, sounds = self._pieces(cuts, audio=True)
+        self._join(videos, sounds)
+        lengths = [end - start for start, end in cuts]
+        self.duration = sum(lengths)
+        # Speeds from the last scene back, so each one's times are still those of the cut timeline.
+        for index in range(len(step.scenes) - 1, -1, -1):
+            factor = step.scenes[index].speed
+            if abs(factor - 1) > 1e-3:
+                begin = sum(lengths[:index])
+                # Its badge is laid after the reframe, so a tall shape never cuts it off.
+                self.speed(Step(op="speed", start=begin, end=begin + lengths[index], factor=factor, label=False))
+        finals = [length / scene.speed for length, scene in zip(lengths, step.scenes)]
+        self.marks = [round(sum(finals[:index]), 3) for index in range(len(finals) + 1)]
+        for index, scene in enumerate(step.scenes):
+            if scene.zoom:
+                x, y, width, height = scene.zoom
+                self.zoom(Step(op="zoom", start=self.marks[index], end=self.marks[index + 1], x=x, y=y,
+                               width=width, height=height))
+        if step.aspect:
+            self._reframe(step.aspect, step.scenes)
+        look = step.look or Look()
+        fill = (*look.colour, 230) if step.look else None
+        if look.intro or look.outro:
+            self._bookends(look)
+        for index, scene in enumerate(step.scenes):
+            begin, end = self.marks[index], self.marks[index + 1]
+            if abs(scene.speed - 1) > 1e-3:
+                badge = Step(op="text", text=speed_words(scene.speed), position="top-right", style="badge",
+                             fill=fill)
+                self.video = self.lay(self.video, text_overlay(badge, self.width, self.height), start=begin, end=end)
+            if scene.card:
+                card = Step(op="text", text=scene.card, style="title", position="center", fill=fill)
+                self.video = self.lay(self.video, text_overlay(card, self.width, self.height),
+                                      start=begin, end=min(end, begin + CARD_SECONDS))
+            if scene.line and step.style == "caption":
+                caption = (Step(op="text", text=scene.line, style="title", position="center", plain=True)
+                           if look.captions == "title" else
+                           Step(op="text", text=scene.line, style="caption", position="bottom",
+                                plain=look.captions == "bold"))
+                self.video = self.lay(self.video, text_overlay(caption, self.width, self.height),
+                                      start=begin, end=end)
+            if scene.voice:
+                self.voice_cues.append((begin, scene.voice))
+        for text, start in ((look.intro, 0.0), (look.outro, self.duration - BOOKEND_SECONDS)):
+            if text:
+                title = Step(op="text", text=text, style="title", position="center", plain=True)
+                self.video = self.lay(self.video, text_overlay(title, self.width, self.height), start=start,
+                                      end=start + BOOKEND_SECONDS)
+        if look.logo:
+            self.video = self.lay(self.video, logo_overlay(look.logo, look.logo_corner, self.width, self.height))
+
+    def _bookends(self, look: Look) -> None:
+        """The intro and outro: cards of the brand's colour before the first scene and after the last."""
+        colour = "0x{:02x}{:02x}{:02x}".format(*look.colour)
+        seconds = _seconds_text(BOOKEND_SECONDS)
+
+        def card() -> tuple[str, str | None]:
+            video = self.label("v")
+            self.add(f"color=c={colour}:s={self.width}x{self.height}:r={_seconds_text(self.fps)}:d={seconds},"
+                     f"setsar=1,format=yuv420p{video}")
+            if not self.audio:
+                return video, None
+            sound = self.label("a")
+            self.add(f"anullsrc=channel_layout=stereo:sample_rate=48000,atrim=duration={seconds}{sound}")
+            return video, sound
+
+        pieces = ([card()] if look.intro else []) + [(self.video, self.audio)] + ([card()] if look.outro else [])
+        self._join([video for video, _ in pieces], [sound for _, sound in pieces if sound])
+        shift = BOOKEND_SECONDS if look.intro else 0.0
+        self.marks = [round(mark + shift, 3) for mark in self.marks]
+        self.duration += BOOKEND_SECONDS * (bool(look.intro) + bool(look.outro))
+
+    def _reframe(self, aspect: str, scenes: list[SceneCut]) -> None:
+        """Each scene cropped to the shape around its focus: the middle of its zoom, else where its pointer was,
+        else the middle of the picture. A shape the video already has changes nothing."""
+        if aspect not in ASPECTS:
+            raise EditError(f"A video's shape is 16:9, 1:1 or 9:16, not {aspect}.")
+        target, w, h = ASPECTS[aspect], self.width, self.height
+        if abs(w / h - target) < 0.01:
+            return
+        cw, ch = (_even(h * target), h) if w / h > target else (w, _even(w / target))
+        cuts = [(self.marks[index], self.marks[index + 1]) for index in range(len(scenes))]
+        videos, _ = self._pieces(cuts, audio=False)
+        for index, scene in enumerate(scenes):
+            fx, fy = ((scene.zoom[0] + scene.zoom[2] / 2, scene.zoom[1] + scene.zoom[3] / 2) if scene.zoom
+                      else scene.focus or (0.5, 0.5))
+            left = int(min(max(0.0, fx * w - cw / 2), w - cw))
+            top = int(min(max(0.0, fy * h - ch / 2), h - ch))
+            out = self.label("v")
+            self.add(f"{videos[index]}crop={cw}:{ch}:{left}:{top},setsar=1{out}")
+            videos[index] = out
+        self._join(videos, [])
+        self.width, self.height = cw, ch
+
+    def _amix(self, labels: list[str]) -> str:
+        if len(labels) == 1:
+            return labels[0]
+        out = self.label("a")
+        self.add(f"{''.join(labels)}amix=inputs={len(labels)}:duration=longest:normalize=0{out}")
+        return out
+
+    def mix(self, steps: list[Step], first_input: int, sources: list[str]) -> None:
+        """Voice lines at their times, music under them (ducked while a voice speaks) and the video's own sound,
+        mixed and brought to one loudness: the narrated video's sound in one pass."""
+        sounds = [step for step in steps if step.op == "sound"]
+        sounds += [Step(op="sound", source=voice, role="voice", start=moment) for moment, voice in self.voice_cues]
+        if not sounds:
+            return
+        total = _seconds_text(self.duration)
+        voices: list[str] = []
+        music: list[str] = []
+        ducked = False
+        original = 1.0
+        for step in sounds:
+            if step.role == "original":
+                original = 1.0 if step.volume is None else step.volume
+                continue
+            start = step.start or 0.0
+            if start >= self.duration:
+                raise EditError(f"A sound starts at {_seconds_text(start)} s, after the video ends ({total} s).")
+            index = first_input + sources.index(step.source)
+            volume = step.volume if step.volume is not None else (1.0 if step.role == "voice" else 0.3)
+            delay = int(round(start * 1000))
+            chain = f"[{index}:a]aformat=sample_rates=48000:channel_layouts=stereo,volume={volume:.3f}"
+            if step.role == "music":
+                length = self.duration - start
+                fade = max(0.0, length - 2.0)
+                chain += f",atrim=0:{_seconds_text(length)},afade=t=out:st={_seconds_text(fade)}:d=2"
+                ducked = ducked or step.duck
+            label = self.label("a")
+            self.add(f"{chain},adelay={delay}|{delay}{label}")
+            (voices if step.role == "voice" else music).append(label)
+        parts: list[str] = []
+        if self.audio and original > 0:
+            own = self.label("a")
+            self.add(f"{self.audio}volume={original:.3f}{own}")
+            parts.append(own)
+        voice = self._amix(voices) if voices else ""
+        bed = self._amix(music) if music else ""
+        if voice and bed and ducked:
+            # The music dips while a voice speaks, and comes back between lines.
+            speaking, key = self.label("a"), self.label("a")
+            self.add(f"{voice}asplit=2{speaking}{key}")
+            under = self.label("a")
+            self.add(f"{bed}{key}sidechaincompress=threshold=0.02:ratio=8:attack=20:release=450{under}")
+            voice, bed = speaking, under
+        parts += [label for label in (voice, bed) if label]
+        mixed = self._amix(parts)
+        out = self.label("a")
+        self.add(f"{mixed}apad,atrim=0:{total},{LOUDNESS},aformat=sample_rates=48000:channel_layouts=stereo{out}")
+        self.audio = out
+        self.has_audio = True
+
 
 def encoder_arguments(encoder: str) -> list[str]:
     if encoder == "libx264":
@@ -662,6 +952,7 @@ def build_plan(
     graph_file: str = "graph.txt",
     graph_option: str = "-/filter_complex",
     encoder: str = "libx264",
+    sounds: dict[str, str] | None = None,
 ) -> Plan:
     """One ffmpeg run that makes the whole edit: arguments, filter graph and overlay pictures.
 
@@ -672,10 +963,15 @@ def build_plan(
         raise EditError("Give at least one video to edit.")
     if len(inputs) > MAX_INPUTS:
         raise EditError(f"At most {MAX_INPUTS} videos can be joined in one edit.")
-    builder = _Builder(inputs, overlay_start=len(inputs))
+    sources = sound_sources(steps)
+    missing = [name for name in sources if name not in (sounds or {})]
+    if missing:
+        raise EditError(f"{missing[0]} isn't a sound file Row-Bot found.")
+    builder = _Builder(inputs, overlay_start=len(inputs) + len(sources))
     builder.start(inputs)
     for step in steps:
         getattr(builder, step.op)(step)
+    builder.mix(steps, len(inputs), sources)
     video = builder.label("v")
     # One steady frame rate (sped-up parts would otherwise carry several times as many frames).
     builder.add(f"{builder.video}fps={_seconds_text(min(builder.fps, 60.0))},format=yuv420p{video}")
@@ -683,6 +979,8 @@ def build_plan(
     args = ["-hide_banner", "-nostdin", "-y"]
     for item in inputs:
         args += input_arguments(item.path)
+    for name in sources:
+        args += sound_input_arguments((sounds or {})[name])
     for name, _data in builder.overlays:
         args += ["-protocol_whitelist", "file", "-i", file_argument(name)]
     args += [graph_option, graph_file, "-map", builder.video]
@@ -693,7 +991,16 @@ def build_plan(
     args += ["-progress", "pipe:1", "-nostats", file_argument(output)]
     return Plan(args=args, graph=";\n".join(builder.lines), overlays=builder.overlays,
                 duration=builder.duration, width=builder.width, height=builder.height,
-                has_audio=bool(builder.audio), summary=describe(steps, len(inputs)), outputs=[output])
+                has_audio=bool(builder.audio), summary=describe(steps, len(inputs)), outputs=[output],
+                marks=builder.marks)
+
+
+def gif_arguments(source: str, output: str, *, width: int = 480, fps: int = 12) -> list[str]:
+    """One ffmpeg run that makes a looping GIF of a finished video, with its own palette (clear colours)."""
+    graph = (f"[0:v]fps={fps},scale={width}:-2:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];"
+             "[b][p]paletteuse=dither=bayer:bayer_scale=4")
+    return ["-hide_banner", "-nostdin", "-y", *input_arguments(source), "-filter_complex", graph, "-loop", "0",
+            "-progress", "pipe:1", "-nostats", file_argument(output)]
 
 
 def graph_option_for(version: str) -> str:
@@ -749,3 +1056,59 @@ def clock(seconds: float) -> str:
     minutes, rest = divmod(int(whole), 60)
     hours, minutes = divmod(minutes, 60)
     return f"{hours}:{minutes:02d}:{rest:02d}" if hours else f"{minutes}:{rest:02d}"
+
+
+# ── Checks ──────────────────────────────────────────────────────────────────
+
+QUIET_DB = -35.0
+_MEAN = re.compile(r"mean_volume:\s*(-?[0-9.]+|-inf) dB")
+_PEAK = re.compile(r"max_volume:\s*(-?[0-9.]+|-inf) dB")
+_BLACK = re.compile(r"black_start:\s*([0-9.]+)\s+black_end:\s*([0-9.]+)")
+_FROZEN = re.compile(r"freeze_start:\s*([0-9.]+)[\s\S]*?freeze_duration:\s*([0-9.]+)")
+
+
+def check_arguments(path: Path | str, *, has_audio: bool) -> list[str]:
+    """One read of the video for its sound level, black stretches and still stretches."""
+    args = ["-hide_banner", "-nostdin", *input_arguments(path),
+            "-vf", "blackdetect=d=0.5:pix_th=0.10,freezedetect=n=0.003:d=3"]
+    if has_audio:
+        args += ["-af", "volumedetect"]
+    return args + ["-f", "null", "-"]
+
+
+@dataclass(frozen=True)
+class Checks:
+    passed: bool
+    lines: list[str]
+
+
+def read_checks(output: str, info: VideoInfo) -> Checks:
+    """What the read found, in plain lines; a video passes when it has sound loud enough and no black stretch
+    past its first and last second. Still stretches are listed (a screen recording may rightly hold still)."""
+    lines = [f"Length {clock(info.duration)}, {info.width}×{info.height}."]
+    problems = 0
+    mean, peak = _MEAN.search(output), _PEAK.search(output)
+    if not info.has_audio or mean is None:
+        lines.append("Sound: none. Add a voice or music if this video should have sound.")
+        problems += 1
+    else:
+        level = float("-inf") if mean.group(1) == "-inf" else float(mean.group(1))
+        top = peak.group(1) if peak else "?"
+        if level < QUIET_DB:
+            lines.append(f"Sound: too quiet (average {mean.group(1)} dB, peak {top} dB).")
+            problems += 1
+        else:
+            lines.append(f"Sound: present (average {mean.group(1)} dB, peak {top} dB).")
+    black = [(float(a), float(b)) for a, b in _BLACK.findall(output)]
+    inside = [(a, b) for a, b in black if not (a <= 1.0 and b - a <= 1.5) and not (b >= info.duration - 1.0
+                                                                                   and b - a <= 1.5)]
+    if inside:
+        problems += 1
+        lines.append("Black: " + ", ".join(f"{clock(a)}–{clock(b)}" for a, b in inside[:5]) + ".")
+    else:
+        lines.append("Black: none.")
+    frozen = [(float(a), float(d)) for a, d in _FROZEN.findall(output)]
+    lines.append("Still: " + (", ".join(f"{clock(a)} for {d:.0f} s" for a, d in frozen[:5])
+                              + " (fine if nothing should move there)." if frozen else "none."))
+    lines.append("Result: passed." if not problems else "Result: needs attention before it's done.")
+    return Checks(not problems, lines)

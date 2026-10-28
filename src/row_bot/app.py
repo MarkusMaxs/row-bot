@@ -1061,8 +1061,22 @@ async def _run_startup_sequence():
         from row_bot.tasks import _get_scheduler
         with _startup_phase("system_health_scheduler"):
             schedule_health_checks(_get_scheduler())
+            _ch_registry.schedule_state_checks(_get_scheduler())
     except Exception as exc:
         logger.warning("Could not schedule Monitor's checks: %s", exc)
+    try:
+        from row_bot import sandboxes
+        with _startup_phase("sandbox_left_overs"):
+            sandboxes.end_left_overs()
+    except Exception as exc:
+        logger.warning("Could not check for sandboxes left running: %s", exc)
+    try:
+        from row_bot import waits
+        from row_bot.tasks import _get_scheduler
+        with _startup_phase("waits_scheduler"):
+            waits.schedule(_get_scheduler())
+    except Exception as exc:
+        logger.warning("Could not schedule waits: %s", exc)
 
     _set("✅ Ready")
     startup_state.ready = True
@@ -1264,6 +1278,14 @@ async def _cleanup_runtime(reason: str = "shutdown") -> bool:
             _safe_console_print(f"[shutdown] Stopped {_edits} video edit(s)")
     except Exception as exc:
         _safe_console_print(f"[shutdown] Video edit cleanup error: {exc}")
+    try:
+        # Sandboxes (5.3.1 B4): each second Row-Bot this one started stops with it.
+        from row_bot.sandboxes import stop_all as _stop_sandboxes
+        _boxes = await asyncio.to_thread(_stop_sandboxes)
+        if _boxes:
+            _safe_console_print(f"[shutdown] Stopped {_boxes} sandbox(es)")
+    except Exception as exc:
+        _safe_console_print(f"[shutdown] Sandbox cleanup error: {exc}")
     try:
         # Prepare sandbox stops with its network off: its install container is removed (F18).
         from row_bot.developer.sandbox_prepare import stop_all as _stop_sandbox_jobs

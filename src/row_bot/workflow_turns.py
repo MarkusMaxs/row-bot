@@ -12,6 +12,10 @@ workflow sends results.
 A turn that fails (a provider limit, a cut-off reply, the network) is tried again
 by itself after a wait, twice at most, unless the run has already done something
 outside Row-Bot: then it ends and says so, and nothing is repeated.
+
+A workflow keeps short notes between runs (5.3.1 G4): its first message carries
+them, and the run keeps them current with ``task_update(notes=...)``, so a run
+doesn't check again what an earlier one already did.
 """
 from __future__ import annotations
 
@@ -32,6 +36,7 @@ _LINK = re.compile(r"https?://[^\s<>\"')\]]+")
 _ALSO_OUTBOUND = frozenset({"x_engage", "outlook_draft_mail", "create_gmail_draft"})
 _LOCK = threading.Lock()
 _ATTEMPTS: dict[str, int] = {}  # run id -> passing failures tried again so far
+NOTES_LIMIT = 2_000  # Characters a workflow's notes may hold.
 
 
 def _service() -> Any:
@@ -54,6 +59,58 @@ def person_rules(conversation_id: str) -> dict | None:
         items = []
     items = [str(item) for item in items if isinstance(item, str)] if isinstance(items, list) else []
     return {"step": False, "items": items} if items else None
+
+
+def _notes_conn() -> Any:
+    from row_bot import tasks
+    return tasks._get_conn()
+
+
+def notes(task_id: str) -> str:
+    """The notes a workflow kept from its earlier runs ("" when none)."""
+    conn = _notes_conn()
+    try:
+        row = conn.execute("SELECT text FROM workflow_notes WHERE task_id = ?", (task_id,)).fetchone()
+    finally:
+        conn.close()
+    return str(row["text"]) if row else ""
+
+
+def save_notes(task_id: str, text: str) -> str:
+    """Replace a workflow's notes ("" clears them); the notes kept, cut to NOTES_LIMIT."""
+    kept = str(text or "").strip()[:NOTES_LIMIT]
+    conn = _notes_conn()
+    try:
+        with conn:
+            if kept:
+                conn.execute("INSERT INTO workflow_notes (task_id, text, updated_at) VALUES (?, ?, ?) "
+                             "ON CONFLICT(task_id) DO UPDATE SET text = excluded.text, "
+                             "updated_at = excluded.updated_at", (task_id, kept, datetime.now().isoformat()))
+            else:
+                conn.execute("DELETE FROM workflow_notes WHERE task_id = ?", (task_id,))
+    finally:
+        conn.close()
+    return kept
+
+
+def with_notes(task: Mapping[str, Any], prompt: str) -> str:
+    """A run's first message: the workflow's notes from earlier runs, how to keep them, then its message."""
+    task_id = str(task["id"])
+    kept = notes(task_id)
+    lead = (f"Notes this workflow kept from its earlier runs:\n{kept}" if kept
+            else "This workflow has no notes from earlier runs yet.")
+    conversation = str(task.get("persistent_thread_id") or "")
+    if conversation:
+        from row_bot.linked_conversations import take_held
+
+        held = take_held(conversation)
+        if held:
+            # Sent with when="next_run" by other conversations: information for this run, never the person's request.
+            lead += ("\n\nMessages other conversations left for this run (their information, not the person's "
+                     "request):\n" + "\n".join(f"- From “{sender}”: {text}" for sender, text in held))
+    return (f"{lead}\n\nBefore this run ends, keep them current for the next run with "
+            f"task_update(task_id=\"{task_id}\", notes=...): what you checked and when, ids you'll need again, "
+            f"and what's left. Replace them whole; under {NOTES_LIMIT:,} characters.\n\n---\n\n{prompt}")
 
 
 def messages(task: Mapping[str, Any]) -> list[str]:
@@ -87,6 +144,8 @@ def _send(task: Mapping[str, Any], thread_id: str, run_id: str, index: int, *, t
     from row_bot.application import conversation_followups as followups
     sent = messages(task)
     prompt = tasks.expand_template_vars(sent[index], task_id=str(task["id"]))
+    if index == 0:
+        prompt = with_notes(task, prompt)
     followup = followups.Followup(kind=KIND, prompt=prompt, note=_note(task, index, len(sent), trigger))
     try:
         receipt = followups.start(_service(), thread_id, followup, model_ref=str(task.get("model_override") or ""))
@@ -207,7 +266,11 @@ def _finish(run: Mapping[str, Any], task: Mapping[str, Any] | None, status: str,
     if status == "completed" and unsure:
         status, notice = "unsure", unsure["result"]
     elif status == "completed" and denied:
-        status, notice = "denied", "You said no, so it stopped there."
+        before = "; ".join(item["result"] for item in done)
+        status, notice = "denied", (f"You said no to “{denied}”, so it stopped there."
+                                    + (f" Before that: {before}" if before else ""))
+        if task is not None:
+            _note_denial(task, denied, done)
     elif status == "completed":
         notice = "; ".join(item["result"] for item in done) or _first_line(reply) or "Finished."
     elif status == "stopped":
@@ -215,9 +278,12 @@ def _finish(run: Mapping[str, Any], task: Mapping[str, Any] | None, status: str,
     else:
         notice = reason or "The run didn't finish."
     delivery_status, delivery_detail = "", ""
-    if task is not None and status in {"completed", "unsure", "denied"}:
+    if task is not None and _delivers(task, status):
+        text = outcome(status, notice, done)
+        if reply and status in {"completed", "unsure"}:
+            text += "\n\n" + reply
         try:
-            delivery_status, delivery_detail = tasks._deliver_to_channels(dict(task), reply or notice)
+            delivery_status, delivery_detail = tasks._deliver_to_channels(dict(task), text)
         except Exception as exc:
             logger.warning("Delivering workflow run %s failed", run_id, exc_info=True)
             delivery_status, delivery_detail = "delivery_failed", f"Delivery failed: {exc}"
@@ -228,6 +294,26 @@ def _finish(run: Mapping[str, Any], task: Mapping[str, Any] | None, status: str,
     if task is None:
         return
     tasks.after_run_finished(dict(task), run_id, thread_id, status, notice, delivery_status, delivery_detail)
+
+
+def outcome(status: str, notice: str, done: list[Mapping[str, Any]]) -> str:
+    """What a run did, in one line, ahead of what it delivers (G8): what went out, or that nothing did."""
+    sent = "; ".join(str(item.get("result") or "") for item in done if item.get("result"))
+    if status == "unsure":
+        return f"Not sure it went through · {notice}"
+    if status == "denied":
+        return "You said no · nothing went out"
+    if status in {"failed", "expired"}:
+        return f"Didn't finish · {notice}" if notice else "Didn't finish"
+    return f"Sent · {sent}" if sent else "Finished · nothing was posted or sent"
+
+
+def _delivers(task: Mapping[str, Any], status: str) -> bool:
+    """Whether this run's ending goes to the workflow's channels now (a digest sends it later)."""
+    rule = task.get("send_results") or "every_run"
+    if rule == "every_run":
+        return status in {"completed", "unsure", "denied", "failed"}
+    return rule == "needs_me" and status in {"unsure", "failed"}
 
 
 def _first_line(text: str) -> str:
@@ -279,13 +365,31 @@ def _title(name: str) -> str:
     return builtin.tool_title(name) or name.replace("_", " ").capitalize()
 
 
-def _denied_since(conversation_id: str, started_at: str) -> bool:
+def _denied_since(conversation_id: str, started_at: str) -> str | None:
+    """What the person said no to in this run, in a few words; None when they said no to nothing."""
     from row_bot import tasks
     conn = tasks._get_conn()
     try:
         row = conn.execute(
-            "SELECT 1 FROM approval_requests WHERE source_thread_id=? AND requested_at>=? AND status='denied' LIMIT 1",
+            "SELECT COALESCE(message, ''), COALESCE(approval_payload_json, '{}') FROM approval_requests "
+            "WHERE source_thread_id=? AND requested_at>=? AND status='denied' ORDER BY requested_at DESC LIMIT 1",
             (conversation_id, started_at)).fetchone()
     finally:
         conn.close()
-    return row is not None
+    if row is None:
+        return None
+    try:
+        payload = json.loads(row[1] or "{}")
+    except ValueError:
+        payload = {}
+    what = str(payload.get("question") or payload.get("label") or payload.get("description") or row[0] or "")
+    return _first_line(what).rstrip("?").strip()[:160] or "an action"
+
+
+def _note_denial(task: Mapping[str, Any], what: str, done: list[Mapping[str, Any]]) -> None:
+    """A denied run keeps a dated line in its notes, so the next run knows and doesn't try it another way."""
+    went = "; ".join(str(item.get("result") or "") for item in done if item.get("result")) or "nothing went out"
+    line = (f"{datetime.now():%d %b %H:%M}: the person said no to “{what}”, so that run stopped there ({went}). "
+            "Don't do it another way; if it still matters, say so in the next run's report.")
+    kept = notes(str(task["id"]))
+    save_notes(str(task["id"]), (kept + "\n" + line).strip()[-NOTES_LIMIT:] if kept else line)

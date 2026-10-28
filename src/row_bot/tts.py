@@ -46,6 +46,11 @@ _VOICES_PATH = _KOKORO_DIR / _VOICES_FILENAME
 
 _MODEL_URL = f"{_KOKORO_RELEASE_BASE}/{_MODEL_FILENAME}"
 _VOICES_URL = f"{_KOKORO_RELEASE_BASE}/{_VOICES_FILENAME}"
+# Their sizes and SHA-256, as that release serves them: a download is kept only when both match (5.3.1).
+_MODEL_BYTES, _MODEL_SHA256 = 177_464_787, "c1610a859f3bdea01107e73e50100685af38fff88f5cd8e5c56df109ec880204"
+_VOICES_BYTES, _VOICES_SHA256 = 28_214_398, "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d"
+VOICE_DOWNLOAD_BYTES = _MODEL_BYTES + _VOICES_BYTES
+VOICE_DOWNLOAD_HOST = "github.com (thewh1teagle/kokoro-onnx)"
 
 
 def _prepare_configured_runtime_tmp() -> None:
@@ -309,12 +314,17 @@ class TTSService:
         """Speak immediately (test button / future read-aloud)."""
         self._speak_internal(text)
 
-    def synthesize_wav_bytes(self, text: str) -> bytes:
-        """Generate local Kokoro audio without using a physical device."""
-        clean = _prepare_text(text)
+    def synthesize_wav_bytes(self, text: str, *, voice: str | None = None, speed: float | None = None,
+                             truncate: bool = True) -> bytes:
+        """Generate local Kokoro audio without using a physical device.
+
+        *voice* and *speed* override the saved ones for this call; *truncate* False keeps every sentence (a voice
+        file, 5.3.1 B) instead of a spoken reply's few.
+        """
+        clean = _prepare_text(text, truncate=truncate)
         if not clean.strip():
             return b""
-        samples, sample_rate = self._synthesize_samples(clean)
+        samples, sample_rate = self._synthesize_samples(clean, voice=voice, speed=speed)
         pcm = (
             np.clip(np.asarray(samples, dtype=np.float32), -1.0, 1.0)
             * 32767.0
@@ -400,7 +410,12 @@ class TTSService:
         worker (sets ``_stop_event``), the mic stays muted so the caller
         can decide what to do next.
         """
-        import sounddevice as sd
+        try:
+            import sounddevice as sd
+        except Exception:
+            # No sound system to play through (a Linux machine without PulseAudio).
+            logger.warning("TTS stream playback unavailable", exc_info=True)
+            return
 
         natural_end = False
 
@@ -454,10 +469,10 @@ class TTSService:
         _KOKORO_DIR.mkdir(parents=True, exist_ok=True)
 
         logger.info("Downloading Kokoro TTS model from %s", _MODEL_URL)
-        _download_file(_MODEL_URL, _MODEL_PATH, progress)
+        _download_file(_MODEL_URL, _MODEL_PATH, progress, size=_MODEL_BYTES, sha256=_MODEL_SHA256)
 
         logger.info("Downloading Kokoro voices from %s", _VOICES_URL)
-        _download_file(_VOICES_URL, _VOICES_PATH, None)
+        _download_file(_VOICES_URL, _VOICES_PATH, None, size=_VOICES_BYTES, sha256=_VOICES_SHA256)
 
     # Backward-compatible aliases
     def download_piper(
@@ -497,9 +512,9 @@ class TTSService:
 
     def _play(self, text: str) -> None:
         """Generate audio with Kokoro and play it via sounddevice."""
-        import sounddevice as sd
-
         try:
+            import sounddevice as sd
+
             samples, sample_rate = self._synthesize_samples(text)
 
             if self._stop_event.is_set():
@@ -511,15 +526,17 @@ class TTSService:
         except Exception:
             logger.warning("TTS playback error", exc_info=True)
 
-    def _synthesize_samples(self, text: str) -> tuple[np.ndarray, int]:
+    def _synthesize_samples(self, text: str, *, voice: str | None = None,
+                            speed: float | None = None) -> tuple[np.ndarray, int]:
         kokoro = self._get_kokoro()
         if kokoro is None:
             raise RuntimeError("Kokoro model is not installed")
+        chosen = voice if voice in VOICE_CATALOG else self._voice
         samples, sample_rate = kokoro.create(
             text,
-            voice=self._voice,
-            speed=self._speed,
-            lang=_voice_lang(self._voice),
+            voice=chosen,
+            speed=float(speed) if speed else self._speed,
+            lang=_voice_lang(chosen),
         )
         return np.asarray(samples), int(sample_rate)
 
@@ -644,21 +661,34 @@ def _download_file(
     url: str,
     dest: Path,
     progress: Callable[[float], None] | None = None,
+    *,
+    size: int | None = None,
+    sha256: str | None = None,
 ) -> None:
-    """Download a file with optional progress callback (0.0 → 1.0)."""
+    """Download a file with optional progress callback (0.0 → 1.0); kept only when its size and SHA-256 match."""
+    import hashlib
+
     import requests
 
     resp = requests.get(url, stream=True, timeout=300)
     resp.raise_for_status()
-    total = int(resp.headers.get("content-length", 0))
+    total = int(resp.headers.get("content-length", 0)) or int(size or 0)
     downloaded = 0
-
-    with open(dest, "wb") as f:
-        for chunk in resp.iter_content(chunk_size=65_536):
-            f.write(chunk)
-            downloaded += len(chunk)
-            if progress and total:
-                progress(min(downloaded / total, 1.0))
+    digest = hashlib.sha256()
+    partial = dest.with_name(dest.name + ".part")
+    try:
+        with open(partial, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=65_536):
+                f.write(chunk)
+                digest.update(chunk)
+                downloaded += len(chunk)
+                if progress and total:
+                    progress(min(downloaded / total, 1.0))
+        if (size is not None and downloaded != size) or (sha256 and digest.hexdigest() != sha256):
+            raise RuntimeError(f"{dest.name} didn't match the fingerprint saved in Row-Bot, so it wasn't kept.")
+        os.replace(partial, dest)
+    finally:
+        partial.unlink(missing_ok=True)
 
 
 def get_voice_catalog() -> dict[str, str]:

@@ -1340,6 +1340,7 @@
           "enum": [
             "image/png",
             "image/jpeg",
+            "image/gif",
             "video/mp4",
             "audio/mpeg",
             "audio/ogg",
@@ -2794,9 +2795,18 @@
             "sandbox_unprepared",
             "question_answered",
             "page",
-            "request_corrected"
+            "request_corrected",
+            "linked_conversation",
+            "video_project"
           ],
           "title": "Kind",
+          "type": "string"
+        },
+        "link_id": {
+          "default": "",
+          "maxLength": 32,
+          "pattern": "^([0-9a-f]{32})?$",
+          "title": "Link Id",
           "type": "string"
         },
         "media": {
@@ -2848,6 +2858,13 @@
           "maxLength": 64,
           "pattern": "^(proc-[0-9a-f]{8})?$",
           "title": "Process Id",
+          "type": "string"
+        },
+        "project_id": {
+          "default": "",
+          "maxLength": 32,
+          "pattern": "^(vid-[0-9a-f]{8})?$",
+          "title": "Project Id",
           "type": "string"
         },
         "recording_id": {

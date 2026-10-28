@@ -1037,6 +1037,15 @@ _STATUS.update(
         "recording_unavailable": 404,
         "local_address_unavailable": 404,
         "video_edit_unavailable": 404,
+        "video_project_unavailable": 404,
+        "video_project_stale": 409,
+        "video_project_invalid": 422,
+        "video_project_needs_ffmpeg": 409,
+        "video_project_not_made": 409,
+        "video_brand_invalid": 422,
+        "row_bot_sandbox_unavailable": 404,
+        "wait_unavailable": 404,
+        "row_bot_sandbox_refused": 409,
         "sent_file_unavailable": 404,
         "sent_file_expired": 410,
         "sent_files_gone": 409,
@@ -1081,6 +1090,9 @@ _STATUS.update(
 )
 
 
+# An MCP Registry listing that changed or went away since the person saw it (B405): a 409 in words, never a 503.
+_STATUS.update(dict.fromkeys(('registry_entry_removed', 'registry_recipe_changed', 'registry_recipe_unsupported',
+                              'registry_identity_missing'), 409))
 _STATUS.update(dict.fromkeys(('plan_changed', 'plan_unsupported', 'plan_not_resumable', 'invalid_access_preset', 'invalid_integration_query', 'invalid_mcp_auth', 'invalid_mcp_target', 'mcp_auth_busy', 'mcp_auth_callback_invalid', 'mcp_auth_callback_unavailable', 'mcp_auth_configuration_changed', 'mcp_auth_connection_unavailable', 'mcp_auth_denied', 'mcp_auth_expired', 'mcp_auth_flow_unavailable', 'mcp_auth_not_completed', 'mcp_auth_state_invalid', 'mcp_oauth_http_required', 'mcp_auth_endpoint_invalid', 'mcp_auth_issuer_mismatch', 'mcp_auth_origin_mismatch', 'mcp_auth_redirect_refused', 'mcp_credentials_endpoint_changed', 'mcp_credentials_too_large', 'mcp_credentials_unavailable', 'invalid_credential_reference', 'mcp_durable_storage_required', 'mcp_sign_in_required', 'mcp_package_recipe_unsupported', 'mcp_package_install_scripts_unsupported', 'mcp_package_locked_dependencies_required', 'mcp_package_integrity_required', 'mcp_package_integrity_changed', 'mcp_package_invalid', 'mcp_package_node_required', 'mcp_package_preparation_required', 'mcp_package_preview_capacity', 'mcp_package_preview_expired', 'mcp_package_source_invalid', 'mcp_package_too_large', 'package_link_or_collision', 'unsafe_package_path', 'hermes_recipe_unsupported', 'package_download_too_large', 'package_preview_changed', 'package_preview_expired', 'package_source_not_supported', 'package_source_removed', 'plugin_child_owned', 'plugin_child_parent_owned', 'plugin_child_source_immutable', 'plugin_mcp_state_unavailable', 'plugin_package_state_unavailable'), 409))
 # An address pasted back to finish a sign-in from another device: not that address, another sign-in's, already
 # used, or its sign-in has ended.
@@ -1092,6 +1104,9 @@ _STATUS.update(dict.fromkeys(('integration_link_unsupported', 'invalid_upload', 
 _STATUS['upload_too_large'] = 413
 # An answer that doesn't fit Row-Bot's question, or answers sent for an approval (N4).
 _STATUS['question_answer_invalid'] = 422
+_STATUS['approval_edit_invalid'] = 422
+_STATUS['media_unavailable'] = 404
+_STATUS['scheduled_post_unavailable'] = 404
 _STATUS['app_not_connected'] = 409  # A workflow template whose app is not connected yet.
 # Pages (N5): gone, not valid, too big, written to too often, or nothing to send.
 _STATUS.update({"chat_page_unavailable": 404, "chat_page_invalid": 422, "chat_page_too_large": 413,
@@ -1160,6 +1175,12 @@ class ProtocolRoute(APIRoute):
                 return problem(exc)
 
         return safe_handler
+
+
+def _is_sandbox() -> bool:
+    from row_bot.sandboxes import is_sandbox
+
+    return is_sandbox()
 
 
 def problem(exc: Exception) -> JSONResponse:
@@ -1573,6 +1594,7 @@ def create_router(
                 ),
                 # A new schedule keeps its times in this zone unless another is chosen (N9).
                 "server_timezone": _schedule_zone_name(),
+                "sandbox": _is_sandbox(),
                 "native_adapter": {
                     "available": native_window,
                     "proof_required": True,
@@ -2213,6 +2235,8 @@ def create_router(
     async def transcribe_dictation(
         conversation_id: str, lease_id: str, request: Request
     ) -> JSONResponse:
+        from row_bot.voice.browser_local import MAX_INPUT_BYTES
+
         current = await session(request, lane="mutation")
         handle = dictation_handle(conversation_id, lease_id, dictation_headers(request))
         utterance = voice_header(request, "x-dictation-utterance", 36)
@@ -2259,7 +2283,7 @@ def create_router(
                         break
                     transport.check_receive(operation)
                     security.session(await _context(request), current.id, current.csrf)
-                    if len(data) + len(chunk) > 8388608:
+                    if len(data) + len(chunk) > MAX_INPUT_BYTES:
                         raise ProtocolError("payload_too_large", 413)
                     data.extend(chunk)
             await dictation_owner(request, current, conversation_id)
@@ -3123,6 +3147,17 @@ def create_router(
         )
         await call(service._metadata, conversation_id)
         return await respond(request, dto.ClientQueueView, asdict(result))
+
+    @router.get("/conversations/{conversation_id}/links")
+    async def conversation_links(conversation_id: str, request: Request) -> JSONResponse:
+        """The conversations this one started or proposed, with their state (5.3.1 C)."""
+        await session(request)
+        await call(service._metadata, conversation_id)
+        from row_bot.linked_conversations import links
+
+        cards = await call(links, conversation_id)
+        items = [{key: value for key, value in card.items() if key != "kind"} for card in cards]
+        return await respond(request, dto.ConversationLinkPage, {"schema_version": 1, "items": items})
 
     @router.get("/conversations/{conversation_id}/steering")
     async def steering_view(
@@ -5227,6 +5262,24 @@ def create_router(
         result = await call(read_pending_approvals)
         return await respond(request, dto.PendingApprovalPage, result)
 
+    @router.get("/monitor/scheduled-posts")
+    async def monitor_scheduled_posts(request: Request) -> JSONResponse:
+        # Posts approved for a time slot, waiting for it (G3): Home's Review lists them with Cancel.
+        await session(request)
+        from row_bot.tools import x_posting
+
+        result = await call(x_posting.scheduled_posts)
+        return await respond(request, dto.ScheduledPostPage, {"schema_version": 1, "items": result})
+
+    @router.delete("/monitor/scheduled-posts/{post_id}")
+    async def monitor_cancel_scheduled_post(post_id: str, request: Request) -> JSONResponse:
+        await session(request, lane="control")
+        from row_bot.tools import x_posting
+
+        if not await call(x_posting.cancel_scheduled, post_id):
+            raise ProtocolError("scheduled_post_unavailable", 404)
+        return await respond(request, dto.ScheduledPostCancelled, {"cancelled": True})
+
     @router.get("/monitor/logs")
     async def monitor_logs(request: Request, limit: int = 200) -> JSONResponse:
         await session(request)
@@ -5444,6 +5497,190 @@ def create_router(
             raise ProtocolError("video_edit_unavailable", 404)
         return await respond(request, dto.VideoEditView, result)
 
+    # Video projects (5.3.1 B3): the Video panel reads a project and adds the person's versions.
+    def _project_id(value: str) -> str:
+        from row_bot.video_projects import PROJECT_ID
+
+        if not PROJECT_ID.fullmatch(str(value or "")):
+            raise ProtocolError("video_project_unavailable", 404)
+        return value
+
+    async def _project_call(function: Any, *args: Any) -> Any:
+        from row_bot.application.video_project_views import ProjectRefused
+
+        try:
+            result = await call(function, *args)
+        except ProjectRefused as error:
+            raise ProtocolError(str(error), _STATUS[str(error)]) from None
+        if result is None:
+            raise ProtocolError("video_project_unavailable", 404)
+        return result
+
+    @router.get("/video-projects/{project_id}")
+    async def video_project(request: Request, project_id: str, version: int | None = None) -> JSONResponse:
+        await session(request)
+        from row_bot.application.video_project_views import read_video_project
+
+        result = await _project_call(read_video_project, _project_id(project_id), version)
+        return await respond(request, dto.VideoProjectView, result)
+
+    @router.put("/video-projects/{project_id}")
+    async def change_video_project_route(request: Request, project_id: str) -> JSONResponse:
+        await session(request, lane="mutation")
+        from row_bot.application.video_project_views import change_video_project
+
+        body = await _body(request, dto.VideoProjectChange, 256 * 1024)
+        result = await _project_call(change_video_project, _project_id(project_id), body.model_dump())
+        return await respond(request, dto.VideoProjectView, result)
+
+    @router.post("/video-projects/{project_id}/restore")
+    async def restore_video_project_route(request: Request, project_id: str) -> JSONResponse:
+        await session(request, lane="mutation")
+        from row_bot.application.video_project_views import restore_video_project
+
+        body = await _body(request, dto.VideoProjectRestore, 4 * 1024)
+        result = await _project_call(restore_video_project, _project_id(project_id), body.number)
+        return await respond(request, dto.VideoProjectView, result)
+
+    # Sandboxes (5.3.1 B4): second Row-Bots on made-up data, started, stopped and opened from Settings › Data.
+    def _row_bot_sandbox_id(value: str) -> str:
+        from row_bot.sandboxes import SANDBOX_ID
+
+        if not SANDBOX_ID.fullmatch(str(value or "")):
+            raise ProtocolError("row_bot_sandbox_unavailable", 404)
+        return value
+
+    async def _sandbox_call(function: Any, *args: Any) -> Any:
+        from row_bot import sandboxes
+
+        if sandboxes.is_sandbox():
+            raise ProtocolError("row_bot_sandbox_refused", 409)
+        try:
+            return await call(function, *args)
+        except sandboxes.SandboxError as error:
+            gone = "no longer here" in str(error)
+            raise ProtocolError("row_bot_sandbox_unavailable" if gone else "row_bot_sandbox_refused",
+                                404 if gone else 409) from None
+
+    def _sandbox_page() -> dict[str, Any]:
+        from row_bot import sandboxes
+        from row_bot.sandbox_packs import PACKS
+
+        inside = sandboxes.is_sandbox()
+        return {"items": [] if inside else [sandboxes.view(item) for item in sandboxes.list_sandboxes()],
+                "packs": [{"pack": pack, "name": name} for pack, name in PACKS.items()], "available": not inside}
+
+    def _wait_page() -> dict:
+        from row_bot import waits
+        from row_bot.application.client_platform import ClientPlatformError
+
+        items = []
+        for record in waits.waiting():
+            try:
+                meta = service._metadata(record["conversation_id"])
+            except ClientPlatformError:
+                continue  # Its conversation is gone: nothing will start there.
+            items.append({**waits.view(record), "conversation_title": str(meta.get("name") or "")[:160]})
+        return {"schema_version": 1, "items": items[:500]}
+
+    @router.get("/waits")
+    async def waits_page(request: Request) -> JSONResponse:
+        """What conversations wait for (5.3.1): the composer, the sidebar and Home show them."""
+        await session(request)
+        return await respond(request, dto.WaitPage, await call(_wait_page))
+
+    @router.post("/waits/{wait_id}/stop")
+    async def stop_wait(request: Request, wait_id: str) -> JSONResponse:
+        await session(request, lane="mutation")
+        if len(wait_id) != 12 or any(char not in "0123456789abcdef" for char in wait_id):
+            raise ProtocolError("wait_unavailable", 404)
+        from row_bot import waits
+
+        if not await call(waits.stop, wait_id):
+            raise ProtocolError("wait_unavailable", 404)
+        return await respond(request, dto.WaitPage, await call(_wait_page))
+
+    @router.get("/row-bot-sandboxes")
+    async def row_bot_sandboxes(request: Request) -> JSONResponse:
+        await session(request)
+        return await respond(request, dto.RowBotSandboxPage, await call(_sandbox_page))
+
+    @router.post("/row-bot-sandboxes")
+    async def create_row_bot_sandbox(request: Request) -> JSONResponse:
+        await session(request, lane="mutation")
+        from row_bot import sandboxes
+
+        body = await _body(request, dto.RowBotSandboxCreate, 4 * 1024)
+        created = await _sandbox_call(sandboxes.create, body.name, body.pack)
+        return await respond(request, dto.RowBotSandboxView, sandboxes.view(created))
+
+    @router.post("/row-bot-sandboxes/{sandbox_id}/link")
+    async def row_bot_sandbox_link(request: Request, sandbox_id: str) -> JSONResponse:
+        await session(request, lane="mutation")
+        from row_bot import sandboxes
+
+        url = await _sandbox_call(sandboxes.sign_in_url, _row_bot_sandbox_id(sandbox_id))
+        return await respond(request, dto.RowBotSandboxLink, {"url": url})
+
+    @router.post("/row-bot-sandboxes/{sandbox_id}/{action}")
+    async def act_on_row_bot_sandbox(request: Request, sandbox_id: str, action: str) -> JSONResponse:
+        await session(request, lane="mutation")
+        from row_bot import sandboxes
+
+        run = {"start": sandboxes.start, "stop": sandboxes.stop, "reset": sandboxes.reset}.get(action)
+        if run is None:
+            raise ProtocolError("row_bot_sandbox_unavailable", 404)
+        result = await _sandbox_call(run, _row_bot_sandbox_id(sandbox_id))
+        return await respond(request, dto.RowBotSandboxView, sandboxes.view(result))
+
+    @router.delete("/row-bot-sandboxes/{sandbox_id}")
+    async def delete_row_bot_sandbox(request: Request, sandbox_id: str) -> JSONResponse:
+        await session(request, lane="mutation")
+        from row_bot import sandboxes
+
+        await _sandbox_call(sandboxes.delete, _row_bot_sandbox_id(sandbox_id))
+        return await respond(request, dto.RowBotSandboxPage, await call(_sandbox_page))
+
+    @router.get("/video-brand")
+    async def video_brand_route(request: Request) -> JSONResponse:
+        await session(request)
+        from dataclasses import asdict
+
+        from row_bot import video_brand
+
+        return await respond(request, dto.VideoBrand, asdict(await call(video_brand.load)))
+
+    @router.put("/video-brand")
+    async def save_video_brand(request: Request) -> JSONResponse:
+        await session(request, lane="mutation")
+        from dataclasses import asdict
+
+        from row_bot import video_brand
+
+        body = await _body(request, dto.VideoBrand, 8 * 1024)
+        try:
+            saved = await call(video_brand.save, body.model_dump())
+        except video_brand.BrandError:
+            raise ProtocolError("video_brand_invalid", 422) from None
+        return await respond(request, dto.VideoBrand, asdict(saved))
+
+    @router.post("/video-projects/{project_id}/export")
+    async def export_video_project_route(request: Request, project_id: str) -> JSONResponse:
+        await session(request, lane="mutation")
+        from row_bot.application.video_project_views import export_video_project
+
+        body = await _body(request, dto.VideoProjectExport, 4 * 1024)
+        result = await _project_call(export_video_project, _project_id(project_id), body.shape)
+        return await respond(request, dto.VideoProjectView, result)
+
+    @router.post("/video-projects/{project_id}/make")
+    async def make_video_project_route(request: Request, project_id: str) -> JSONResponse:
+        await session(request, lane="mutation")
+        from row_bot.application.video_project_views import make_video_project
+
+        result = await _project_call(make_video_project, _project_id(project_id))
+        return await respond(request, dto.VideoProjectView, result)
+
     # Files sent to the person's devices or a chat app (F7). Every signed-in device is the owner's,
     # so each sees every delivery; a download needs the session and ends when its copy expires.
     def _delivery(value: str, index: str | None = None) -> tuple[str, int]:
@@ -5574,6 +5811,28 @@ def create_router(
         from row_bot.pages import views
 
         return await respond(request, dto.PagePage, await call(views, (conversation_id or "")[:256] or None))
+
+    @router.get("/media")
+    async def media_list(request: Request, query: str = "", kind: str = "") -> JSONResponse:
+        # Library › Media (5.3.1 B3): every picture, video and sound in the chats, newest first.
+        await session(request)
+        from row_bot import media_library
+
+        items = await call(media_library.items, query=query[:200],
+                           kind=kind if kind in {"image", "video", "audio"} else "", limit=500)
+        return await respond(request, dto.MediaPage, {"items": items})
+
+    @router.put("/media/tags")
+    async def media_tags(request: Request) -> JSONResponse:
+        await session(request, lane="mutation")
+        body = await _body(request, dto.MediaTagsWrite, 16 * 1024)
+        from row_bot import media_library
+
+        try:
+            tags = await call(media_library.set_tags, body.ref, body.tags)
+        except media_library.MediaError:
+            raise ProtocolError("media_unavailable", 404) from None
+        return await respond(request, dto.MediaTags, {"ref": body.ref, "tags": tags})
 
     @router.get("/pages/{page_id}")
     async def page_read(request: Request, page_id: str) -> JSONResponse:
@@ -10679,7 +10938,7 @@ def create_router(
                 if notices_epoch is not None
                 else None
             )
-            heartbeat = started = security.clock()
+            heartbeat = started = checked = security.clock()
             # How it ended, for the log (#568): a dropped window left no trace before.
             ended = "the window went away, or Row-Bot is stopping"
             logger.debug("Event stream opened (session %s)", current.id[:8])
@@ -10688,9 +10947,25 @@ def create_router(
                 # connection need not wait for the periodic heartbeat.
                 yield ": connected\n\n"
                 while sub.streaming and not await request.is_disconnected():
-                    await _context(request)
-                    security.session(await _context(request), current.id, current.csrf)
                     result = await replay(sub, position)
+                    notices = (
+                        app_notices.since(notice_position)
+                        if notice_position is not None
+                        else []
+                    )
+                    # Access is checked before anything is sent, and every half second while nothing
+                    # is: a revoked session's stream still ends well within a second, and an open page
+                    # no longer reads the access store eight times a second (5.3.1).
+                    if (
+                        result["snapshot_required"]
+                        or result["events"]
+                        or notices
+                        or security.clock() - checked >= 0.5
+                    ):
+                        security.session(
+                            await _context(request), current.id, current.csrf
+                        )
+                        checked = security.clock()
                     if result["snapshot_required"]:
                         await _context(request)
                         # A snapshot may exceed one event's limit. Transfer the new
@@ -10713,11 +10988,7 @@ def create_router(
                             )
                     # Background notices ride the same stream as their own
                     # frames; they never move the conversation cursor.
-                    for notice in (
-                        app_notices.since(notice_position)
-                        if notice_position is not None
-                        else ()
-                    ):
+                    for notice in notices:
                         frame = dto.NoticeFrame(
                             notices_epoch=app_notices.epoch, notice=notice.view()
                         )

@@ -155,11 +155,51 @@ class _ViewportInput(BaseModel):
 
 
 class _RecordInput(BaseModel):
-    action: Literal["start", "stop"] = Field(description="start or stop recording this chat's page")
+    action: Literal["start", "stop", "beat"] = Field(
+        description="start or stop recording this chat's page; beat marks this moment while it records")
     max_minutes: int = Field(default=5, ge=1, le=15, description="For start: stops by itself after this many minutes")
+    beat: Literal["live", "work", "cut"] = Field(
+        default="live", description="For beat: live (watch as it is), work (a wait to speed up) or cut (leave out)")
+    note: str = Field(default="", description="For beat: what happens next, in a few words")
+
+
+class _SandboxInput(BaseModel):
+    action: Literal["list", "create", "start", "stop", "reset", "open"] = Field(
+        default="list", description="list, create (and start), start, stop, reset to its pack, or open in this "
+                                    "chat's browser, signed in")
+    sandbox: str = Field(default="", description="The sandbox (box-…), for every action but list and create")
+    name: str = Field(default="", description="For create: its name, e.g. Demo shop")
+    pack: Literal["empty", "shop", "charity", "paperwork", "code"] = Field(
+        default="empty", description="For create: the made-up data it starts with")
 
 
 # ── Shared steps ──────────────────────────────────────────────────────────────
+
+
+def _recording(thread_id: str) -> Any:
+    """The browser recording running in this chat (its capture draws the pointer), or None."""
+    from row_bot import recordings
+
+    record = recordings.active_for(thread_id, "browser")
+    return record.capture if record is not None and hasattr(record.capture, "pointer") else None
+
+
+async def _point(tab: Any, locator: Any, capture: Any, *, click: bool = False) -> None:
+    """While recording: move the pointer to the control at a viewer's pace, so the video shows where it goes."""
+    import asyncio
+
+    from row_bot.browser.recording import MOVE_SECONDS
+
+    box = await locator.bounding_box(timeout=ACTION_TIMEOUT_MS)
+    if not box:
+        return
+    width, height = await tab.page.evaluate("() => [innerWidth, innerHeight]")
+    x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+    capture.pointer(x / max(1, width), y / max(1, height))
+    await tab.page.mouse.move(x, y, steps=12)
+    await asyncio.sleep(MOVE_SECONDS)
+    if click:
+        capture.pointer(x / max(1, width), y / max(1, height), click=True)
 
 
 def _normalise_url(url: str) -> tuple[str | None, str]:
@@ -416,9 +456,13 @@ def browser_click(ref: str, double: bool = False, right: bool = False) -> str:
             if refusal:
                 return refusal
 
+    capture = _recording(thread_id)
+
     async def step(tab: Any) -> str:
         locator = await session.locate(tab, ref)
         try:
+            if capture is not None:
+                await _point(tab, locator, capture, click=True)
             if double:
                 await locator.dblclick(timeout=ACTION_TIMEOUT_MS)
             else:
@@ -453,10 +497,18 @@ def browser_type(ref: str, text: str, submit: bool = False) -> str:
             if refusal:
                 return refusal
 
+    capture = _recording(thread_id)
+
     async def step(tab: Any) -> str:
         locator = await session.locate(tab, ref)
         try:
-            await locator.fill(text, timeout=ACTION_TIMEOUT_MS)
+            if capture is not None:
+                # While recording, type as a person would, so the video shows the words appear.
+                await _point(tab, locator, capture, click=True)
+                await locator.fill("", timeout=ACTION_TIMEOUT_MS)
+                await locator.press_sequentially(text, delay=45, timeout=ACTION_TIMEOUT_MS + 60 * len(text))
+            else:
+                await locator.fill(text, timeout=ACTION_TIMEOUT_MS)
             if submit:
                 await locator.press("Enter", timeout=ACTION_TIMEOUT_MS)
         except Exception as exc:
@@ -548,8 +600,11 @@ def browser_scroll(direction: str = "down", amount: int = 3, ref: str | None = N
 
     thread_id = _get_thread_id()
     session = _session_manager.get_session(thread_id)
+    capture = _recording(thread_id)
 
     async def step(tab: Any) -> str:
+        import asyncio
+
         try:
             if ref:
                 locator = await session.locate(tab, ref)
@@ -559,7 +614,14 @@ def browser_scroll(direction: str = "down", amount: int = 3, ref: str | None = N
             width, height = await tab.page.evaluate("() => [innerWidth, innerHeight]")
             await tab.page.mouse.move(width / 2, height / 2)
             steps = max(1, min(int(amount), 20))
-            await tab.page.mouse.wheel(0, (-1 if direction == "up" else 1) * steps * 400)
+            sign = -1 if direction == "up" else 1
+            if capture is None:
+                await tab.page.mouse.wheel(0, sign * steps * 400)
+            else:  # While recording, scroll smoothly, a little at a time.
+                capture.pointer(0.5, 0.5)
+                for _ in range(steps * 8):
+                    await tab.page.mouse.wheel(0, sign * 50)
+                    await asyncio.sleep(0.02)
         except Exception as exc:
             return _plain_error("scroll", "the page", exc)
         return f"Scrolled {direction}."
@@ -781,13 +843,21 @@ def _record_approval(minutes: int) -> dict:
     }
 
 
-def browser_record(action: str, max_minutes: int = 5) -> str:
-    """Start or stop recording this chat's page in Row-Bot's browser to a video."""
+def browser_record(action: str, max_minutes: int = 5, beat: str = "live", note: str = "") -> str:
+    """Start or stop recording this chat's page in Row-Bot's browser to a video, or mark a beat while it records."""
 
     from row_bot import recordings
     from row_bot.browser.recording import encoder_problem
 
     thread_id = _get_thread_id()
+    if action == "beat":
+        capture = _recording(thread_id)
+        if capture is None:
+            return "Row-Bot's browser isn't being recorded in this chat: start a recording first."
+        at = capture.beat(beat, note)
+        return (f"Marked {beat} at {recordings.clock_words(at)}"
+                + {"live": ": shown as it happens.", "work": ": sped up in the video.",
+                   "cut": ": left out of the video."}[beat])
     if action == "stop":
         record = recordings.active_for(thread_id, "browser")
         if record is None:
@@ -797,7 +867,7 @@ def browser_record(action: str, max_minutes: int = 5) -> str:
         recordings.wait(record, 30)
         return recordings.summary(record)
     if action != "start":
-        return "Use action start or stop."
+        return "Use action start, stop or beat."
     running = recordings.active_for(thread_id, "browser")
     if running is not None:
         return recordings.summary(running)
@@ -842,9 +912,87 @@ def browser_record(action: str, max_minutes: int = 5) -> str:
         return "Row-Bot's browser couldn't start recording. Try again in a moment."
     return (
         recordings.summary(record)
-        + " Do the steps to record, then call browser_record with action stop; the video is saved "
-        "to this chat's files."
+        + " Do the steps to record (clicks, typing and scrolling go at a viewer's pace, with a drawn pointer); mark "
+        "beats as you go (beat=work before a wait, live when it's worth watching again, cut for a stretch to leave "
+        "out); then call browser_record with action stop. The video is saved to this chat's files, and the video "
+        "tool makes its scenes from the beats."
     )
+
+
+def _sandbox_approval(what: str, name: str) -> dict:
+    return {
+        "tool": "sandbox",
+        "label": "Start a sandbox",
+        "question": f"{what} a sandbox ({name})?",
+        "description": ("Row-Bot will start a second Row-Bot on this computer, on made-up data with its own chats, "
+                        "settings and sign-ins. It can't see your own Row-Bot or its files, and it stops when "
+                        "Row-Bot quits."),
+        "args": {"sandbox": name},
+    }
+
+
+def _sandbox_line(item: Any) -> str:
+    from row_bot import sandboxes
+
+    view = sandboxes.view(item)
+    where = f" at {view['url']}" if view["url"] else ""
+    why = f" ({view['problem']})" if view["problem"] else ""
+    return f"Sandbox {item.sandbox_id}: \"{item.name}\", {view['pack_name'].lower()}, {item.status}{where}{why}."
+
+
+def sandbox(action: str = "list", sandbox: str = "", name: str = "", pack: str = "empty") -> str:
+    """A sandbox: a second Row-Bot on made-up data, to try things safely or film a demo in this chat's browser."""
+    from row_bot import sandboxes
+    from row_bot.tools.approval_gate import approval_check, with_approval
+
+    if sandboxes.is_sandbox():
+        return "This is a sandbox already: it starts no sandboxes of its own."
+    if action == "list":
+        found = sandboxes.list_sandboxes()
+        return "\n".join(_sandbox_line(item) for item in found) if found else "There are no sandboxes yet."
+    line = ""
+    try:
+        if action == "create":
+            refusal, line = approval_check(
+                _sandbox_approval("Create and start", name or pack),
+                risks=("starts a second Row-Bot on this computer",),
+                blocked_message="BLOCKED: Starting a sandbox needs approval, and this chat is on Block.",
+                cancelled_message="The person didn't want a sandbox; none was made.")
+            if refusal:
+                return refusal
+            item = sandboxes.create(name, pack)
+            sandboxes.start(item.sandbox_id)
+            item = sandboxes.wait_running(item.sandbox_id, 90) or item
+        else:
+            item = sandboxes.get(sandbox.strip())
+            if item is None:
+                return f"{sandbox or 'That'} isn't a sandbox here: list them, or create one."
+            if action == "start":
+                refusal, line = approval_check(
+                    _sandbox_approval("Start", item.name), risks=("starts a second Row-Bot on this computer",),
+                    blocked_message="BLOCKED: Starting a sandbox needs approval, and this chat is on Block.",
+                    cancelled_message="The person didn't want the sandbox started.")
+                if refusal:
+                    return refusal
+                sandboxes.start(item.sandbox_id)
+                item = sandboxes.wait_running(item.sandbox_id, 90) or item
+            elif action == "stop":
+                item = sandboxes.stop(item.sandbox_id)
+            elif action == "reset":
+                item = sandboxes.reset(item.sandbox_id)
+            elif action == "open":
+                result = browser_navigate(sandboxes.sign_in_url(item.sandbox_id))
+                return f"Opened {item.name} in this chat's browser, signed in.\n{result}"
+    except sandboxes.SandboxError as error:
+        return str(error)
+    text = _sandbox_line(item)
+    if item.status == "running" and action in {"create", "start"}:
+        text += " Open it with action open: this chat's browser signs in to it."
+        if not sandboxes.has_model(item.sandbox_id):
+            # Its own sign-in (decision 4): only the person signs in, so ask them; a demo needs real answers.
+            text += (" It has no model yet: ask the person to open it from Settings › Sandboxes and sign in to a "
+                     "provider once; its chats can't answer until then.")
+    return with_approval(line, text) if line else text
 
 
 _TOOLS: tuple[tuple[Any, str, str, type[BaseModel] | None], ...] = (
@@ -874,8 +1022,13 @@ _TOOLS: tuple[tuple[Any, str, str, type[BaseModel] | None], ...] = (
     (browser_viewport, "browser_viewport",
      "Show the page at a phone, tablet or desktop size to check a responsive layout.", _ViewportInput),
     (browser_record, "browser_record",
-     "Record this chat's page in Row-Bot's browser to a video (asks first): start, do the steps, then stop. "
-     "To record the whole screen use computer_record.", _RecordInput),
+     "Record this chat's page in Row-Bot's browser to a video (asks first): start, do the steps (paced, with a "
+     "drawn pointer), mark beats (live, work, cut), then stop. To record the whole screen use computer_record.",
+     _RecordInput),
+    (sandbox, "sandbox",
+     "A sandbox: a second Row-Bot on made-up data (a shop with its app, a charity's documents, paperwork, sample "
+     "code, or empty) to try a workflow safely or film a demo. create starts one (asks first); open signs this "
+     "chat's browser in to it; stop, reset, list.", _SandboxInput),
 )
 
 

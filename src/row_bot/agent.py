@@ -22,6 +22,7 @@ from row_bot.prompt_cache import (
     prompt_cache_lifetime,
     with_conversation_cache,
 )
+from row_bot.providers import deferred_tools
 from row_bot.providers.capabilities import PROMPT_CACHE_SYSTEM_BREAKPOINT_ROUTES, prompt_cache_route
 from row_bot import prompt_prefix_diff
 # Learning (preview): only the switch. Its seams call learning.is_enabled() first and import
@@ -1417,23 +1418,22 @@ def _interactive_progress_contract(runtime_surface: str) -> str:
     surface = str(runtime_surface or "").strip()
     if selected_mode != "agent":
         return ""
-    if is_background_workflow():
-        return ""
+    workflow = is_background_workflow()
     if surface == "channel" and not _current_channel_streaming_var.get(False):
         return ""
-    if surface not in {"normal_chat", "remote_client", "designer", "developer", "channel"}:
+    if not workflow and surface not in {"normal_chat", "remote_client", "designer", "developer", "channel"}:
         return ""
 
     parts = [
         "INTERACTIVE PROGRESS:",
-        "For interactive work that will take multiple tool calls or more than a few seconds, "
-        "stream occasional short user-facing progress updates before or between meaningful phases.",
-        "Write them naturally in your own voice. Do not use a fixed template, do not narrate "
-        "every tool call, and do not mention low-level tool names unless the user needs that detail.",
-        "Never reveal hidden reasoning, private secrets, raw logs, or unapproved content.",
-        "Skip progress updates for quick answers. Keep the final answer focused on results and "
-        "avoid repeating the live updates.",
+        "While you work through tools, keep the person posted in short lines: before your first tool step, and "
+        "whenever you move on to something new, one sentence on what you're doing or what you just found "
+        "(\"Checking the October orders…\", \"Found 2 repeat customers; drafting the reply.\").",
+        "Your own words, no tool names. Never reveal hidden reasoning, secrets, raw logs or unapproved content. "
+        "Skip it for quick answers, and don't repeat these lines in the final answer.",
     ]
+    if workflow:
+        parts.append("In a workflow run keep them sparse: a line as you start each part of the work.")
     if surface == "channel":
         parts.append(
             "For channel conversations, keep progress updates especially sparse because message "
@@ -4269,6 +4269,45 @@ def _prepare_agent_request(
     return llm_messages, created, inputs, prepared
 
 
+# After this many tool rounds in a turn without a word to the person, one short note asks for a line (owner,
+# 28 Oct): models that batch tool calls (GPT) often work in silence. It's added to this request only, at its
+# end: never stored, never in the cached prefix, and marked so Learning's capture can tell it apart.
+SILENT_ROUNDS = 3
+_SILENT_AGAIN = 5
+PROGRESS_NOTE = ("Row-Bot note, not from the person: you've worked through several tools without a word to the "
+                 "person. Before your next step, say in one short line what you found and what's next.")
+
+
+def _silent_rounds(messages: list) -> int:
+    """Tool rounds since the person's (or the turn's) last message in which the assistant wrote no text."""
+    rounds = 0
+    for message in reversed(messages):
+        if isinstance(message, HumanMessage):
+            break
+        if not isinstance(message, AIMessage) or not getattr(message, "tool_calls", None):
+            continue
+        content = message.content
+        said = content.strip() if isinstance(content, str) else "".join(
+            str(block.get("text") or "") for block in content if isinstance(block, dict)
+            and block.get("type") == "text").strip()
+        if said:
+            break
+        rounds += 1
+    return rounds
+
+
+def _with_progress_note(messages: list, conversation: list) -> list:
+    """*messages* (the request) with the progress note at its end when *conversation*'s silent rounds call for
+    one."""
+    rounds = _silent_rounds(conversation)
+    if rounds < SILENT_ROUNDS or (rounds - SILENT_ROUNDS) % _SILENT_AGAIN:
+        return messages
+    if not _interactive_progress_contract(_current_runtime_surface_var.get("")):
+        return messages
+    return [*messages, HumanMessage(content=PROGRESS_NOTE,
+                                    additional_kwargs={"ephemeral": True, "row_bot_note": "progress"})]
+
+
 def _pre_model_trim(state: dict, config: dict | None = None) -> dict:
     """Prepare every Agent model/tool-loop call through one accounting path."""
     from row_bot.runtime.executions import current_execution, generation_registry
@@ -4287,6 +4326,7 @@ def _pre_model_trim(state: dict, config: dict | None = None) -> dict:
     # A model that sees images gets the browser page's picture right after the action that took it.
     from row_bot.browser.model_view import with_page_picture
     llm_messages = with_page_picture(llm_messages, str(((config or {}).get("configurable") or {}).get("thread_id") or ""))
+    llm_messages = _with_progress_note(llm_messages, list(state.get("messages") or []))
     if execution is not None:
         generation_registry.check_dispatch(execution)
         from row_bot.application.client_queue import acknowledge_consumed
@@ -5553,6 +5593,12 @@ _current_on_demand_tools_var: _contextvars.ContextVar[dict[str, tuple[str, Any]]
 )
 
 
+def _tool_group_label(entry: dict[str, Any]) -> str:
+    """The name the person sees for a built-in tool's group ("🧮 Calculator"): tool search finds the tool by it."""
+    owner = tool_registry.get_tool(str(entry["parent"])) if entry["source"] == "core" else None
+    return str(getattr(owner, "display_name", "") or "")
+
+
 def _has_code_folder() -> bool:
     """Whether this turn can use Developer tools: a captured code folder, or (outside a client turn) the
     thread's workspace, as the Developer tools themselves resolve it."""
@@ -5572,6 +5618,7 @@ def _has_code_folder() -> bool:
 def _activate_agent_cache_metadata(cache_key: frozenset[str]) -> None:
     metadata = _agent_cache_metadata.get(cache_key, {})
     _current_on_demand_tools_var.set(dict(metadata.get("on_demand_tools") or {}))
+    deferred_tools.offer(metadata.get("deferred_tool_names") or ())
     _current_effective_tool_parent_names_var.set(tuple(metadata.get("tool_parents") or ()))
     _current_bound_tool_schema_tokens_var.set(int(metadata.get("bound_schema_tokens") or 0))
     _current_canonical_tools_var.set(tuple(metadata.get("canonical_tools") or ()))
@@ -5634,16 +5681,17 @@ def _resolve_active_skill_records(authorized_records: tuple, *, include_turn_sco
     authorized_by_id = {record.canonical_id: record for record in authorized_records}
 
     selected: list[str] = []
-    if profile:
-        skill_policy = profile.get("skill_policy_json") or {}
-        if isinstance(skill_policy, dict):
-            selected.extend(str(name) for name in (skill_policy.get("skills_override") or []))
+    skill_policy = (profile.get("skill_policy_json") or {}) if profile else {}
+    named = skill_policy.get("skills_override") if isinstance(skill_policy, dict) else None
+    if named:
+        selected.extend(str(name) for name in named)
     elif override is not None:
+        # The conversation's own skills (a workflow's, kept for every run), under a profile that names none.
         selected.extend(str(name) for name in override)
 
     if not is_background and not profile and surface != "designer":
         selected.extend(str(name) for name in state.get("pinned", []))
-    if not is_background and include_turn_scoped:
+    if include_turn_scoped:
         selected.extend(str(name) for name in state.get("auto_loaded", []))
         # Mentioned in this message: loaded for this turn only, and only if already authorized above.
         selected.extend(str(name) for name in (_current_app_scope_var.get(None) or {}).get("skills") or [])
@@ -5683,25 +5731,17 @@ def _build_runtime_skill_snapshot(
     is_child = surface.startswith("agent_child")
     background = is_background_workflow()
 
-    if profile and not is_child:
-        skill_policy = profile.get("skill_policy_json") or {}
-        selected = {
-            str(name)
-            for name in (skill_policy.get("skills_override") or [])
-        } if isinstance(skill_policy, dict) else set()
-        authorized = tuple(record for record in all_records if record.canonical_id in selected)
-    elif background:
-        try:
-            from row_bot.threads import get_thread_skills_override
-
-            selected = set(get_thread_skills_override(_current_thread_id_var.get("") or "") or [])
-        except Exception:
-            selected = set()
+    # A profile that names skills keeps a run to them; one that names none (Default) leaves the person's
+    # skills, as in a chat. A workflow run is a chat turn (F31): the same skills, and its own pinned ones.
+    skill_policy = (profile.get("skill_policy_json") or {}) if profile and not is_child else {}
+    named = skill_policy.get("skills_override") if isinstance(skill_policy, dict) else None
+    if named:
+        selected = {str(name) for name in named}
         authorized = tuple(record for record in all_records if record.canonical_id in selected)
     else:
         authorized = all_records
 
-    if tool_parents and not background:
+    if tool_parents:
         known = {record.canonical_id for record in authorized}
         try:
             authorized = authorized + tuple(
@@ -5716,8 +5756,7 @@ def _build_runtime_skill_snapshot(
     active_ids = tuple(record.canonical_id for record in active_records)
     smart_off = is_smart_off(_current_thread_id_var.get("") or "default")
     discoverable = bool(
-        not background
-        and not smart_off
+        not smart_off
         and any(record.canonical_id not in set(active_ids) for record in authorized)
     )
     fingerprint = skill_snapshot_fingerprint(
@@ -6260,6 +6299,7 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
                 eager_core_entries = [entry for entry in eager_core_entries if entry not in on_demand_entries]
                 eager_core_tools = [entry["tool"] for entry in eager_core_entries]
             on_demand_tools = [entry["tool"] for entry in on_demand_entries]
+            deferred_names: frozenset[str] = frozenset()  # offered only through the bridge
             if on_demand_entries or (effective_loading_mode == "auto" and (external_tools or force_external_discovery)):
                 try:
                     from row_bot.tools.discovery import build_tool_discovery_tools
@@ -6269,6 +6309,7 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
                             entry["tool"],
                             source=entry["source"],
                             parent=entry["parent"],
+                            label=_tool_group_label(entry),
                         )
                         for entry in on_demand_entries + (
                             external_entries if effective_loading_mode == "auto" else [])
@@ -6290,6 +6331,7 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
                     lc_tools = eager_core_tools + bridges
                     if effective_loading_mode != "auto":
                         lc_tools += external_tools
+                    deferred_names = frozenset(record.name for record in bridge_records)
                 except Exception as exc:
                     logger.warning(
                         "External tool discovery assembly failed; using eager compatibility snapshot: %s",
@@ -6385,6 +6427,7 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
                     for entry in on_demand_entries
                     if str(getattr(entry["tool"], "name", "") or "") not in bound_names
                 },
+                "deferred_tool_names": frozenset(name for name in deferred_names if name not in bound_names),
                 "tool_parents": tuple(sorted(effective_parent_names)),
                 "bound_schema_tokens": estimate_bound_tool_schema_tokens(lc_tools),
                 "canonical_tools": tuple(convert_to_openai_tool(tool) for tool in lc_tools),

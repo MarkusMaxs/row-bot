@@ -917,6 +917,11 @@ export interface ClientTransport {
   /** Pages the agent made (N5): every one, or one conversation's. */
   pages?(conversationId?: string, signal?: AbortSignal): Promise<Wire.PagePage>;
   page?(pageId: string, signal?: AbortSignal): Promise<Wire.PageView>;
+  /** The conversations one started or proposed, with their state (5.3.1 C). */
+  conversationLinks?(
+    conversationId: string,
+    signal?: AbortSignal,
+  ): Promise<Wire.ConversationLinkPage>;
   /** One frame address for a page in this theme, loaded once in a sandbox. */
   pageFrame?(
     pageId: string,
@@ -949,6 +954,48 @@ export interface ClientTransport {
   ): Promise<Wire.ExportSaved>;
   attention?(signal?: AbortSignal): Promise<Wire.AttentionSnapshot>;
   pendingApprovals?(signal?: AbortSignal): Promise<Wire.PendingApprovalPage>;
+  media?(
+    filter: { query?: string; kind?: string },
+    signal?: AbortSignal,
+  ): Promise<Wire.MediaPage>;
+  setMediaTags?(ref: string, tags: string[]): Promise<Wire.MediaTags>;
+  /** A video project (5.3.1 B3) at one version, the latest by default. */
+  videoProject?(
+    projectId: string,
+    version?: number,
+    signal?: AbortSignal,
+  ): Promise<Wire.VideoProjectView>;
+  changeVideoProject?(
+    projectId: string,
+    change: Wire.VideoProjectChange,
+  ): Promise<Wire.VideoProjectView>;
+  restoreVideoProject?(
+    projectId: string,
+    number: number,
+  ): Promise<Wire.VideoProjectView>;
+  makeVideoProject?(projectId: string): Promise<Wire.VideoProjectView>;
+  videoBrand?(signal?: AbortSignal): Promise<Wire.VideoBrand>;
+  /** What conversations wait for (5.3.1); a stopped one starts nothing. */
+  waits?(signal?: AbortSignal): Promise<Wire.WaitPage>;
+  stopWait?(waitId: string): Promise<Wire.WaitPage>;
+  /** Sandboxes (5.3.1 B4): second Row-Bots on made-up data. */
+  rowBotSandboxes?(signal?: AbortSignal): Promise<Wire.RowBotSandboxPage>;
+  createRowBotSandbox?(
+    body: Wire.RowBotSandboxCreate,
+  ): Promise<Wire.RowBotSandboxView>;
+  actOnRowBotSandbox?(
+    sandboxId: string,
+    action: 'start' | 'stop' | 'reset',
+  ): Promise<Wire.RowBotSandboxView>;
+  rowBotSandboxLink?(sandboxId: string): Promise<Wire.RowBotSandboxLink>;
+  deleteRowBotSandbox?(sandboxId: string): Promise<Wire.RowBotSandboxPage>;
+  saveVideoBrand?(brand: Wire.VideoBrand): Promise<Wire.VideoBrand>;
+  exportVideoProject?(
+    projectId: string,
+    shape: Wire.VideoProjectExport['shape'],
+  ): Promise<Wire.VideoProjectView>;
+  scheduledPosts?(signal?: AbortSignal): Promise<Wire.ScheduledPostPage>;
+  cancelScheduledPost?(id: string): Promise<Wire.ScheduledPostCancelled>;
   monitorLogs?(limit?: number, signal?: AbortSignal): Promise<Wire.MonitorLogs>;
   systemDiagnosis?(signal?: AbortSignal): Promise<Wire.SystemDiagnosis>;
   systemHealth?(signal?: AbortSignal): Promise<Wire.SystemDiagnosis>;

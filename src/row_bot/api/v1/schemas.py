@@ -5134,6 +5134,8 @@ class PendingApproval(WireModel):
     # A helper's approval: the conversation that started it, which shows it too (B348).
     parent_conversation_id: OpaqueId | None = None
     task_id: OpaqueId | None
+    # It sends a post or an email: Home's Review shows it in full (G3).
+    goes_out: Literal["post", "email"] | None = None
 
 
 class PendingApprovalPage(WireModel):
@@ -5244,7 +5246,7 @@ class VideoEditView(WireModel):
     output_name: str = Field(max_length=120)
     # The saved video, or the contact sheet of the stills, shown with a preview (None until saved).
     media_ref: str | None = Field(max_length=512)
-    mime_type: Literal["video/mp4", "image/jpeg", "image/png"] | None
+    mime_type: Literal["video/mp4", "image/jpeg", "image/png", "image/gif"] | None
     size_bytes: int | None = Field(ge=0)
     frame_count: int = Field(ge=0, le=64)
     stopped_by: Literal["", "you", "agent", "conversation", "quit"]
@@ -5259,6 +5261,180 @@ class VideoEditPage(WireModel):
     """Video edits: those running now first, then finished ones, newest first."""
     items: list[VideoEditView] = Field(max_length=200)
     running: int = Field(ge=0)
+
+
+VideoProjectId = Annotated[str, StringConstraints(pattern=r"^vid-[0-9a-f]{8}$")]
+VideoSceneId = Annotated[str, StringConstraints(pattern=r"^s[0-9a-f]{6}$")]
+
+
+class VideoScene(WireModel):
+    """One scene of a video project (5.3.1 B3): a piece of a video, its speed, zoom, card and line."""
+    scene_id: VideoSceneId
+    # Its video: a recording (rec-…), an edit (edit-…), a file in the chat or a workspace path.
+    source: str = Field(min_length=1, max_length=512)
+    start: float = Field(ge=0)
+    end: float | None = Field(ge=0)
+    speed: float = Field(ge=0.25, le=4)
+    # [x, y, width, height], each 0 to 1: the region the scene punches in on.
+    zoom: list[float] | None = Field(min_length=4, max_length=4)
+    card: str = Field(max_length=120)
+    line: str = Field(max_length=300)
+    # Its voice says the line as it is now (else it's voiced again when the video is made).
+    voiced: bool
+    # Where it starts on this version's video and how long it lasts there (None until it's made).
+    at: float | None = Field(ge=0)
+    length: float | None = Field(ge=0)
+    # What the live preview plays: its video and its voice line, by reference (None when there's none to play).
+    source_ref: str | None = Field(default=None, max_length=512)
+    voice_ref: str | None = Field(default=None, max_length=512)
+
+
+class VideoSceneWrite(WireModel):
+    """A scene as the Video panel writes it (an empty id is a new scene)."""
+    scene_id: str = Field(default="", max_length=16, pattern=r"^(s[0-9a-f]{6})?$")
+    source: str = Field(min_length=1, max_length=512)
+    start: float = Field(default=0, ge=0)
+    end: float | None = Field(default=None, ge=0)
+    speed: float = Field(default=1, ge=0.25, le=4)
+    zoom: list[float] | None = Field(default=None, min_length=4, max_length=4)
+    card: str = Field(default="", max_length=120)
+    line: str = Field(default="", max_length=300)
+
+
+class VideoVersionView(WireModel):
+    number: int = Field(ge=1)
+    at: str = Field(max_length=80)
+    by: Literal["you", "row-bot"]
+    # What changed, in a few words.
+    note: str = Field(max_length=200)
+
+
+class VideoExportView(WireModel):
+    """The same version in another shape, or as a GIF: the edit that makes it."""
+    shape: Literal["16:9", "1:1", "9:16", "gif"]
+    edit: VideoEditView
+
+
+class VideoProjectExport(WireModel):
+    shape: Literal["16:9", "1:1", "9:16", "gif"]
+
+
+class VideoBrand(WireModel):
+    """The brand kit (5.3.1 B3): the look every video project uses unless a version turns it off."""
+    colour: str = Field(pattern=r"^#[0-9a-fA-F]{6}$")
+    captions: Literal["box", "bold", "title"]
+    # A picture from Library › Media, by its reference; "" for none.
+    logo: str = Field(max_length=512)
+    logo_corner: Literal["top-left", "top-right", "bottom-left", "bottom-right"]
+    intro: str = Field(max_length=120)
+    outro: str = Field(max_length=120)
+    music_mood: Literal["calm", "upbeat", "focused", "warm"]
+
+
+class VideoProjectView(WireModel):
+    """A video project at one version (5.3.1 B3), shared by the Video panel and Row-Bot."""
+    project_id: VideoProjectId
+    conversation_id: str = Field(min_length=1, max_length=256)
+    title: str = Field(min_length=1, max_length=80)
+    latest: int = Field(ge=1)
+    # Every kept version, newest first.
+    versions: list[VideoVersionView] = Field(max_length=50)
+    number: int = Field(ge=1)
+    scenes: list[VideoScene] = Field(max_length=60)
+    # The scenes this version added or changed against the one before it.
+    changed: list[VideoSceneId] = Field(max_length=60)
+    music: str = Field(max_length=200)
+    music_volume: float = Field(ge=0, le=1)
+    captions: bool
+    voice_lines: bool
+    # draft (not made yet), voicing, rendering, made, failed or stopped.
+    status: Literal["draft", "voicing", "rendering", "made", "failed", "stopped"]
+    problem: str = Field(max_length=400)
+    # The edit that makes (or made) this version's video.
+    edit: VideoEditView | None
+    # The review card's checks: sound, black and still stretches.
+    checks: list[str] = Field(max_length=12)
+    checks_passed: bool | None
+    # Its shape ("" keeps its first video's), and its exports in other shapes or as a GIF.
+    aspect: Literal["", "16:9", "1:1", "9:16"]
+    exports: list[VideoExportView] = Field(max_length=4)
+    # Made with the brand kit.
+    brand: bool
+
+
+class VideoProjectChange(WireModel):
+    """The person's change in the Video panel, made on version ``base``: a new version, then its video."""
+    base: int = Field(ge=1)
+    scenes: list[VideoSceneWrite] = Field(min_length=1, max_length=60)
+    title: str = Field(default="", max_length=80)
+    music_volume: float | None = Field(default=None, ge=0, le=1)
+    captions: bool | None = None
+    brand: bool | None = None
+    note: str = Field(default="", max_length=200)
+
+
+class VideoProjectRestore(WireModel):
+    """Back to an earlier version, as a new version."""
+    number: int = Field(ge=1)
+
+
+RowBotSandboxId = Annotated[str, StringConstraints(pattern=r"^box-[0-9a-f]{8}$")]
+SandboxPack = Literal["empty", "shop", "charity", "paperwork", "code"]
+
+
+class RowBotSandboxView(WireModel):
+    """A sandbox (5.3.1 B4): a second Row-Bot on its own data folder, port and workspace, on made-up data."""
+    sandbox_id: RowBotSandboxId
+    name: str = Field(min_length=1, max_length=60)
+    pack: SandboxPack
+    pack_name: str = Field(max_length=80)
+    status: Literal["stopped", "starting", "running", "failed"]
+    # Its address while it runs (on this computer only).
+    url: str = Field(max_length=200)
+    problem: str = Field(max_length=300)
+    # No chat model chosen in it yet: the person opens it and signs in to a provider once (decision 4).
+    needs_model: bool = False
+
+
+class SandboxPackView(WireModel):
+    pack: SandboxPack
+    name: str = Field(max_length=80)
+
+
+class RowBotSandboxPage(WireModel):
+    items: list[RowBotSandboxView] = Field(max_length=5)
+    packs: list[SandboxPackView] = Field(max_length=8)
+    # False inside a sandbox: a sandbox starts no sandboxes of its own.
+    available: bool
+
+
+class WaitView(WireModel):
+    """Something a conversation waits for (5.3.1): it carries on there when it happens."""
+
+    wait_id: str = Field(pattern=r"^[0-9a-f]{12}$")
+    conversation_id: OpaqueId
+    conversation_title: str = Field(max_length=160)
+    kind: Literal["process", "check", "time", "conversation"]
+    label: str = Field(min_length=1, max_length=120)
+    # "checks every 5 min", "at 14:00" or "watching".
+    how: str = Field(max_length=40)
+    until: str = Field(max_length=32)
+    status: Literal["waiting", "due"]
+
+
+class WaitPage(WireModel):
+    schema_version: Literal[1] = 1
+    items: list[WaitView] = Field(max_length=500)
+
+
+class RowBotSandboxCreate(WireModel):
+    name: str = Field(default="", max_length=60)
+    pack: SandboxPack = "empty"
+
+
+class RowBotSandboxLink(WireModel):
+    """The sandbox's address with a one-time sign-in, for the person's own window or browser."""
+    url: str = Field(max_length=600)
 
 
 SandboxJobId = Annotated[str, StringConstraints(pattern=r"^prep-[0-9a-f]{8}$")]
@@ -5440,6 +5616,37 @@ class PageView(WireModel):
 class PagePage(WireModel):
     """Library › Pages, or one chat's pages: most recently changed first."""
     items: list[PageView] = Field(max_length=500)
+
+
+MediaTag = Annotated[str, StringConstraints(min_length=1, max_length=40)]
+
+
+class MediaItem(WireModel):
+    """One picture, video or sound in Library › Media (5.3.1 B3), from the chat that keeps it."""
+    ref: str = Field(min_length=3, max_length=300)
+    name: str = Field(min_length=1, max_length=240)
+    kind: Literal["image", "video", "audio"]
+    mime_type: str = Field(max_length=64)
+    size: int = Field(ge=1)
+    added_at: str = Field(max_length=40)
+    conversation_id: str = Field(min_length=1, max_length=256)
+    conversation_title: str = Field(default="", max_length=256)
+    tags: list[MediaTag] = Field(default_factory=list, max_length=12)
+
+
+class MediaPage(WireModel):
+    """Library › Media: newest first."""
+    items: list[MediaItem] = Field(max_length=500)
+
+
+class MediaTagsWrite(WireModel):
+    ref: str = Field(min_length=3, max_length=300)
+    tags: list[MediaTag] = Field(max_length=12)
+
+
+class MediaTags(WireModel):
+    ref: str = Field(min_length=3, max_length=300)
+    tags: list[MediaTag] = Field(max_length=12)
 
 
 class PageTheme(WireModel):
@@ -6038,8 +6245,17 @@ class ApprovalAnswer(WireModel):
     other: str = Field(default="", max_length=500)
 
 
+class XPostEdit(WireModel):
+    """The person's edit of an X post on its card (G2): the new text, and the files kept by their SHA-256 start."""
+
+    text: str = Field(max_length=25000)
+    media: list[Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{12}$")]] = Field(default_factory=list,
+                                                                                       max_length=4)
+
+
 class ApprovalPayload(WireModel):
-    decision: Literal["approve", "reject"]
+    # "edit" changes an X post on its card (G2): never an approval, the post asks again as edited.
+    decision: Literal["approve", "reject", "edit"]
     nonce: Annotated[str, StringConstraints(min_length=32, max_length=256)]
     # "turn" also approves later actions of the same kind until the turn ends (F21), "chat" until the
     # conversation ends ("Allow in this chat", 5.3.1 B2); only kinds the view marks repeatable take them,
@@ -6048,6 +6264,7 @@ class ApprovalPayload(WireModel):
     # A question card (N4): "approve" answers it with these, one per question; "reject" skips it. An answer is the
     # person's input, never an approval of an action.
     answers: list[ApprovalAnswer] | None = Field(default=None, max_length=4)
+    edit: XPostEdit | None = None
 
 
 class DeckSetupPayload(WireModel):
@@ -6074,6 +6291,10 @@ class EmptyWorkspaceSetupPayload(WireModel):
 
 class CloneWorkspaceSetupPayload(WireModel):
     repo_url: str = Field(min_length=1, max_length=2048)
+
+
+class ConversationLinkPayload(WireModel):
+    link_id: str = Field(pattern=r"^[0-9a-f]{32}$")
 
 
 class MediaSavePayload(WireModel):
@@ -6587,6 +6808,8 @@ class TaskSettingsFields(WireModel):
     always_ask: list[Annotated[str, StringConstraints(min_length=1, max_length=512)]] = Field(
         default_factory=list, max_length=16
     )
+    # When its results go to its channels: after every run, only when a run needs the person, or a daily digest.
+    send_results: Literal["every_run", "needs_me", "digest"] = "every_run"
 
 
 class TaskSettingsSnapshot(WireModel):
@@ -7225,6 +7448,8 @@ class Command(WireModel):
         "conversation.queue.edit",
         "conversation.queue.remove",
         "conversation.queue.dispatch",
+        "conversation.link.start",
+        "conversation.link.dismiss",
         "artifact.edit",
         "task.create",
         "task.update",
@@ -7406,6 +7631,8 @@ COMMAND_PAYLOADS = {
     # The conversation's interrupted agent work: Resume runs it, Dismiss stops it.
     "agent.resume": EmptyPayload,
     "agent.dismiss": EmptyPayload,
+    "conversation.link.start": ConversationLinkPayload,
+    "conversation.link.dismiss": ConversationLinkPayload,
     "media.save": MediaSavePayload,
     "conversation.queue.edit": QueueEditPayload,
     "conversation.queue.remove": QueueItemCommand,
@@ -7780,6 +8007,7 @@ class MediaAvailable(WireModel):
     mime_type: Literal[
         "image/png",
         "image/jpeg",
+        "image/gif",
         "video/mp4",
         "audio/mpeg",
         "audio/ogg",
@@ -8004,6 +8232,8 @@ class CommandReceipt(WireModel):
     approval_id: OpaqueId | None = None
     attachment_ref: Reference | None = None
     saved_name: str | None = Field(default=None, max_length=128)
+    # conversation.link.start (5.3.1 C): the conversation the person started from a proposal.
+    linked_conversation_id: OpaqueId | None = None
     binding_id: OpaqueId | None = None
     code: str | None = Field(default=None, max_length=80)
     current_revision: str | None = Field(default=None, min_length=1, max_length=128)
@@ -8027,6 +8257,7 @@ class AttachmentView(WireModel):
     mime_type: Literal[
         "image/png",
         "image/jpeg",
+        "image/gif",
         "video/mp4",
         "audio/mpeg",
         "audio/ogg",
@@ -8057,6 +8288,8 @@ class ConversationView(WireModel):
     incognito: bool = False
     updated_at: str = Field(default="", max_length=80)
     parent_conversation_id: OpaqueId | None = None
+    # A conversation another one started (5.3.1 C): that conversation's id.
+    started_from: OpaqueId | None = None
     activity_state: Literal["active", "attention", "terminal"] | None = None
     activity_phase: str = Field(default="", max_length=64)
     category: Literal["chat", "designer", "code", "workflow"] = "chat"
@@ -8217,6 +8450,10 @@ class TraceSpecialization(WireModel):
         "question_answered", "page",
         # A call the model got wrong and sent again (U11): a quiet line, never its error text.
         "request_corrected",
+        # A conversation this one started or proposed (5.3.1 C), followed live by its link id.
+        "linked_conversation",
+        # A video project a video step made or changed (5.3.1 B3): its card opens the Video panel.
+        "video_project",
     ]
     skill_id: str = Field(default="", max_length=180)
     display_name: str = Field(default="", max_length=180)
@@ -8254,6 +8491,10 @@ class TraceSpecialization(WireModel):
     answers: list[TraceQuestionAnswer] = Field(default_factory=list, max_length=4)
     # page (N5): the page a step made or changed; the card re-reads its title and opens it by id.
     page_id: str = Field(default="", max_length=64, pattern=r"^(page-[0-9a-f]{8})?$")
+    # linked_conversation (5.3.1 C): the card reads the link's state by this id (conversation links).
+    link_id: str = Field(default="", max_length=32, pattern=r"^([0-9a-f]{32})?$")
+    # video_project (5.3.1 B3): the card re-reads the project by this id and opens it in the Video panel.
+    project_id: str = Field(default="", max_length=32, pattern=r"^(vid-[0-9a-f]{8})?$")
 
 
 class TranscriptTraceItem(WireModel):
@@ -8293,6 +8534,28 @@ class TranscriptTraceGroup(WireModel):
     ]
 
 
+class LinkedFrom(WireModel):
+    id: OpaqueId
+    title: str = Field(min_length=1, max_length=160)
+    kind: Literal["message", "reply"] = "message"
+
+
+class ConversationLinkView(WireModel):
+    """A conversation another one started or proposed, as its card shows it (5.3.1 C)."""
+
+    link_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    title: str = Field(min_length=1, max_length=160)
+    conversation_id: OpaqueId | None
+    state: Literal["proposed", "working", "waiting", "done", "dismissed", "expired"]
+    proposed: bool
+    mode: Literal["fresh", "fork"]
+
+
+class ConversationLinkPage(WireModel):
+    schema_version: Literal[1] = 1
+    items: list[ConversationLinkView] = Field(max_length=50)
+
+
 class TranscriptRow(WireModel):
     id: str = Field(min_length=1, max_length=1024)
     message_id: str | None = Field(default=None, max_length=256)
@@ -8311,7 +8574,10 @@ class TranscriptRow(WireModel):
     # messages to it: the row's text is a short public note.
     # Learning (preview): "personal_model_fallback" is the quiet line where the main
     # model finished a turn the personal model got stuck on.
-    note: Literal["continuation", "agent_task", "agent_guidance", "page", "personal_model_fallback"] | None = None
+    note: Literal["continuation", "agent_task", "agent_guidance", "page", "personal_model_fallback",
+                  "linked"] | None = None
+    # A message from another conversation (5.3.1 C, note "linked"): where it came from.
+    linked_from: LinkedFrom | None = None
     # A delegated agent's approval announced in its parent conversation: the
     # row is answered in place with the approval card.
     approval_id: str | None = Field(default=None, max_length=128)
@@ -8597,6 +8863,8 @@ class HandshakeView(Choices):
     server_utc_offset_minutes: int | None = Field(default=None, ge=-1440, le=1440)
     # The computer's IANA zone: a new schedule keeps its times in it unless another is chosen (N9).
     server_timezone: str | None = Field(default=None, max_length=64)
+    # A sandbox (5.3.1 B4): a second Row-Bot on made-up data; the client shows its mark.
+    sandbox: bool = False
     native_adapter: NativeAdapter
     limits: Limits
 
@@ -8624,6 +8892,32 @@ class XPostApproval(WireModel):
     # The text of the post a delete removes, when X said it.
     target_text: str = Field(default="", max_length=25000)
     media: list[XPostMedia] = Field(default_factory=list, max_length=4)
+    # How long a post the account may send (280, or 25,000 with an X subscription); 0 when X didn't say.
+    limit: int = Field(default=0, ge=0, le=25000)
+    # Its time slot (G3), local "YYYY-MM-DDTHH:MM": approving schedules it for then. "" posts at once.
+    post_at: str = Field(default="", max_length=16, pattern=r"^(\d{4}-\d\d-\d\dT\d\d:\d\d)?$")
+
+
+class ScheduledPost(WireModel):
+    """A post approved for a time slot, waiting for it (G3); Cancel stops it."""
+
+    id: str = Field(pattern=r"^xs-[0-9a-f]{12}$")
+    account_id: str = Field(pattern=r"^[0-9]{1,20}$")
+    username: str = Field(default="", pattern=r"^[A-Za-z0-9_]{0,50}$")
+    action: Literal["post", "reply", "quote"]
+    text: str = Field(default="", max_length=25000)
+    target_url: str = Field(default="", max_length=256, pattern=r"^(https://x\.com/[A-Za-z0-9_]+/status/[0-9]+)?$")
+    post_at: str = Field(pattern=r"^\d{4}-\d\d-\d\dT\d\d:\d\d$")
+    media: list[XPostMedia] = Field(default_factory=list, max_length=4)
+
+
+class ScheduledPostPage(WireModel):
+    schema_version: Literal[1]
+    items: list[ScheduledPost] = Field(max_length=200)
+
+
+class ScheduledPostCancelled(WireModel):
+    cancelled: Literal[True]
 
 
 class ApprovalView(WireModel):
@@ -9213,16 +9507,16 @@ class DictationSnapshot(WireModel):
         "capturing", "receiving", "transcribing", "completed", "stopping", "stopped"
     ]
     quiesced: bool
-    expires_in_ms: int = Field(ge=0, le=120000)
-    max_audio_bytes: Literal[8388608] = 8388608
-    max_utterance_ms: Literal[30000] = 30000
+    expires_in_ms: int = Field(ge=0, le=360000)
+    max_audio_bytes: Literal[33554432] = 33554432
+    max_utterance_ms: Literal[300000] = 300000
 
 
 class DictationResult(WireModel):
     snapshot: DictationSnapshot
     utterance_id: UUID
     outcome: Literal["transcribed", "no_speech"]
-    text: str = Field(max_length=4000)
+    text: str = Field(max_length=20000)
 
 
 class TalkStart(WireModel):
@@ -9245,11 +9539,11 @@ class TalkSnapshot(WireModel):
         "stopped",
     ]
     quiesced: bool
-    expires_in_ms: int = Field(ge=0, le=120000)
+    expires_in_ms: int = Field(ge=0, le=360000)
     run_id: OpaqueId | None
     transport: Literal["browser_local"]
-    max_audio_bytes: Literal[8388608]
-    max_utterance_ms: Literal[30000]
+    max_audio_bytes: Literal[33554432]
+    max_utterance_ms: Literal[300000]
 
 
 class TalkResult(WireModel):

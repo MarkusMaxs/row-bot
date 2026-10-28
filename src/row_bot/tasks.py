@@ -63,6 +63,10 @@ _TASK_CONFIG_PATH = str(_DATA_DIR / "task_config.json")
 _SCHEMA_VERSION = 1
 DEFAULT_WORKFLOW_AGENT_PROFILE_ID = "builtin:row_bot_default"
 MISSED_RUN_RULES = ("skip", "run_once")
+# When a workflow's results go to its channels (G8): after every run, only when a run needs the person
+# (it didn't finish, or isn't sure something went through), or once a day in a digest.
+SEND_RESULTS = ("every_run", "needs_me", "digest")
+DIGEST_HOUR = 18  # A daily digest goes from 6 PM, the computer's time.
 _SCHEMA_LOCK = threading.RLock()
 _APPROVAL_CHANNEL_PUSH_LOCK = threading.RLock()
 _SCHEMA_READY_PATH: str | None = None
@@ -108,7 +112,8 @@ _CREATE_TABLE_SQL = {
             workspace_name      TEXT DEFAULT '',
             timezone            TEXT DEFAULT '',
             missed_runs         TEXT DEFAULT 'skip',
-            always_ask          TEXT DEFAULT '[]'
+            always_ask          TEXT DEFAULT '[]',
+            send_results        TEXT DEFAULT 'every_run'
         )
     """,
     "task_runs": """
@@ -209,6 +214,14 @@ _CREATE_TABLE_SQL = {
             value TEXT NOT NULL
         )
     """,
+    # What a workflow keeps for its next run (G4), read when a run starts.
+    "workflow_notes": """
+        CREATE TABLE IF NOT EXISTS workflow_notes (
+            task_id    TEXT PRIMARY KEY,
+            text       TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """,
 }
 
 _COLUMN_MIGRATIONS = {
@@ -252,6 +265,8 @@ _COLUMN_MIGRATIONS = {
         ("missed_runs", "TEXT DEFAULT 'skip'"),
         # Apps and tools whose actions always wait for the person ("Always ask me").
         ("always_ask", "TEXT DEFAULT '[]'"),
+        # When its results go to its channels: after every run, only when it needs the person, or a daily digest.
+        ("send_results", "TEXT DEFAULT 'every_run'"),
     ],
     "task_runs": [
         ("finished_at", "TEXT"),
@@ -301,7 +316,7 @@ _REQUIRED_COLUMNS = {
         "concurrency_group", "trigger", "tools_override", "channels",
         "advanced_mode", "agent_profile_id", "profile_migration_status",
         "profile_migration_note", "profile_migration_snapshot_json",
-        "workspace_id", "workspace_name", "timezone", "missed_runs", "always_ask",
+        "workspace_id", "workspace_name", "timezone", "missed_runs", "always_ask", "send_results",
     },
     "task_runs": {
         "id", "task_id", "thread_id", "started_at", "finished_at", "status",
@@ -325,6 +340,7 @@ _REQUIRED_COLUMNS = {
     },
     "channel_conversations": {"channel", "conversation_key", "thread_id", "updated_at"},
     "scheduler_state": {"key", "value"},
+    "workflow_notes": {"task_id", "text", "updated_at"},
 }
 
 
@@ -1490,7 +1506,7 @@ def update_task_settings(
 ) -> None:
     """Publish reviewed settings in their existing task row; never execute."""
     allowed = {"trigger", "model_override", "agent_profile_id", "safety_mode", "workspace_id",
-               "workspace_name", "missed_runs", "always_ask"}
+               "workspace_name", "missed_runs", "always_ask", "send_results"}
     if set(values) - allowed:
         raise TaskMutationError("invalid_task_settings", task_id)
     conn = _get_conn()
@@ -1581,7 +1597,7 @@ def update_task(
         "tools_override", "channels", "advanced_mode", "agent_profile_id",
         "profile_migration_status", "profile_migration_note",
         "profile_migration_snapshot_json",
-        "timezone", "workspace_id", "workspace_name", "missed_runs", "always_ask",
+        "timezone", "workspace_id", "workspace_name", "missed_runs", "always_ask", "send_results",
     }
     if expected_revision is not None and set(kwargs) - {
         "name", "description", "icon", "prompts", "schedule", "at", "enabled",
@@ -1635,6 +1651,8 @@ def update_task(
                     raise TaskMutationError("invalid_task_schedule", task_id)
                 value = value or ""
             if key == "missed_runs" and value not in MISSED_RUN_RULES:
+                raise TaskMutationError("invalid_task_settings", task_id)
+            if key == "send_results" and value not in SEND_RESULTS:
                 raise TaskMutationError("invalid_task_settings", task_id)
             if key == "always_ask":
                 value = list(value or [])
@@ -1861,6 +1879,7 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
     d["workspace_name"] = str(d.get("workspace_name") or "")
     d["timezone"] = str(d.get("timezone") or "")
     d["missed_runs"] = d.get("missed_runs") if d.get("missed_runs") in MISSED_RUN_RULES else "skip"
+    d["send_results"] = d.get("send_results") if d.get("send_results") in SEND_RESULTS else "every_run"
     try:
         raw_ask = json.loads(d.get("always_ask") or "[]")
     except (TypeError, ValueError):
@@ -3959,6 +3978,71 @@ def note_scheduler_alive(now: datetime | None = None) -> None:
         conn.close()
 
 
+def _digest_since(task_id: str) -> datetime | None:
+    conn = _get_conn()
+    try:
+        row = conn.execute("SELECT value FROM scheduler_state WHERE key = ?", (f"digest:{task_id}",)).fetchone()
+    finally:
+        conn.close()
+    return _saved_instant(row["value"]) if row else None
+
+
+@_schema_retry
+def send_due_digests(now: datetime | None = None) -> int:
+    """Send each "daily digest" workflow its runs since its last digest, once a day from DIGEST_HOUR (G8).
+
+    Nothing goes on a day with no finished runs; a workflow's first digest covers the day before it.
+    Returns how many digests went out.
+    """
+    from row_bot import workflow_turns
+
+    moment = (now or datetime.now()).astimezone()
+    if moment.hour < DIGEST_HOUR:
+        return 0
+    sent = 0
+    for task in list_tasks():
+        if task.get("send_results") != "digest":
+            continue
+        since = _digest_since(task["id"])
+        if since is not None and since.astimezone().date() == moment.date():
+            continue
+        start = since or moment - timedelta(days=1)
+        conn = _get_conn()
+        try:
+            rows = conn.execute(
+                "SELECT finished_at, status, notice, actions_json FROM task_runs WHERE task_id = ? "
+                "AND finished_at IS NOT NULL AND status NOT IN ('running', 'waiting', 'stopped') "
+                "ORDER BY finished_at", (task["id"],)).fetchall()
+            conn.execute("INSERT INTO scheduler_state (key, value) VALUES (?, ?) "
+                         "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                         (f"digest:{task['id']}", moment.isoformat(timespec="seconds")))
+            conn.commit()
+        finally:
+            conn.close()
+        lines = []
+        for row in rows:
+            finished = _saved_instant(row["finished_at"])
+            if finished is None or not start < finished <= moment:
+                continue
+            try:
+                done = json.loads(row["actions_json"] or "[]")
+            except ValueError:
+                done = []
+            when = finished.astimezone()
+            stamp = f"{when:%H:%M}" if when.date() == moment.date() else f"{when:%a %H:%M}"
+            lines.append(f"{stamp} · " + workflow_turns.outcome(str(row["status"]), str(row["notice"] or ""),
+                                                                 done if isinstance(done, list) else []))
+        if not lines:
+            continue
+        runs = "1 run" if len(lines) == 1 else f"{len(lines)} runs"
+        try:
+            _deliver_to_channels(task, f"Daily digest · {runs}\n" + "\n".join(lines))
+            sent += 1
+        except Exception:
+            logger.warning("The daily digest of %s could not be delivered", task["name"], exc_info=True)
+    return sent
+
+
 def missed_run_time(task: Mapping[str, Any], since: datetime, now: datetime) -> datetime | None:
     """The latest time *task*'s repeating schedule had in (since, now] that it hasn't run for."""
     sched = _parse_schedule(task.get("schedule"))
@@ -4715,6 +4799,15 @@ def start_approval_monitor() -> None:
                 note_scheduler_alive()  # So a later start can tell which runs fell while closed (N9).
             except Exception:
                 logger.debug("Could not note the scheduler running", exc_info=True)
+            try:
+                send_due_digests()
+            except Exception:
+                logger.warning("Could not send the workflows' daily digests", exc_info=True)
+            try:
+                from row_bot.tools import x_posting
+                x_posting.send_due()  # Posts approved for a time slot (G3).
+            except Exception:
+                logger.warning("Could not send the scheduled X posts", exc_info=True)
             time.sleep(60)  # check every 60 seconds
 
     t = threading.Thread(target=_monitor, daemon=True, name="approval-monitor")

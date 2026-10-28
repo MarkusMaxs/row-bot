@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from row_bot.brand import DEFAULT_WORKSPACE_DIR_NAME
 from row_bot.data_paths import is_private_data_path
 from row_bot.tools.base import BaseTool
 from row_bot.tools import registry
@@ -72,10 +71,11 @@ class FileSystemTool(BaseTool):
     # ── Build the toolkit tools ──────────────────────────────────────────────
     def _get_workspace_root(self) -> str:
         import os
-        import pathlib
         root = self.get_config("workspace_root", "")
         if not root:
-            root = str(pathlib.Path.home() / "Documents" / DEFAULT_WORKSPACE_DIR_NAME)
+            from row_bot.data_paths import default_workspace_root
+
+            root = str(default_workspace_root())
             self.set_config("workspace_root", root)
         os.makedirs(root, exist_ok=True)
         return root
@@ -88,7 +88,6 @@ class FileSystemTool(BaseTool):
         """Return the selected FileManagementToolkit tools, sandboxed to
         the configured workspace root.  The default ``read_file`` tool is
         replaced with a custom version that can also read PDF files."""
-        import os
         from langchain_community.agent_toolkits import FileManagementToolkit
 
         root = self._get_workspace_root()
