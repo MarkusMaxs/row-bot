@@ -688,3 +688,22 @@ def test_a_delete_has_no_time_slot(x, person):
     x_accounts.add(fake.sign_in(*ROWBOT))
     refused = tool._x_post("delete", tweet_id="123", account="@rowbot_ai", post_at="13:00")
     assert refused == "A delete happens at once; leave post_at out." and asked == []
+
+
+# ── Numbers (5.3.1 G7) ───────────────────────────────────────────────────────
+
+
+def test_an_accounts_recent_posts_come_with_their_numbers_and_totals(x):
+    fake, tool = x
+    x_accounts.add(fake.sign_in(*ROWBOT))
+    for text, views, likes in (("Pages are out", 1200, 30), ("Workflows run as chats", 340, 1)):
+        fake.post("111", text)["public_metrics"] = {"impression_count": views, "like_count": likes,
+                                                    "retweet_count": 2, "reply_count": 1, "quote_count": 0,
+                                                    "bookmark_count": 5}
+
+    read = tool._x_read("timeline", account="@rowbot_ai")
+
+    assert ("Together, these 2 posts: 1,540 views · 31 likes · 4 reposts · 2 replies · 0 quotes · 10 bookmarks. "
+            "Most viewed: ") in read
+    assert "1,200 views · 30 likes · 2 reposts · 1 reply · 0 quotes · 5 bookmarks" in read
+    assert "340 views · 1 like · 2 reposts · 1 reply" in read

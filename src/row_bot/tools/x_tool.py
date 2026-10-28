@@ -399,13 +399,37 @@ def _format_tweet(tweet: dict, includes: dict | None = None) -> str:
         parts.append(f"Posted: {created}")
     parts.append(f"\n{text}")
     if metrics:
-        parts.append(
-            f"\n❤️ {metrics.get('like_count', 0)}  "
-            f"🔁 {metrics.get('retweet_count', 0)}  "
-            f"💬 {metrics.get('reply_count', 0)}  "
-            f"👁️ {metrics.get('impression_count', 0)}"
-        )
+        parts.append("\n" + _numbers(metrics))
     return "\n".join(parts)
+
+
+_METRICS = (("impression_count", "view", "views"), ("like_count", "like", "likes"),
+            ("retweet_count", "repost", "reposts"), ("reply_count", "reply", "replies"),
+            ("quote_count", "quote", "quotes"), ("bookmark_count", "bookmark", "bookmarks"))
+
+
+def _numbers(metrics: dict) -> str:
+    """"1,204 views · 31 likes · 4 reposts · 2 replies · 1 quote · 6 bookmarks", what X said (G7)."""
+    shown = []
+    for key, one, many in _METRICS:
+        if key in metrics:
+            count = int(metrics.get(key) or 0)
+            shown.append(f"{count:,} {one if count == 1 else many}")
+    return " · ".join(shown)
+
+
+def _totals(tweets: list[dict]) -> str:
+    """An account's recent posts in one line: each number added up, and the most viewed post (G7)."""
+    totals: dict[str, int] = {}
+    for tweet in tweets:
+        for key, *_ in _METRICS:
+            if key in (tweet.get("public_metrics") or {}):
+                totals[key] = totals.get(key, 0) + int(tweet["public_metrics"].get(key) or 0)
+    if not totals:
+        return ""
+    best = max(tweets, key=lambda tweet: int((tweet.get("public_metrics") or {}).get("impression_count") or 0))
+    return (f"Together, these {len(tweets)} posts: {_numbers(totals)}. Most viewed: {best.get('id')} "
+            f"({int((best.get('public_metrics') or {}).get('impression_count') or 0):,} views).\n\n")
 
 
 def _format_user(user: dict) -> str:
@@ -890,7 +914,8 @@ class XTool(BaseTool):
                     return f"No tweets found in {who}'s timeline."
                 includes = data.get("includes", {})
                 results = [_format_tweet(t, includes) for t in tweets]
-                return f"{who}'s recent tweets ({len(tweets)}):\n\n" + "\n\n---\n\n".join(results)
+                return (f"{who}'s recent tweets ({len(tweets)}):\n\n" + _totals(tweets)
+                        + "\n\n---\n\n".join(results))
             except RuntimeError as e:
                 return str(e)
 
