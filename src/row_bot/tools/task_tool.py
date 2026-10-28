@@ -92,19 +92,12 @@ class _TaskCreateInput(BaseModel):
             "otherwise it asks the person)."
         ),
     )
-    timezone: str | None = Field(
-        default=None,
-        description="The time zone its schedule keeps, an IANA name like 'Europe/London' (default: this computer's).",
-    )
+    timezone: str | None = Field(default=None, description="IANA zone, e.g. 'Europe/London' (default: local).")
 
 
 class _TaskListInput(BaseModel):
     include_history: bool = Field(default=False, description="Also show each task's recent runs.")
-    task_id: str | None = Field(
-        default=None,
-        description=("One workflow in full: its messages, notes, schedule and time zone, approval level, delivery "
-                     "and conversation."),
-    )
+    task_id: str | None = Field(default=None, description="One task in full: messages, notes, conversation.")
 
 
 class _TaskRunNowInput(BaseModel):
@@ -138,10 +131,7 @@ class _TaskUpdateInput(BaseModel):
         default=None,
         description="A workflow's notes for its next run, replacing the old ones; '' clears them.",
     )
-    timezone: str | None = Field(
-        default=None,
-        description="The time zone its schedule keeps, an IANA name like 'Europe/London' (default: this computer's).",
-    )
+    timezone: str | None = Field(default=None, description="IANA zone, e.g. 'Europe/London' (default: local).")
 
 
 # ── Tool functions ───────────────────────────────────────────────────────────
@@ -515,8 +505,7 @@ class TaskTool(BaseTool):
             StructuredTool.from_function(
                 func=_task_list,
                 name="task_list",
-                description=("List tasks with their ids, schedules, time zones and last runs; with task_id, one "
-                             "workflow in full (its messages, notes and conversation)."),
+                description="List tasks with their ids, schedules and last runs, or one in full.",
                 args_schema=_TaskListInput,
             ),
             StructuredTool.from_function(
