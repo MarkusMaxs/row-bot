@@ -421,6 +421,12 @@ export class HttpTransport implements ClientTransport {
   attention(signal?: AbortSignal) {
     return wire.getAttention(this.base, this.session(), signal);
   }
+  media(filter: { query?: string; kind?: string }, signal?: AbortSignal) {
+    return wire.getMedia(this.base, this.session(), filter, signal);
+  }
+  setMediaTags(ref: string, tags: string[]) {
+    return wire.setMediaTags(this.base, this.session(), { ref, tags });
+  }
   pendingApprovals(signal?: AbortSignal) {
     return wire.getPendingApprovals(this.base, this.session(), signal);
   }

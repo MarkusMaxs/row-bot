@@ -75,7 +75,7 @@ MODELS = {name: getattr(schemas, name) for name in (
     "InsightsSnapshot", "InsightCommand", "InsightReceipt",
     "LearningSnapshot", "LearningTraining", "LearningDownload", "LearningHardware", "LearningConversation", "LearningLessonPage", "LearningCommand", "LearningReceipt", "LearningVersionDetails",
     "KnowledgeEditorState", "KnowledgeReviewRequest", "KnowledgeReview", "KnowledgeReceipt",
-    "KnowledgeGraphSnapshot", "BackgroundProcessView", "BackgroundProcessPage", "BackgroundProcessOutput", "RecordingView", "RecordingPage", "VideoEditView", "VideoEditPage", "DeliveryView", "DeliveryPage", "PageDecisionView", "PageView", "PagePage", "PageTheme", "PageFrameRequest", "PageFrame", "PageStateWrite", "PageDecisionWrite", "PageDownload", "WorkspaceFolderPage", "SandboxJobView", "SandboxJobPage", "SandboxStatusView", "SandboxStartPayload", "LocalAddressGrantView", "LocalAddressPage", "MonitorSnapshot", "MonitorLogs", "SystemDiagnosis", "SystemDiagnosisSettings", "InstallCountSnapshot", "InstallCountChoice", "InstallCountDeletion", "UpdateRelease", "UpdateEngineView", "UpdateHostRequest", "UpdateHostView", "UpdateHeldBack", "UpdateSnapshot", "UpdateCommand", "UpdateReceipt", "MigrationScanRequest", "MigrationSource", "MigrationSources", "MigrationPreviewSummary", "MigrationPreviewItem", "MigrationPreview", "MigrationApplyReviewRequest", "MigrationApplyReview", "MigrationApplyCommand", "MigrationFailedItem", "MigrationApplyReceipt", "OnboardingSnapshot", "OnboardingCommand", "OnboardingReceipt", "LocalRuntimeSnapshot", "ModelTestResult", "ProviderKeyCheckRequest", "ProviderKeyCheck", "DreamRunRequest", "DreamRunReview", "DreamRunCommand", "DreamRunReceipt",
+    "KnowledgeGraphSnapshot", "BackgroundProcessView", "BackgroundProcessPage", "BackgroundProcessOutput", "RecordingView", "RecordingPage", "VideoEditView", "VideoEditPage", "DeliveryView", "DeliveryPage", "PageDecisionView", "PageView", "PagePage", "MediaItem", "MediaPage", "MediaTagsWrite", "MediaTags", "PageTheme", "PageFrameRequest", "PageFrame", "PageStateWrite", "PageDecisionWrite", "PageDownload", "WorkspaceFolderPage", "SandboxJobView", "SandboxJobPage", "SandboxStatusView", "SandboxStartPayload", "LocalAddressGrantView", "LocalAddressPage", "MonitorSnapshot", "MonitorLogs", "SystemDiagnosis", "SystemDiagnosisSettings", "InstallCountSnapshot", "InstallCountChoice", "InstallCountDeletion", "UpdateRelease", "UpdateEngineView", "UpdateHostRequest", "UpdateHostView", "UpdateHeldBack", "UpdateSnapshot", "UpdateCommand", "UpdateReceipt", "MigrationScanRequest", "MigrationSource", "MigrationSources", "MigrationPreviewSummary", "MigrationPreviewItem", "MigrationPreview", "MigrationApplyReviewRequest", "MigrationApplyReview", "MigrationApplyCommand", "MigrationFailedItem", "MigrationApplyReceipt", "OnboardingSnapshot", "OnboardingCommand", "OnboardingReceipt", "LocalRuntimeSnapshot", "ModelTestResult", "ProviderKeyCheckRequest", "ProviderKeyCheck", "DreamRunRequest", "DreamRunReview", "DreamRunCommand", "DreamRunReceipt",
     "KnowledgeMaintenanceRequest", "KnowledgeMaintenanceReview", "KnowledgeMaintenanceCommand", "KnowledgeMaintenanceReceipt",
     "KnowledgeRelationPage", "KnowledgeRelationReviewRequest", "KnowledgeRelationReview", "KnowledgeRelationReceipt",
     "SubscriptionAccountsSnapshot", "SubscriptionFlowSnapshot", "SubscriptionActionReview",
@@ -227,6 +227,8 @@ OPERATIONS = (
     ("post", "/deliveries/{delivery_id}/files/{index}/save", None, "ExportSaved"),
     ("post", "/deliveries/{delivery_id}/to-devices", None, "DeliveryView"),
     ("get", "/pages", None, "PagePage"),
+    ("get", "/media", None, "MediaPage"),
+    ("put", "/media/tags", "MediaTagsWrite", "MediaTags"),
     ("get", "/pages/{page_id}", None, "PageView"),
     ("post", "/pages/{page_id}/frame", "PageFrameRequest", "PageFrame"),
     ("put", "/pages/{page_id}/state", "PageStateWrite", "PageView"),
@@ -817,6 +819,11 @@ export const saveDeliveryFile = (base: string, proof: SessionProof, delivery: st
 /** The person's "Send to your devices instead" for files that didn't go to a chat app. No approval. */
 export const sendDeliveryToDevices = (base: string, proof: SessionProof, delivery: string, signal?: AbortSignal): Promise<DeliveryView> =>
   jsonRequest(base, `/deliveries/${id(delivery)}/to-devices`, 'DeliveryView', proof, 'POST', {}, undefined, signal);
+/** Library › Media (5.3.1 B3): every picture, video and sound in the chats, newest first. */
+export const getMedia = (base: string, proof: SessionProof, filter: {query?: string; kind?: string} = {}, signal?: AbortSignal): Promise<MediaPage> =>
+  jsonRequest(base, '/media' + query(filter), 'MediaPage', proof, 'GET', undefined, undefined, signal);
+export const setMediaTags = (base: string, proof: SessionProof, body: MediaTagsWrite, signal?: AbortSignal): Promise<MediaTags> =>
+  jsonRequest(base, '/media/tags', 'MediaTags', proof, 'PUT', validateWire('MediaTagsWrite', body), undefined, signal);
 /** Pages the agent made (N5), or one conversation's: most recently changed first. */
 export const getPages = (base: string, proof: SessionProof, conversation_id?: string, signal?: AbortSignal): Promise<PagePage> =>
   jsonRequest(base, '/pages' + query({conversation_id}), 'PagePage', proof, 'GET', undefined, undefined, signal);

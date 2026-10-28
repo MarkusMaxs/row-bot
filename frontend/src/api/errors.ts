@@ -639,6 +639,7 @@ const CATALOG: Record<string, Entry> = {
     'This approval expired. Close this and answer the current approval.',
     'review',
   ],
+  media_unavailable: ["That item isn't in the media library any more.", 'none'],
   scheduled_post_unavailable: [
     'That post already went out or was cancelled.',
     'none',

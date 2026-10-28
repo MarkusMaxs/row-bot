@@ -395,6 +395,7 @@
     "media_destination_unavailable": 409,
     "media_scope_conflict": 403,
     "media_type_conflict": 422,
+    "media_unavailable": 404,
     "migration_apply_busy": 429,
     "migration_changed": 409,
     "migration_command_conflict": 409,
