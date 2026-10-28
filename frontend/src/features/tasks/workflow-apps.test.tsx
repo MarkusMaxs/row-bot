@@ -5,7 +5,6 @@ import type { ClientController } from '../../api/controller';
 import type { ClientPlatform } from '../../platform';
 import { RuntimeContext } from '../../runtime';
 import AppTemplates from './AppTemplates';
-import StepApps from './StepApps';
 
 function show(ui: React.ReactNode, controller: Record<string, unknown>) {
   const fake = {
@@ -102,25 +101,6 @@ it('starts a template whose app is connected, and offers Connect for one whose a
     'github_pr_digest',
   );
   expect(screen.getByRole('status')).toHaveTextContent('switched off');
-});
-
-it('limits a step to the apps chosen, and to none means every app', async () => {
-  const onChange = vi.fn();
-  const load = vi.fn(async () => [
-    { id: 'mcp:github', name: 'GitHub', icon: 'letter:G' },
-    { id: 'mcp:notion', name: 'Notion', icon: 'letter:N' },
-  ]);
-  show(<StepApps load={load} value={['mcp:github']} onChange={onChange} />, {});
-  const github = await screen.findByRole('switch', {
-    name: 'Use GitHub in this step',
-  });
-  expect(github).toBeChecked();
-  fireEvent.click(
-    screen.getByRole('switch', { name: 'Use Notion in this step' }),
-  );
-  expect(onChange).toHaveBeenLastCalledWith(['mcp:github', 'mcp:notion']);
-  fireEvent.click(github);
-  expect(onChange).toHaveBeenLastCalledWith(null); // None chosen: every app the workflow may use.
 });
 
 it('offers a template without apps as ready to use, with nothing to connect', async () => {

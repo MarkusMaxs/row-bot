@@ -4,9 +4,7 @@ import type {
   Command,
   CommandReceipt,
   TaskRunReview,
-  TaskApprovalReview,
   TaskRunResult,
-  TaskApprovalResult,
   TaskStopResult,
 } from '../../api/types';
 
@@ -19,7 +17,7 @@ export function taskRuns(controller: ClientController) {
   };
   const attempts = new Map<string, Attempt>();
   const execute = async (
-    type: 'task.run' | 'task.stop' | 'task.approval',
+    type: 'task.run' | 'task.stop',
     payload: Record<string, unknown>,
   ) => {
     const state = controller.getSnapshot();
@@ -73,9 +71,6 @@ export function taskRuns(controller: ClientController) {
           [
             'task_revision_conflict',
             'task_policy_revision_conflict',
-            'task_approval_revision_conflict',
-            'task_approval_expired',
-            'approval_expired',
             'action_denied',
             'task_not_found',
             'task_run_not_found',
@@ -118,32 +113,5 @@ export function taskRuns(controller: ClientController) {
       quiesced: receipt.task_run_quiesced ?? false,
     };
   };
-  const respondApproval = async (
-    approval: TaskApprovalReview,
-    approved: boolean,
-  ): Promise<TaskApprovalResult> => {
-    if (!approval.response_available || !approval.nonce)
-      throw clientError({ code: 'approval_expired' });
-    const receipt = await execute('task.approval', {
-      task_id: approval.task_id,
-      run_id: approval.run_id,
-      approval_id: approval.id,
-      approval_revision: approval.revision,
-      approved,
-      nonce: approval.nonce,
-    });
-    if (
-      !receipt.task_approval_recorded ||
-      receipt.task_approval_decision !== (approved ? 'approved' : 'denied')
-    )
-      throw clientError({ code: 'operation_uncertain' });
-    const saved = await controller.taskRun(approval.task_id, approval.run_id);
-    attempts.delete('task.approval');
-    return {
-      approval_id: approval.id,
-      decision: receipt.task_approval_decision,
-      run: saved,
-    };
-  };
-  return { run, stop, respondApproval };
+  return { run, stop };
 }

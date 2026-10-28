@@ -1,4 +1,5 @@
-"""Building ffmpeg commands for video edits (F3): trim, join, speed, text, zoom, crop, captions, frames.
+"""Building ffmpeg commands for video edits (F3): trim, join, speed, text, zoom, crop, captions, frames;
+voice and music laid on the finished timeline, and the checks a video passes before it's done (5.3.1 B).
 
 Everything here is pure: it reads what ffmpeg says about a video (``probe``) and turns the
 agent's steps into one ffmpeg command and one filter graph, so a whole edit is one encode to
@@ -21,8 +22,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Literal
 
-Op = Literal["trim", "speed", "text", "zoom", "crop", "captions"]
-OPS: tuple[str, ...] = ("trim", "speed", "text", "zoom", "crop", "captions")
+Op = Literal["trim", "speed", "text", "zoom", "crop", "captions", "sound"]
+OPS: tuple[str, ...] = ("trim", "speed", "text", "zoom", "crop", "captions", "sound")
+# sound: a voice line or music laid on the finished video, or the video's own sound turned up or down.
+ROLES = ("voice", "music", "original")
+MAX_SOUNDS = 40
+MAX_VOLUME = 4.0
+# Loudness the finished mix is brought to: speech-forward, as video platforms play it.
+LOUDNESS = "loudnorm=I=-16:TP=-1.5:LRA=11"
 POSITIONS = ("top-left", "top", "top-right", "center", "bottom-left", "bottom", "bottom-right")
 STYLES = ("badge", "title", "caption")
 VIDEO_SUFFIXES = frozenset({".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi", ".gif"})
@@ -36,6 +43,8 @@ MIN_SPEED, MAX_SPEED = 0.25, 16.0
 MAX_FRAMES = 48
 # Containers a person's video may be read as: never playlists or other demuxers that open more files.
 INPUT_FORMATS = "mov,mp4,m4a,3gp,3g2,mj2,matroska,webm,avi,mpegts,flv,gif,ogg,asf"
+# A voice line or music: the same, plus plain audio files.
+SOUND_FORMATS = INPUT_FORMATS + ",wav,mp3,flac,aac"
 
 
 class EditError(ValueError):
@@ -97,6 +106,11 @@ def input_arguments(path: Path | str) -> list[str]:
     return ["-protocol_whitelist", "file", "-format_whitelist", INPUT_FORMATS, "-i", file_argument(path)]
 
 
+def sound_input_arguments(path: Path | str) -> list[str]:
+    """Open a voice line or music file: local files only, as an audio or video container."""
+    return ["-protocol_whitelist", "file", "-format_whitelist", SOUND_FORMATS, "-i", file_argument(path)]
+
+
 def probe_command(path: Path | str) -> list[str]:
     return ["-hide_banner", "-nostdin", *input_arguments(path)]
 
@@ -118,6 +132,11 @@ class Step:
     y: float | None = None
     width: float | None = None
     height: float | None = None
+    # sound: the file (as the agent named it), its role, its loudness and whether music ducks under voices.
+    source: str = ""
+    role: str = ""
+    volume: float | None = None
+    duck: bool = True
 
 
 def _number(value: Any, name: str) -> float | None:
@@ -189,11 +208,32 @@ def parse_steps(raw: Iterable[Any] | None) -> list[Step]:
             if op == "crop" and (start is not None or end is not None):
                 raise EditError(f"Step {index}: crop applies to the whole video; use zoom for part of it.")
         label = item.get("label")
+        sound: dict[str, Any] = {}
+        if op == "sound":
+            role = str(item.get("role") or "voice").strip().casefold()
+            if role not in ROLES:
+                raise EditError(f"Step {index}: a sound's role is voice, music or original (the video's own sound).")
+            source = _clean_text(item.get("source"), 300)
+            if role != "original" and not source:
+                raise EditError(f"Step {index}: sound needs its source: a voice or music file by name.")
+            volume = _number(item.get("volume"), f"Step {index}'s volume")
+            if volume is not None and not 0 <= volume <= MAX_VOLUME:
+                raise EditError(f"Step {index}: volume is from 0 (silent) to {MAX_VOLUME:g} (1 keeps it as it is).")
+            duck = item.get("duck")
+            sound = {"source": source if role != "original" else "", "role": role, "volume": volume,
+                     "duck": True if duck is None else bool(duck)}
         steps.append(Step(op=op, start=start, end=end, factor=factor, label=True if label is None else bool(label),
-                          text=text, position=position, style=style, **region))
-    if len(steps) > MAX_STEPS:
+                          text=text, position=position, style=style, **region, **sound))
+    if len([step for step in steps if step.op != "sound"]) > MAX_STEPS:
         raise EditError(f"At most {MAX_STEPS} steps fit in one edit.")
+    if len([step for step in steps if step.op == "sound"]) > MAX_SOUNDS:
+        raise EditError(f"At most {MAX_SOUNDS} sounds fit in one edit: join voice lines into fewer files.")
     return steps
+
+
+def sound_sources(steps: list[Step]) -> list[str]:
+    """The sound files an edit lays, each once, in the order the steps name them."""
+    return list(dict.fromkeys(step.source for step in steps if step.op == "sound" and step.source))
 
 
 def speed_words(factor: float) -> str:
@@ -216,6 +256,7 @@ def describe(steps: list[Step], inputs: int = 1) -> str:
             "zoom": "zoomed in",
             "crop": "cropped",
             "captions": "captioned",
+            "sound": {"voice": "added a voice", "music": "added music"}.get(step.role, "set the sound level"),
         }[step.op]
         if word not in words:
             words.append(word)
@@ -647,6 +688,67 @@ class _Builder:
         self.video = out
         self.width, self.height = cw, ch
 
+    def sound(self, step: Step) -> None:
+        """Laid on the finished timeline once every picture step is done (``mix``)."""
+
+    def _amix(self, labels: list[str]) -> str:
+        if len(labels) == 1:
+            return labels[0]
+        out = self.label("a")
+        self.add(f"{''.join(labels)}amix=inputs={len(labels)}:duration=longest:normalize=0{out}")
+        return out
+
+    def mix(self, steps: list[Step], first_input: int, sources: list[str]) -> None:
+        """Voice lines at their times, music under them (ducked while a voice speaks) and the video's own sound,
+        mixed and brought to one loudness: the narrated video's sound in one pass."""
+        sounds = [step for step in steps if step.op == "sound"]
+        if not sounds:
+            return
+        total = _seconds_text(self.duration)
+        voices: list[str] = []
+        music: list[str] = []
+        ducked = False
+        original = 1.0
+        for step in sounds:
+            if step.role == "original":
+                original = 1.0 if step.volume is None else step.volume
+                continue
+            start = step.start or 0.0
+            if start >= self.duration:
+                raise EditError(f"A sound starts at {_seconds_text(start)} s, after the video ends ({total} s).")
+            index = first_input + sources.index(step.source)
+            volume = step.volume if step.volume is not None else (1.0 if step.role == "voice" else 0.3)
+            delay = int(round(start * 1000))
+            chain = f"[{index}:a]aformat=sample_rates=48000:channel_layouts=stereo,volume={volume:.3f}"
+            if step.role == "music":
+                length = self.duration - start
+                fade = max(0.0, length - 2.0)
+                chain += f",atrim=0:{_seconds_text(length)},afade=t=out:st={_seconds_text(fade)}:d=2"
+                ducked = ducked or step.duck
+            label = self.label("a")
+            self.add(f"{chain},adelay={delay}|{delay}{label}")
+            (voices if step.role == "voice" else music).append(label)
+        parts: list[str] = []
+        if self.audio and original > 0:
+            own = self.label("a")
+            self.add(f"{self.audio}volume={original:.3f}{own}")
+            parts.append(own)
+        voice = self._amix(voices) if voices else ""
+        bed = self._amix(music) if music else ""
+        if voice and bed and ducked:
+            # The music dips while a voice speaks, and comes back between lines.
+            speaking, key = self.label("a"), self.label("a")
+            self.add(f"{voice}asplit=2{speaking}{key}")
+            under = self.label("a")
+            self.add(f"{bed}{key}sidechaincompress=threshold=0.02:ratio=8:attack=20:release=450{under}")
+            voice, bed = speaking, under
+        parts += [label for label in (voice, bed) if label]
+        mixed = self._amix(parts)
+        out = self.label("a")
+        self.add(f"{mixed}apad,atrim=0:{total},{LOUDNESS},aformat=sample_rates=48000:channel_layouts=stereo{out}")
+        self.audio = out
+        self.has_audio = True
+
 
 def encoder_arguments(encoder: str) -> list[str]:
     if encoder == "libx264":
@@ -662,6 +764,7 @@ def build_plan(
     graph_file: str = "graph.txt",
     graph_option: str = "-/filter_complex",
     encoder: str = "libx264",
+    sounds: dict[str, str] | None = None,
 ) -> Plan:
     """One ffmpeg run that makes the whole edit: arguments, filter graph and overlay pictures.
 
@@ -672,10 +775,15 @@ def build_plan(
         raise EditError("Give at least one video to edit.")
     if len(inputs) > MAX_INPUTS:
         raise EditError(f"At most {MAX_INPUTS} videos can be joined in one edit.")
-    builder = _Builder(inputs, overlay_start=len(inputs))
+    sources = sound_sources(steps)
+    missing = [name for name in sources if name not in (sounds or {})]
+    if missing:
+        raise EditError(f"{missing[0]} isn't a sound file Row-Bot found.")
+    builder = _Builder(inputs, overlay_start=len(inputs) + len(sources))
     builder.start(inputs)
     for step in steps:
         getattr(builder, step.op)(step)
+    builder.mix(steps, len(inputs), sources)
     video = builder.label("v")
     # One steady frame rate (sped-up parts would otherwise carry several times as many frames).
     builder.add(f"{builder.video}fps={_seconds_text(min(builder.fps, 60.0))},format=yuv420p{video}")
@@ -683,6 +791,8 @@ def build_plan(
     args = ["-hide_banner", "-nostdin", "-y"]
     for item in inputs:
         args += input_arguments(item.path)
+    for name in sources:
+        args += sound_input_arguments((sounds or {})[name])
     for name, _data in builder.overlays:
         args += ["-protocol_whitelist", "file", "-i", file_argument(name)]
     args += [graph_option, graph_file, "-map", builder.video]
@@ -749,3 +859,59 @@ def clock(seconds: float) -> str:
     minutes, rest = divmod(int(whole), 60)
     hours, minutes = divmod(minutes, 60)
     return f"{hours}:{minutes:02d}:{rest:02d}" if hours else f"{minutes}:{rest:02d}"
+
+
+# ── Checks ──────────────────────────────────────────────────────────────────
+
+QUIET_DB = -35.0
+_MEAN = re.compile(r"mean_volume:\s*(-?[0-9.]+|-inf) dB")
+_PEAK = re.compile(r"max_volume:\s*(-?[0-9.]+|-inf) dB")
+_BLACK = re.compile(r"black_start:\s*([0-9.]+)\s+black_end:\s*([0-9.]+)")
+_FROZEN = re.compile(r"freeze_start:\s*([0-9.]+)[\s\S]*?freeze_duration:\s*([0-9.]+)")
+
+
+def check_arguments(path: Path | str, *, has_audio: bool) -> list[str]:
+    """One read of the video for its sound level, black stretches and still stretches."""
+    args = ["-hide_banner", "-nostdin", *input_arguments(path),
+            "-vf", "blackdetect=d=0.5:pix_th=0.10,freezedetect=n=0.003:d=3"]
+    if has_audio:
+        args += ["-af", "volumedetect"]
+    return args + ["-f", "null", "-"]
+
+
+@dataclass(frozen=True)
+class Checks:
+    passed: bool
+    lines: list[str]
+
+
+def read_checks(output: str, info: VideoInfo) -> Checks:
+    """What the read found, in plain lines; a video passes when it has sound loud enough and no black stretch
+    past its first and last second. Still stretches are listed (a screen recording may rightly hold still)."""
+    lines = [f"Length {clock(info.duration)}, {info.width}×{info.height}."]
+    problems = 0
+    mean, peak = _MEAN.search(output), _PEAK.search(output)
+    if not info.has_audio or mean is None:
+        lines.append("Sound: none. Add a voice or music if this video should have sound.")
+        problems += 1
+    else:
+        level = float("-inf") if mean.group(1) == "-inf" else float(mean.group(1))
+        top = peak.group(1) if peak else "?"
+        if level < QUIET_DB:
+            lines.append(f"Sound: too quiet (average {mean.group(1)} dB, peak {top} dB).")
+            problems += 1
+        else:
+            lines.append(f"Sound: present (average {mean.group(1)} dB, peak {top} dB).")
+    black = [(float(a), float(b)) for a, b in _BLACK.findall(output)]
+    inside = [(a, b) for a, b in black if not (a <= 1.0 and b - a <= 1.5) and not (b >= info.duration - 1.0
+                                                                                   and b - a <= 1.5)]
+    if inside:
+        problems += 1
+        lines.append("Black: " + ", ".join(f"{clock(a)}–{clock(b)}" for a, b in inside[:5]) + ".")
+    else:
+        lines.append("Black: none.")
+    frozen = [(float(a), float(d)) for a, d in _FROZEN.findall(output)]
+    lines.append("Still: " + (", ".join(f"{clock(a)} for {d:.0f} s" for a, d in frozen[:5])
+                              + " (fine if nothing should move there)." if frozen else "none."))
+    lines.append("Result: passed." if not problems else "Result: needs attention before it's done.")
+    return Checks(not problems, lines)

@@ -30,7 +30,9 @@ Topics (add one here, then publish it where its state changes):
   needing them).
 - ``models``: the saved model catalog: refreshed (at start-up, every six hours,
   on Refresh, after a provider sign-in), or a provider disconnected (B411).
-- ``learning``: reserved for Row-Bot Learning, which publishes it.
+- ``learning``: Row-Bot Learning (preview): a setting or command, a job or
+  version changing state, a comparison starting, moving on or ending, the
+  vault taking new work, a personal model's use (``learning.changed``).
 """
 from __future__ import annotations
 

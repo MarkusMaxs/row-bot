@@ -26,6 +26,7 @@ import {
   Trash2,
   Unlink,
 } from 'lucide-react';
+import { ATTACHMENT_LIMITS } from './attachment-limits';
 
 type ResourceSummary = {
   primary: string;
@@ -193,7 +194,7 @@ export default function ConversationContextRail({
     setOutputError('');
     try {
       const blob = await controller.download(output.reference);
-      if (blob.size > 25 * 1024 * 1024 || blob.type !== output.mime)
+      if (blob.size > ATTACHMENT_LIMITS.fileBytes || blob.type !== output.mime)
         throw new Error('media_identity_conflict');
       const extension =
         output.mime === 'image/jpeg' ? 'jpg' : output.mime.split('/')[1];

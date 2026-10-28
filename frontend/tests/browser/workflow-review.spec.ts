@@ -5,10 +5,12 @@ import { blockFixtureServiceWorkers, dismissNotices } from './unified-helpers';
 
 /*
  * N9 · A workflow's own code folder, its schedule's timezone, what happens to a
- * run missed while Row-Bot was closed, and "Always ask me". The fixture seeds a
- * switched-off workflow and four run records (one ran late in its folder, one
- * waits on a person-only card under Auto, one was not approved in time, one was
- * stopped by a removed folder); nothing is scheduled or run.
+ * run missed while Row-Bot was closed, and "Always ask me". F31 · a run is a
+ * turn of the workflow's conversation and shows how it ended. The fixture seeds
+ * a switched-off workflow and four run records (one ran late in its folder and
+ * posted, one waits on its conversation's person-only X card, one was replaced
+ * by a newer run, one was stopped by a removed folder); nothing is scheduled or
+ * run.
  */
 
 const PHONE = { width: 390, height: 844 };
@@ -126,19 +128,7 @@ test('the schedule builder shows the zone with the time and names it in the next
   await everywhere(page, info, 'schedule-zone', preview);
 });
 
-test('a step can always ask you', async ({ page }, info) => {
-  await choose(page, 'Edit workflow steps');
-  await page
-    .getByRole('radiogroup', { name: 'Show steps as' })
-    .getByRole('radio', { name: 'List', exact: true })
-    .click();
-  await expect(page.getByText('Asks you', { exact: true })).toBeVisible();
-  const ask = page.getByRole('switch', { name: 'Always ask me' });
-  await expect(ask).toBeChecked();
-  await everywhere(page, info, 'step-always-ask', ask);
-});
-
-test('run history shows the person-only card, the folder, a late run and how runs ended', async ({
+test('run history shows the waiting run’s own X card, the folder, a late run and how runs ended', async ({
   page,
 }, info) => {
   await choose(page, 'Run history');
@@ -146,27 +136,38 @@ test('run history shows the person-only card, the folder, a late run and how run
     name: 'Task runs and approvals',
     exact: true,
   });
-  const card = runs.getByRole('article', { name: 'Pending task approval' });
-  await expect(
-    card.getByRole('heading', { name: 'Only you can approve this' }),
-  ).toBeVisible();
-  await expect(card.getByText('@rowbot')).toBeVisible();
-  await expect(card.getByText('landing-checks.png')).toBeVisible();
-  await expect(card.getByText('3f9a1c07be52')).toBeVisible();
-  await expect(card.getByRole('button', { name: 'Approve' })).toBeEnabled();
-  await everywhere(page, info, 'person-only-card-auto', card);
-
   const selected = runs.getByRole('region', { name: 'Selected run' });
+  // The newest run waits for you on its conversation's card: the whole post, its account and picture.
+  await expect(selected.getByText('Waiting for you')).toBeVisible();
+  const card = selected.getByRole('complementary', {
+    name: /^Approval required/,
+  });
+  await expect(
+    card.getByText(/Landing checks passed for row-bot\.ai/),
+  ).toBeVisible();
+  await expect(card.getByText('@rowbot').first()).toBeVisible();
+  await expect(card.getByRole('button', { name: 'Approve' })).toBeEnabled();
+  await everywhere(page, info, 'waiting-run-x-card', card);
+
   await runs.getByRole('button', { name: 'Show run n9-late' }).click();
   await expect(selected.getByText('In row-bot-landing')).toBeVisible();
   await expect(
     selected.getByText('Ran late: Row-Bot was closed at 09:00.'),
   ).toBeVisible();
-  await everywhere(page, info, 'run-header-folder-ran-late', selected);
+  // How it ended, from what its tools did: the post and its link.
+  const did = selected.getByRole('list', { name: 'What it did' });
+  await expect(did.getByText('Posted on X as @rowbot')).toBeVisible();
+  await expect(
+    did.getByRole('link', { name: 'Open: Posted on X as @rowbot' }),
+  ).toHaveAttribute('href', 'https://x.com/rowbot/status/1849000000000000001');
+  await everywhere(page, info, 'run-posted-folder-ran-late', selected);
 
-  await runs.getByRole('button', { name: 'Show run n9-not-approved' }).click();
-  await expect(selected.getByText('Not approved in time')).toBeVisible();
-  await everywhere(page, info, 'not-approved-in-time', selected);
+  await runs.getByRole('button', { name: 'Show run n9-replaced' }).click();
+  await expect(selected.getByText('Expired', { exact: true })).toBeVisible();
+  await expect(
+    selected.getByText('A newer run replaced it before it was approved.'),
+  ).toBeVisible();
+  await everywhere(page, info, 'run-replaced', selected);
 
   await runs.getByRole('button', { name: 'Show run n9-folder-gone' }).click();
   await expect(

@@ -1,8 +1,5 @@
-import contextvars
 import pathlib
 import sqlite3
-import sys
-import types
 
 import pytest
 
@@ -222,18 +219,6 @@ def test_phase2_update_task_canonicalizes_model_override(tmp_path, monkeypatch, 
     assert tasks.get_task(task_id)["model_override"] == "model:custom_openai_lmstudio:qwen3.6-35b-a3b"
 
 
-def test_phase2_step_level_model_override_canonicalizes(tmp_path, monkeypatch, reload_for_data_dir):
-    _isolated_provider_config(tmp_path, monkeypatch)
-    tasks = _isolated_tasks_module(tmp_path, monkeypatch, reload_for_data_dir)
-
-    task_id = tasks.create_task(
-        "Step model workflow",
-        steps=[{"type": "prompt", "prompt": "say hi", "model_override": "qwen3.6-35b-a3b"}],
-    )
-
-    assert tasks.get_task(task_id)["steps"][0]["model_override"] == "model:custom_openai_lmstudio:qwen3.6-35b-a3b"
-
-
 def test_phase2_ambiguous_bare_workflow_model_fails_on_save(tmp_path, monkeypatch, reload_for_data_dir):
     _isolated_provider_config(tmp_path, monkeypatch)
     cfg = provider_config.load_provider_config()
@@ -255,110 +240,35 @@ def test_phase2_ambiguous_bare_workflow_model_fails_on_save(tmp_path, monkeypatc
         )
 
 
-def test_phase4_explicit_workflow_model_failure_does_not_pop_override(tmp_path, monkeypatch, reload_for_data_dir):
+def test_phase4_a_workflow_turn_runs_on_its_own_model_never_the_default(tmp_path, monkeypatch, reload_for_data_dir):
     _isolated_provider_config(tmp_path, monkeypatch)
     tasks = _isolated_tasks_module(tmp_path, monkeypatch, reload_for_data_dir)
     ref = "model:custom_openai_lmstudio:qwen3.6-35b-a3b"
-    message = tasks._workflow_model_failure_message(ref, RuntimeError("model failed to load"))
-
-    assert "not retrying with the default provider" in message
-    assert f"selected_ref={ref}" in message
-    assert "provider_id=custom_openai_lmstudio" in message
-    assert "runtime_model=qwen3.6-35b-a3b" in message
-
-
-def test_phase4_failed_custom_workflow_does_not_retry_default_provider(tmp_path, monkeypatch, reload_for_data_dir):
-    _isolated_provider_config(tmp_path, monkeypatch)
-    tasks = _isolated_tasks_module(tmp_path, monkeypatch, reload_for_data_dir)
-    ref = "model:custom_openai_lmstudio:qwen3.6-35b-a3b"
-    task_id = tasks.create_task(
-        "No fallback workflow",
-        prompts=["say hi"],
-        model_override=ref,
-    )
+    task_id = tasks.create_task("No fallback workflow", prompts=["say hi"], model_override=ref)
     thread_id = tasks._prepare_task_thread(tasks.get_task(task_id))
-    calls = []
+    from row_bot.application import conversation_followups
 
-    class _Var:
-        def set(self, value):
-            return None
+    started = []
+    monkeypatch.setattr(conversation_followups, "start",
+                        lambda _service, conversation_id, followup, *, model_ref="": started.append(
+                            (conversation_id, followup.prompt, model_ref)) or None)
 
-    fake_agent = types.SimpleNamespace(
-        TaskStoppedError=type("TaskStoppedError", (Exception,), {}),
-        RECURSION_LIMIT_TASK=50,
-        _background_workflow_var=_Var(),
-        _approval_mode_var=_Var(),
-        _persistent_thread_var=_Var(),
-        repair_orphaned_tool_calls=lambda *_args, **_kwargs: None,
-    )
+    tasks.run_task_background(task_id, thread_id, [])
 
-    def _invoke_agent(_prompt, _tools, config, stop_event=None):
-        from row_bot.conversation_resources import current_execution_context
-        assert current_execution_context().conversation_id == thread_id
-        calls.append((config.get("configurable") or {}).get("model_override"))
-        raise RuntimeError("model failed to load")
-
-    fake_agent.invoke_agent = _invoke_agent
-    monkeypatch.setitem(sys.modules, "agent", fake_agent)
-    monkeypatch.setitem(sys.modules, "row_bot.agent", fake_agent)
-
-    class _ImmediateThread:
-        def __init__(self, target, *args, **kwargs):
-            self._target = target
-
-        def start(self):
-            contextvars.Context().run(self._target)
-
-    monkeypatch.setattr(tasks.threading, "Thread", _ImmediateThread)
-
-    tasks.run_task_background(task_id, thread_id, [], notification=False)
-    runs = tasks.get_recent_runs(1)
-
-    assert calls == [ref]
-    assert runs[0]["status"] == "failed"
-    assert ref in runs[0]["status_message"]
-    assert "not retrying with the default provider" in runs[0]["status_message"]
+    [(conversation, prompt, model)] = started
+    assert (conversation, model) == (thread_id, ref)
+    assert prompt.endswith("\n\n---\n\nsay hi")  # After the workflow's notes (G4).
+    assert tasks.get_recent_runs(1)[0]["status"] == "failed"
 
 
 def test_phase5_delivery_failure_is_separate_from_execution_success(tmp_path, monkeypatch, reload_for_data_dir):
     _isolated_provider_config(tmp_path, monkeypatch)
     tasks = _isolated_tasks_module(tmp_path, monkeypatch, reload_for_data_dir)
-    task_id = tasks.create_task(
-        "Delivery failure workflow",
-        prompts=["say hi"],
-        channels=["slack"],
-    )
-    thread_id = tasks._prepare_task_thread(tasks.get_task(task_id))
-    calls = []
-
-    def _invoke_agent(*_args, **_kwargs):
-        from row_bot.conversation_resources import current_execution_context
-        assert current_execution_context().conversation_id == thread_id
-        calls.append("execution")
-        return "execution ok"
-
-    class _Var:
-        def set(self, value):
-            return None
-
-    fake_agent = types.SimpleNamespace(
-        TaskStoppedError=type("TaskStoppedError", (Exception,), {}),
-        RECURSION_LIMIT_TASK=50,
-        _background_workflow_var=_Var(),
-        _approval_mode_var=_Var(),
-        _persistent_thread_var=_Var(),
-        invoke_agent=_invoke_agent,
-        repair_orphaned_tool_calls=lambda *_args, **_kwargs: None,
-    )
-    monkeypatch.setitem(sys.modules, "agent", fake_agent)
-    monkeypatch.setitem(sys.modules, "row_bot.agent", fake_agent)
-
-    class _ImmediateThread:
-        def __init__(self, target, *args, **kwargs):
-            self._target = target
-
-        def start(self):
-            contextvars.Context().run(self._target)
+    task_id = tasks.create_task("Delivery failure workflow", prompts=["say hi"], channels=["slack"])
+    task = tasks.get_task(task_id)
+    thread_id = tasks._prepare_task_thread(task)
+    run_id = tasks._record_run_start(task_id, thread_id, 1)
+    sent = []
 
     class _FailingChannel:
         name = "slack"
@@ -368,20 +278,19 @@ def test_phase5_delivery_failure_is_separate_from_execution_success(tmp_path, mo
             return "chat"
 
         def send_message(self, target, text):
-            assert "execution ok" in text
-            calls.append("delivery")
+            sent.append(text)
             raise RuntimeError("telegram unavailable")
 
-    monkeypatch.setattr(tasks.threading, "Thread", _ImmediateThread)
     monkeypatch.setattr(tasks, "get_task_channels", lambda _task: [_FailingChannel()])
+    from row_bot import workflow_turns
 
-    tasks.run_task_background(task_id, thread_id, [], notification=False)
+    # The run's last turn ended with its reply; the run then delivers it.
+    workflow_turns._finish(tasks.read_task_run(run_id), task, "completed", "execution ok", "")
     run = tasks.get_recent_runs(1)[0]
 
     assert run["status"] == "completed_delivery_failed"
-    assert calls == ["execution", "delivery"]
+    assert len(sent) == 1 and "execution ok" in sent[0]
     assert "Slack: telegram unavailable" in run["status_message"]
-    assert tasks._workflow_final_status_for_delivery("delivery_failed") == "completed_delivery_failed"
 
 
 def test_phase6_shared_model_command_is_provider_aware_and_read_only(tmp_path, monkeypatch):
@@ -424,11 +333,10 @@ def test_phase9_legacy_model_diagnostics_are_read_only(tmp_path, monkeypatch, re
     tasks = _isolated_tasks_module(tmp_path, monkeypatch, reload_for_data_dir)
     task_id = tasks.create_task("Legacy task", prompts=["hi"])
     db_path = pathlib.Path(tmp_path / "data" / "tasks.db")
-    legacy_steps = '[{"id":"step_1","type":"prompt","prompt":"hi","model_override":"missing-model"}]'
     with sqlite3.connect(db_path) as conn:
         conn.execute(
-            "UPDATE tasks SET model_override = ?, steps = ? WHERE id = ?",
-            ("qwen3.6-35b-a3b", legacy_steps, task_id),
+            "UPDATE tasks SET model_override = ? WHERE id = ?",
+            ("qwen3.6-35b-a3b", task_id),
         )
         conn.commit()
 
@@ -445,7 +353,6 @@ def test_phase9_legacy_model_diagnostics_are_read_only(tmp_path, monkeypatch, re
         for item in diagnostics
     } >= {
         ("task", "qwen3.6-35b-a3b", "canonicalizable"),
-        ("task_step", "missing-model", "unknown"),
         ("thread", "qwen3.6-35b-a3b", "canonicalizable"),
     }
     assert tasks.get_task(task_id)["model_override"] == "qwen3.6-35b-a3b"

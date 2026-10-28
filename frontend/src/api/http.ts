@@ -1,6 +1,7 @@
 import * as wire from '../../../contracts/client-platform/v1/typescript/client';
 import type { ClientTransport } from './types';
 import { sha256Hex } from '../platform/crypto';
+import { ATTACHMENT_LIMITS } from './limits';
 
 /** Same-origin generated transport; only the in-memory owner holds the CSRF proof. */
 export class HttpTransport implements ClientTransport {
@@ -331,6 +332,14 @@ export class HttpTransport implements ClientTransport {
   page(pageId: string, signal?: AbortSignal) {
     return wire.getPage(this.base, this.session(), pageId, signal);
   }
+  conversationLinks(conversationId: string, signal?: AbortSignal) {
+    return wire.getConversationLinks(
+      this.base,
+      this.session(),
+      conversationId,
+      signal,
+    );
+  }
   pageFrame(pageId: string, theme: wire.PageTheme, signal?: AbortSignal) {
     return wire.createPageFrame(
       this.base,
@@ -414,6 +423,12 @@ export class HttpTransport implements ClientTransport {
   }
   pendingApprovals(signal?: AbortSignal) {
     return wire.getPendingApprovals(this.base, this.session(), signal);
+  }
+  scheduledPosts(signal?: AbortSignal) {
+    return wire.getScheduledPosts(this.base, this.session(), signal);
+  }
+  cancelScheduledPost(id: string) {
+    return wire.cancelScheduledPost(this.base, this.session(), id);
   }
   monitorLogs(limit = 200, signal?: AbortSignal) {
     return wire.getMonitorLogs(this.base, this.session(), limit, signal);
@@ -1574,7 +1589,7 @@ export class HttpTransport implements ClientTransport {
     commandId: string,
     signal?: AbortSignal,
   ) {
-    if (file.size < 1 || file.size > 26214400)
+    if (file.size < 1 || file.size > ATTACHMENT_LIMITS.fileBytes)
       throw { code: 'payload_too_large' };
     const proof = this.session();
     signal?.throwIfAborted();
@@ -2054,9 +2069,6 @@ export class HttpTransport implements ClientTransport {
   taskEditor(task: string, signal?: AbortSignal) {
     return wire.getTaskEditor(this.base, this.session(), task, signal);
   }
-  taskGraph(task: string, signal?: AbortSignal) {
-    return wire.getTaskGraph(this.base, this.session(), task, signal);
-  }
   taskSettings(task: string, signal?: AbortSignal) {
     return wire.getTaskSettings(this.base, this.session(), task, signal);
   }
@@ -2296,6 +2308,38 @@ export class HttpTransport implements ClientTransport {
   executeInsight(command: wire.InsightCommand, signal?: AbortSignal) {
     return wire.sendInsightCommand(this.base, this.session(), command, signal);
   }
+  learning(signal?: AbortSignal) {
+    return wire.getLearning(this.base, this.session(), signal);
+  }
+  learningTraining(signal?: AbortSignal) {
+    return wire.getLearningTraining(this.base, this.session(), signal);
+  }
+  learningDownload(signal?: AbortSignal) {
+    return wire.getLearningDownload(this.base, this.session(), signal);
+  }
+  learningHardware(refresh = false, signal?: AbortSignal) {
+    return wire.getLearningHardware(this.base, this.session(), refresh, signal);
+  }
+  learningConversation(conversation: string, signal?: AbortSignal) {
+    return wire.getLearningConversation(
+      this.base,
+      this.session(),
+      conversation,
+      signal,
+    );
+  }
+  learningLessons(signal?: AbortSignal) {
+    return wire.getLearningLessons(this.base, this.session(), signal);
+  }
+  learningVersion(version: number, signal?: AbortSignal) {
+    return wire.getLearningVersion(this.base, this.session(), version, signal);
+  }
+  learningReceipt(command: string, signal?: AbortSignal) {
+    return wire.getLearningReceipt(this.base, this.session(), command, signal);
+  }
+  executeLearning(command: wire.LearningCommand, signal?: AbortSignal) {
+    return wire.sendLearningCommand(this.base, this.session(), command, signal);
+  }
   customToolReceipt(
     conversation: string,
     binding: string,
@@ -2533,21 +2577,6 @@ export class HttpTransport implements ClientTransport {
   }
   taskRun(task: string, run: string, signal?: AbortSignal) {
     return wire.getTaskRun(this.base, this.session(), task, run, signal);
-  }
-  taskApprovals(
-    task: string,
-    run: string,
-    cursor?: string,
-    signal?: AbortSignal,
-  ) {
-    return wire.getTaskApprovals(
-      this.base,
-      this.session(),
-      task,
-      run,
-      cursor,
-      signal,
-    );
   }
   artifactExport(
     conversation: string,
@@ -3176,7 +3205,7 @@ export class HttpTransport implements ClientTransport {
     signal?: AbortSignal,
     progress?: (sent: number) => void,
   ): Promise<wire.AttachmentView> {
-    if (file.size < 1 || file.size > 26214400)
+    if (file.size < 1 || file.size > ATTACHMENT_LIMITS.fileBytes)
       throw { code: 'payload_too_large' };
     signal?.throwIfAborted();
     const sha256 = await sha256Hex(await file.arrayBuffer());

@@ -121,6 +121,10 @@ class AccessContext:
     direct_loopback: bool = False
     device_id: str | None = None
     session_id: str | None = None
+    # A person signed this caller in: a paired device, or a window or browser on this
+    # computer that claimed the launcher's invitation. A bare connection from this
+    # computer (a program Row-Bot started, its own browser) is not one.
+    person: bool = False
 
     @property
     def authenticated(self) -> bool:
@@ -129,6 +133,13 @@ class AccessContext:
     @property
     def is_local_owner(self) -> bool:
         return self.authentication_kind is AuthenticationKind.LOCAL_OWNER
+
+    @property
+    def may_act(self) -> bool:
+        """Whether this caller may change anything: every signed-in device, and on this computer a person."""
+        if self.authentication_kind is AuthenticationKind.SESSION:
+            return True
+        return self.is_local_owner and self.person
 
 def _headers(scope: Mapping[str, object]) -> dict[str, list[str]]:
     headers: dict[str, list[str]] = {}
@@ -472,16 +483,21 @@ class RequestContextResolver:
             and provenance.direct_loopback
         ):
             kind = AuthenticationKind.LOCAL_OWNER
-            device_id = None
-            session_id = None
+            # On this computer a valid access session marks a person's window or browser,
+            # which then renews and signs out like any signed-in device.
+            device_id = session.device_id if session is not None else None
+            session_id = session.session_id if session is not None else None
+            person = session is not None
         elif session is not None:
             kind = AuthenticationKind.SESSION
             device_id = session.device_id
             session_id = session.session_id
+            person = True
         else:
             kind = AuthenticationKind.UNAUTHENTICATED
             device_id = None
             session_id = None
+            person = False
 
         presentation = requested_presentation(scope)
         return AccessContext(
@@ -500,6 +516,7 @@ class RequestContextResolver:
             direct_loopback=provenance.direct_loopback,
             device_id=device_id,
             session_id=session_id,
+            person=person,
         )
 
 

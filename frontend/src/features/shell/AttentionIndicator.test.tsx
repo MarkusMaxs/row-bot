@@ -124,7 +124,7 @@ function waiting(id: string, title: string): PendingApproval {
   };
 }
 
-it('counts waiting approvals and answers them in place (B255)', async () => {
+it('counts waiting approvals and opens each on its card (B255)', async () => {
   const pages: PendingApprovalPage[] = [
     {
       schema_version: 1,
@@ -145,21 +145,23 @@ it('counts waiting approvals and answers them in place (B255)', async () => {
   intent.mockResolvedValue({ status: 'completed' });
   render(
     <MemoryRouter>
-      <AttentionIndicator
-        load={async () => ({
-          schema_version: 1,
-          problems: [
-            {
-              id: 'channel:telegram',
-              title: 'Telegram stopped',
-              detail: 'It isn’t running.',
-              place: 'channels',
-            },
-          ],
-          update: null,
-        })}
-        loadApprovals={loadApprovals}
-      />
+      <OverlayProvider>
+        <AttentionIndicator
+          load={async () => ({
+            schema_version: 1,
+            problems: [
+              {
+                id: 'channel:telegram',
+                title: 'Telegram stopped',
+                detail: 'It isn’t running.',
+                place: 'channels',
+              },
+            ],
+            update: null,
+          })}
+          loadApprovals={loadApprovals}
+        />
+      </OverlayProvider>
     </MemoryRouter>,
   );
   fireEvent.click(
@@ -177,24 +179,17 @@ it('counts waiting approvals and answers them in place (B255)', async () => {
   const news = within(list).getByRole('listitem', {
     name: 'Daily News needs your approval',
   });
-  loadApprovals.mockImplementation(async () => pages[1]);
+  // Each opens on its own card: what exactly will happen, then Approve or Deny there (F31).
+  expect(within(news).queryByRole('button', { name: 'Approve' })).toBeNull();
   await act(async () =>
-    fireEvent.click(within(news).getByRole('button', { name: 'Approve' })),
-  );
-  expect(intent).toHaveBeenCalledWith(
-    'news',
-    'approval.resolve',
-    { decision: 'approve', nonce: 'nonce' },
-    '0',
+    fireEvent.click(
+      within(news).getByRole('button', { name: 'Review: Daily News' }),
+    ),
   );
   expect(
-    await screen.findByRole('button', {
-      name: '2 things need you. Review',
-    }),
+    screen.getByRole('dialog', { name: 'Review and approve' }),
   ).toBeInTheDocument();
-  expect(
-    screen.queryByRole('listitem', { name: 'Daily News needs your approval' }),
-  ).toBeNull();
+  expect(intent).not.toHaveBeenCalled();
 });
 
 it('says "Restart to update" once an update is downloaded and ready', async () => {

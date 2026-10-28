@@ -13,6 +13,7 @@ from row_bot.application.folder_selections import FolderSelections
 from tests.integration.wiki_vault.conftest import wiki_stack  # noqa: F401
 from tests.subsystem.client_protocol.test_protocol_application import _isolated_service
 from tests.subsystem.client_protocol.test_protocol_security import bootstrap, client_app
+from tests.helpers.access import person_window
 
 pytestmark = pytest.mark.subsystem
 
@@ -32,7 +33,7 @@ def api(wiki_stack, monkeypatch):  # noqa: F811
     picked = [wiki_stack["vault"]]
     selections = FolderSelections(picker=lambda: picked[0], clock=lambda: clock[0])
     app = create_client_platform_app(service, security=security,
-        choices=lambda: {"models": [], "capabilities": []}, folder_selections=selections)
+        choices=lambda: {"models": [], "capabilities": []}, folder_selections=selections, session_authenticator=person_window)
     with TestClient(app, base_url="http://localhost", client=("127.0.0.1", 12345)) as client:
         _, headers = bootstrap(client)
         yield wiki_stack, client, headers, clock, picked

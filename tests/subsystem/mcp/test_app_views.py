@@ -228,11 +228,6 @@ def test_auto_never_runs_a_routine_change_the_apps_access_asks_about(app, monkey
 
 _PROFILES = {
     "read_only": {"id": "p1", "enabled": True, "tool_policy_json": {"capability": "read_only"}},
-    "denies_apps": {"id": "p1", "enabled": True, "tool_policy_json": {"capability": "write_capable", "deny_tools": ["mcp"]}},
-    "denies_the_tool": {"id": "p1", "enabled": True,
-                        "tool_policy_json": {"capability": "write_capable", "deny_tools": ["mcp_counter_update_counter"]}},
-    "other_tools_only": {"id": "p1", "enabled": True,
-                         "tool_policy_json": {"capability": "write_capable", "allow_tools": ["web_search"]}},
     "switched_off": {"id": "p1", "enabled": False, "tool_policy_json": {"capability": "write_capable"}},
     "deleted": None,
 }
@@ -240,8 +235,8 @@ _PROFILES = {
 
 @pytest.mark.parametrize("profile", list(_PROFILES))
 def test_a_view_is_held_to_the_chats_agent_profile_before_anything_asks(app, monkeypatch, profile):
-    """As a turn of the chat would be: its profile denies the app or the tool, allows only other tools, is
-    read-only (a change is refused), or is gone or switched off (a turn is refused)."""
+    """As a turn of the chat would be: its profile is read-only (a change is refused), or is gone or
+    switched off (a turn is refused). A profile lists no tools (F31)."""
     from row_bot import agent_profiles
     render_id = views.render("chat-1", "call-1")["render_id"]  # Shown before the chat chose this profile.
     found = _PROFILES[profile]
@@ -256,7 +251,7 @@ def test_a_view_is_held_to_the_chats_agent_profile_before_anything_asks(app, mon
     with pytest.raises(views.ViewError, match="view_tool_refused"):
         call(render_id, "update_counter", {"by": 1})
     assert app.session.calls == []
-    if profile in {"switched_off", "deleted", "other_tools_only"}:  # Nor is its view shown again.
+    if profile in {"switched_off", "deleted"}:  # Nor is its view shown again.
         with pytest.raises(views.ViewError, match="views_off"):
             views.render("chat-1", "call-1")
 
@@ -264,7 +259,7 @@ def test_a_view_is_held_to_the_chats_agent_profile_before_anything_asks(app, mon
 def test_a_view_runs_what_the_chats_agent_profile_allows(app, monkeypatch):
     from row_bot import agent_profiles
     app.chat["agent_profile_slug"] = "writer"
-    profile = {"id": "p2", "enabled": True, "tool_policy_json": {"capability": "write_capable", "allow_tools": ["mcp"]}}
+    profile = {"id": "p2", "enabled": True, "tool_policy_json": {"capability": "write_capable"}}
     monkeypatch.setattr(agent_profiles, "get_agent_profile",
                         lambda reference, enabled_only=False: profile if reference == "writer" else None)
     app.cfg["tools"]["run_without_asking"] = ["update_counter"]

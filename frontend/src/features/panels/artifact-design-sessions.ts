@@ -5,6 +5,7 @@ import type {
   DesignControlsState,
   DesignReviewState,
 } from './ArtifactDesignControls';
+import { ATTACHMENT_LIMITS } from '../shell/attachment-limits';
 
 export type DesignScope = {
   conversation_id: string;
@@ -496,7 +497,7 @@ export function createArtifactDesignSessions(owner: DesignSessionOwner) {
       upload: async (file: File, revision: string) => {
         if (
           !file.size ||
-          file.size > 25 * 1024 * 1024 ||
+          file.size > ATTACHMENT_LIMITS.fileBytes ||
           file.name.length > 256
         )
           throw new Error('asset_too_large');
@@ -526,7 +527,7 @@ export function createArtifactDesignSessions(owner: DesignSessionOwner) {
         if (
           !/\.(pptx|docx)$/i.test(file.name) ||
           !file.size ||
-          file.size > 25 * 1024 * 1024
+          file.size > ATTACHMENT_LIMITS.fileBytes
         )
           throw new Error('invalid_document_import');
         const staged = await query((signal) =>

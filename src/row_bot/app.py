@@ -744,6 +744,17 @@ async def _run_startup_sequence():
     with _startup_phase("dream_cycle_daemon"):
         await asyncio.to_thread(start_dream_loop)
 
+    # Learning (preview): an unfinished past-chat import carries on. Off: one check, nothing else.
+    from row_bot import learning as _learning
+
+    if _learning.is_enabled():
+        await asyncio.to_thread(_learning.start_past_chat_import)
+        # Training left running when Row-Bot closed pauses at its newest checkpoint; the
+        # quiet-hours runner starts (L2a).
+        await asyncio.to_thread(_learning.start_runner)
+    # Once per store, in the background: blobs no Learning record references any more go (P2).
+    _learning.start_blob_sweep()
+
     _set("⬆ Starting auto-update scheduler…")
     try:
         from row_bot.updater import start_update_scheduler
@@ -842,6 +853,15 @@ async def _run_startup_sequence():
             await asyncio.to_thread(cleanup_app_processes)
     except Exception as exc:
         logger.warning("Owned app process cleanup skipped (non-fatal): %s", exc)
+    # Learning's model server (O75) a crashed run left running: stopped only when its record exists,
+    # so Learning itself isn't imported.
+    try:
+        from row_bot import owned_processes
+        _server_ledger = owned_processes.ledger_path("learning-model-server.json")
+        if _server_ledger.is_file():
+            await asyncio.to_thread(owned_processes.cleanup, _server_ledger, tree=True)
+    except Exception as exc:
+        logger.warning("Learning model server cleanup skipped (non-fatal): %s", exc)
     try:
         from row_bot.mcp_client.runtime import discover_enabled_servers
         with _startup_phase("mcp_discovery"):
@@ -1197,6 +1217,22 @@ async def _cleanup_runtime(reason: str = "shutdown") -> bool:
         _shutdown_cleanup_started = False
         return False
     stop_performance_monitor()
+    # Learning (preview), only if it ran: the past-chat import stops, training stops with its
+    # whole process tree (it continues from its newest checkpoint next time), the model server
+    # stops with the models it loaded, a download stops
+    # (it shows as paused next time), and capture writes what it holds (a few seconds at most)
+    # and stops.
+    for _learning_name, _learning_stop in (("row_bot.learning.past_chats", "stop_background"),
+                                           ("row_bot.learning.runner", "shutdown"),
+                                           ("row_bot.learning.training.llama_server", "shutdown"),
+                                           ("row_bot.learning.training.downloads", "shutdown"),
+                                           ("row_bot.learning.capture", "shutdown")):
+        _learning_module = sys.modules.get(_learning_name)
+        if _learning_module is not None:
+            try:
+                await asyncio.to_thread(getattr(_learning_module, _learning_stop), 5.0)
+            except Exception:
+                logger.debug("Stopping Learning's %s failed", _learning_name, exc_info=True)
     mark_shutdown(reason)
     _safe_console_print(f"[shutdown] Cleaning up sessions ({reason})...")
     try:
@@ -1361,6 +1397,37 @@ from row_bot.tunnel import tunnel_manager as _managed_tunnel_manager
 
 _managed_tunnel_manager.set_managed_origin_registrar(_runtime_access_policy)
 register_mobile_routes(app)
+
+
+async def _launcher_sign_in_handler(request: Request) -> JSONResponse:
+    """A one-time sign-in for the window or browser the launcher opens.
+
+    Only a signed-in window or browser on this computer may change anything (A0), so a
+    program Row-Bot starts can't act as the person. The launcher alone holds the secret.
+    """
+    if not _launcher_request_authorized(request):
+        return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
+    from datetime import timedelta
+
+    from row_bot.access.models import SessionLifetime
+    from row_bot.access.policy import context_from_scope
+    from row_bot.access.service import THIS_COMPUTER_ROUTE
+
+    context = context_from_scope(request.scope)
+    if context is None or not context.direct_loopback:
+        return JSONResponse({"ok": False, "error": "forbidden"}, status_code=403)
+    created = await asyncio.to_thread(
+        _access_registration.service.create_invitation,
+        intended_origin=context.origin,
+        session_lifetime=SessionLifetime.TRUSTED,
+        ttl=timedelta(minutes=2),
+        created_by="launcher",
+        access_route=THIS_COMPUTER_ROUTE,
+    )
+    return JSONResponse({"ok": True, "invitation": created.token})
+
+
+app.add_route("/api/launcher/sign-in", _launcher_sign_in_handler, methods=["POST"])
 from row_bot.api.v1.routes import install_client_platform
 from row_bot.application.client_platform import client_platform_service
 from row_bot.application.folder_selections import FolderSelections

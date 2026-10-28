@@ -11,6 +11,7 @@ from tests.subsystem.buddy.test_client_buddy_commands import env  # noqa: F401
 from tests.subsystem.buddy.test_client_buddy_policy import env as policy_env  # noqa: F401
 from tests.subsystem.client_protocol.test_protocol_application import _client, service  # noqa: F401
 from tests.subsystem.client_protocol.test_protocol_security import bootstrap
+from tests.helpers.access import person_window
 
 pytestmark = pytest.mark.subsystem
 BASE = "/api/v1/conversations/buddy-conversation/buddy"
@@ -50,7 +51,7 @@ def test_passive_buddy_reads_keep_general_query_reserve_available(service, env):
     # A frozen clock: the query lane (30 requests, then 2 a second) never refills
     # mid-test, however slowly a loaded machine answers.
     security = ClientSecurity(service.instance_id, clock=lambda: 1_000.0)
-    app = create_client_platform_app(service, choices=lambda: {"models": [], "capabilities": []}, security=security)
+    app = create_client_platform_app(service, choices=lambda: {"models": [], "capabilities": []}, security=security, session_authenticator=person_window)
     with TestClient(app, base_url="http://localhost", client=("127.0.0.1", 12345)) as client:
         _, headers = bootstrap(client)
         query_statuses = [

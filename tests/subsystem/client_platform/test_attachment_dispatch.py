@@ -72,10 +72,11 @@ def test_attachment_audio_type_is_sniffed_from_bytes(platform, name, data, mime_
 
 def test_attachment_preflight_rejects_aggregate_before_reading_bytes(platform, monkeypatch):
     from row_bot.application import attachments
-    monkeypatch.setattr(attachments, "inspect_attachment", lambda *_: {"size_bytes": 25 * 1024 * 1024})
+    monkeypatch.setattr(attachments, "inspect_attachment", lambda *_: {"size_bytes": attachments.MAX_ATTACHMENT_BYTES})
     monkeypatch.setattr(attachments, "read_attachment", lambda *_: pytest.fail("aggregate must reject before full read"))
+    over = attachments.UPLOAD_BATCH_BYTES // attachments.MAX_ATTACHMENT_BYTES + 1
     with pytest.raises(ValueError, match="payload_too_large"):
-        platform._start("conversation-a", {"attachment_refs": ["conversation-a:fixture"] * 5,
+        platform._start("conversation-a", {"attachment_refs": ["conversation-a:fixture"] * over,
                         "model_selection": {"provider_id": "fixture", "model_ref": "fixture::model"}}, resume=False)
     assert not platform.registry.active()
 

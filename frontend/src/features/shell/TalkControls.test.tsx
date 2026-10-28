@@ -66,11 +66,11 @@ const snapshot: TalkSnapshot = {
   },
   state: 'listening',
   quiesced: true,
-  expires_in_ms: 120_000,
+  expires_in_ms: 360_000,
   run_id: null,
   transport: 'browser_local',
-  max_audio_bytes: 8_388_608,
-  max_utterance_ms: 30_000,
+  max_audio_bytes: 33_554_432,
+  max_utterance_ms: 300_000,
 };
 let media: ReturnType<typeof vi.fn>;
 let track: { stop: ReturnType<typeof vi.fn>; onended: (() => void) | null };

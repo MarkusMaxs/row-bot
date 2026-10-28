@@ -10,6 +10,7 @@ from row_bot.api.v1.routes import create_client_platform_app
 from row_bot.api.v1.security import ClientSecurity
 from tests.subsystem.client_protocol.test_protocol_security import bootstrap, client_app
 from tests.subsystem.client_protocol.test_protocol_application import _isolated_service
+from tests.helpers.access import person_window
 
 pytestmark = pytest.mark.subsystem
 REVISION = "a" * 64
@@ -27,8 +28,7 @@ def api(tmp_path, monkeypatch):
     service = _isolated_service()
     security = ClientSecurity(instance_id=service.instance_id)
     app = create_client_platform_app(
-        service, security=security, choices=lambda: {"models": [], "capabilities": []}
-    )
+        service, security=security, choices=lambda: {"models": [], "capabilities": []}, session_authenticator=person_window)
     with TestClient(
         app, base_url="http://localhost", client=("127.0.0.1", 12345)
     ) as client:

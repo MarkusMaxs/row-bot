@@ -123,6 +123,68 @@ test('on a phone the levels sit under + and Hands-off still shows', async ({
   await views(page, info, 'hands-off-on-phone');
 });
 
+test('an ordinary action may be allowed for the rest of the chat', async ({
+  page,
+}, info) => {
+  await newConversation(page);
+  await send(page, 'Save the cut list outside files fixture');
+  const card = page.getByRole('complementary', {
+    name: /^Approval required/,
+  });
+  await expect(card).toContainText(
+    'Outside the workspace: D:/Videos/trip/cut-list.txt',
+  );
+  const allow = card.getByRole('button', { name: /Allow in this chat/ });
+  await expect(allow).toBeVisible();
+  await views(page, info, 'allow-in-this-chat-card');
+  await page.setViewportSize(PHONE);
+  await expect(allow).toBeVisible();
+  await views(page, info, 'allow-in-this-chat-card-phone');
+  await page.setViewportSize({ width: 1280, height: 900 });
+  // Answer it: an approval left waiting shows in every later spec's sidebar and Buddy.
+  await card.getByRole('button', { name: 'Deny', exact: true }).click();
+  await expect(
+    page
+      .getByRole('log', { name: 'Conversation' })
+      .getByText('You said no, so Row-Bot stopped there.', { exact: true }),
+  ).toBeVisible();
+});
+
+test('a proposed conversation starts with one tap and reads as from this chat (5.3.1 C)', async ({
+  page,
+}, info) => {
+  await newConversation(page);
+  await send(page, 'Plan the launch linked conversation fixture');
+  const card = page.getByRole('group', {
+    name: 'Make the 5.3 demo video · proposed',
+  });
+  await expect(card.getByRole('button', { name: 'Start' })).toBeVisible();
+  await expect(card.getByRole('button', { name: 'Not now' })).toBeVisible();
+  await views(page, info, 'linked-conversation-proposed');
+  await page.setViewportSize(PHONE);
+  await views(page, info, 'linked-conversation-proposed-phone');
+  await page.setViewportSize({ width: 1280, height: 900 });
+
+  await card.getByRole('button', { name: 'Start' }).click();
+  const started = page.getByRole('group', {
+    name: /^Make the 5\.3 demo video · (working|done)$/,
+  });
+  await expect(started.getByRole('button', { name: 'Open' })).toBeVisible();
+  await started.getByRole('button', { name: 'Open' }).click();
+  const from = page.getByRole('note').filter({ hasText: 'From ' });
+  await expect(from).toContainText(
+    'Script, record and cut a 60 second demo of the browser pane.',
+  );
+  await expect(
+    page.getByRole('button', {
+      name: 'Make the 5.3 demo video (started by another conversation)',
+    }),
+  ).toBeVisible();
+  await views(page, info, 'linked-conversation-from');
+  await page.setViewportSize(PHONE);
+  await views(page, info, 'linked-conversation-from-phone');
+});
+
 test('the reviewer’s decisions are visible but quiet', async ({
   page,
 }, info) => {

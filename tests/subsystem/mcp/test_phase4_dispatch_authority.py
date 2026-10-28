@@ -96,7 +96,8 @@ def test_unknown_effect_requires_explicit_enablement_and_approval_after_refresh(
     monkeypatch.setattr(runtime, "_catalog", {"fixture": catalog})
     monkeypatch.setattr(runtime, "_statuses", {})
     runtime._sync_catalog_from_config(cfg)
-    assert catalog["opaque_operation"].enabled is False
+    # On after discovery (5.3.1 A5); an unknown effect always asks first.
+    assert catalog["opaque_operation"].enabled is True
     assert catalog["opaque_operation"].requires_approval is True
     for name in ("read_file", "browser_click"):
         assert catalog[name].enabled is True

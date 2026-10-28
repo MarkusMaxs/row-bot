@@ -19,7 +19,8 @@ from typing import Any
 _PUBLIC_REFERENCE = re.compile(r"^[A-Za-z0-9:_-]{1,256}$")
 # Inputs the server started, shown as a short note instead of the person's
 # bubble: a follow-up step, a delegated agent's task and its parent's messages.
-PUBLIC_NOTES = frozenset({"continuation", "agent_task", "agent_guidance", "page"})
+# "linked": a message from another conversation (5.3.1 C).
+PUBLIC_NOTES = frozenset({"continuation", "agent_task", "agent_guidance", "page", "linked"})
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,10 @@ class BlobReader:
         self.blob = blob
         self.revision = revision
         self._nodes = 0
+        # Learning (preview, L3b): the memories that are lessons in use, and whether the turn being read
+        # recalled one ("Used a lesson" under its reply). One path check while there is none.
+        self._lessons: frozenset[str] | None = None
+        self._recalled_lesson = False
 
     def _read(self, size: int) -> bytes:
         value = self.blob.read(size)
@@ -260,8 +265,43 @@ class BlobReader:
             if index >= first:
                 record = self.message(position)
                 if record:
+                    if record["role"] == "user":
+                        self._recalled_lesson = False
+                    elif (self._recalled_lesson and record["role"] == "assistant" and not record["tool_call_ids"]
+                          and not record["tool_ids_lazy"] and not record["note"]):
+                        record["used_lesson"] = True
+                        self._recalled_lesson = False
                     yield index, record
             position = end
+
+    def lesson_memories(self) -> frozenset[str]:
+        if self._lessons is None:
+            try:
+                from row_bot import learning
+
+                self._lessons = frozenset(learning.lesson_memory_ids())
+            except Exception:  # noqa: BLE001 - no line rather than no transcript
+                self._lessons = frozenset()
+        return self._lessons
+
+    def _note_turn_context(self, position: int) -> None:
+        """A turn context's recalled memories: does any of them hold a lesson in use?"""
+
+        lessons = self.lesson_memories()
+        if not lessons:
+            return
+        context = self.fields(position, {"memory_ids"})
+        if "memory_ids" not in context:
+            return
+        ids = self.node(context["memory_ids"])
+        if ids.kind != "array":
+            return
+        current = ids.body
+        for _ in range(min(ids.size, 64)):
+            if self.text(current, 128) in lessons:
+                self._recalled_lesson = True
+                return
+            current = self.end(current)
 
     def message(self, position: int) -> dict | None:
         node = self.node(position)
@@ -311,6 +351,7 @@ class BlobReader:
         media: list[dict[str, Any]] = []
         media_error = ""
         note = ""
+        linked_from: dict[str, str] | None = None
         approval_id = ""
         chart_position, chart_label = None, ""
         if name == "ToolMessage" and "artifact" in fields:
@@ -331,6 +372,7 @@ class BlobReader:
             if name == "HumanMessage" and "row_bot_turn_context" in metadata:
                 # Row-Bot's per-turn context for the model (row_bot.turn_context): never a row
                 # of the transcript, its exports or its search.
+                self._note_turn_context(metadata["row_bot_turn_context"])
                 return None
             if name == "HumanMessage":
                 public_position = metadata.get("platform_public_content")
@@ -342,6 +384,21 @@ class BlobReader:
                         note = candidate
                 if "platform_attachments" in metadata:
                     attachments = self.safe_attachments(metadata["platform_attachments"])
+                if "row_bot_ui" in metadata:
+                    ui = self.fields(metadata["row_bot_ui"], {"learning_fallback", "linked_from"})
+                    if "linked_from" in ui and note == "linked":
+                        origin = self.fields(ui["linked_from"], {"id", "title", "kind"})
+                        found = {key: self.text(origin[key], 160) for key in ("id", "title", "kind") if key in origin}
+                        if re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", found.get("id", "")) and found.get("title"):
+                            linked_from = {"id": found["id"], "title": found["title"],
+                                           "kind": "reply" if found.get("kind") == "reply" else "message"}
+                    if "learning_fallback" in ui:
+                        # Learning (preview): the main model finished a stuck personal model's turn. The
+                        # row is the note's public sentence; the handover's own text (written for the
+                        # model) never shows.
+                        sentence = self.fields(ui["learning_fallback"], {"text"})
+                        if "text" in sentence and self.node(sentence["text"]).kind == "str":
+                            note, content_position = "personal_model_fallback", sentence["text"]
             elif name == "AIMessage" and "row_bot_ui" in metadata:
                 # A delegated agent's approval notice in its parent (B162):
                 # the row names the approval, so React answers it in place.
@@ -358,13 +415,29 @@ class BlobReader:
                     if candidate in {"payload_too_large", "media_unavailable"}:
                         media_error = candidate
         cut_short = name == "AIMessage" and "response_metadata" in fields and self.cut_short(fields["response_metadata"])
+        # Only the personal model's answer says so: never a step that calls a tool (a stuck run's).
+        answered_by = ("personal_model" if name == "AIMessage" and not note and not tool_ids and not tool_ids_lazy
+                       and "response_metadata" in fields and self.personal_model(fields["response_metadata"]) else "")
         return {"message_id": identity, "role": roles[name], "content_position": content_position,
                 "tool_call_ids": tool_ids, "tool_calls": tool_calls,
-                "tool_calls_position": fields.get("tool_calls"), "tool_ids_lazy": tool_ids_lazy,
+                "tool_calls_position": None if note else fields.get("tool_calls"), "tool_ids_lazy": tool_ids_lazy,
                 "tool_call_id": self.text(fields["tool_call_id"]) if "tool_call_id" in fields else "",
                 "attachments": attachments, "media": media, "media_error": media_error, "note": note,
+                "linked_from": linked_from,
                 "approval_id": approval_id, "chart_position": chart_position, "chart_label": chart_label,
-                "cut_short": cut_short}
+                "cut_short": cut_short, "answered_by": answered_by}
+
+    def personal_model(self, position: int) -> bool:
+        """Whether a reply came from a Learning personal-model version (its model's reserved name),
+        for the chat's quiet "Answered by your personal model" line (L2c2). Never the untouched
+        starting model Learning compares against."""
+        keys = self.fields(position, {"model", "model_name"})
+        for key in ("model", "model_name"):
+            if key in keys:
+                value = self.text(keys[key], 256).lower()
+                if re.search(r"row-bot-personal-v\d+", value):
+                    return True
+        return False
 
     def cut_short(self, position: int) -> bool:
         """Whether a reply's provider metadata says the output token limit ended it (F17)."""
@@ -547,10 +620,16 @@ class BlobReader:
             row["media_error"] = record["media_error"]
         if record.get("note"):
             row["note"] = record["note"]
+        if record.get("linked_from"):
+            row["linked_from"] = record["linked_from"]
         if record.get("approval_id"):
             row["approval_id"] = record["approval_id"]
         if record.get("cut_short"):
             row["cut_short"] = True
+        if record.get("answered_by"):
+            row["answered_by"] = record["answered_by"]
+        if record.get("used_lesson"):
+            row["used_lesson"] = True
         content = bytearray()
         for chunk in self.content_chunks(record):
             if len(content) + len(chunk) > maximum:

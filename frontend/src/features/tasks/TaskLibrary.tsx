@@ -43,7 +43,6 @@ import TaskEditor from './TaskEditor';
 import TaskRun from './TaskRun';
 import { taskRuns } from './task-runs';
 import { taskEdits, taskMutation, type TaskCommandOwner } from './task-edits';
-import TaskGraphEditor from './TaskGraphEditor';
 import AppTemplates from './AppTemplates';
 import TaskSettingsEditor from './TaskSettingsEditor';
 import { approvalLevel, approvalTag } from '../shell/approval-levels';
@@ -273,7 +272,6 @@ export function SavedTasks({
   onEdit,
   onCreate,
   onRuns,
-  onGraph,
   onSettings,
   onOpenConversation,
   deliveryDefaults = [],
@@ -294,7 +292,6 @@ export function SavedTasks({
   onCreate?: () => void;
   /** Open the run drawer: review, Run now, history and approvals. */
   onRuns?: (id: string, name: string) => void;
-  onGraph?: (id: string, name: string) => void;
   onSettings?: (id: string, name: string) => void;
   onOpenConversation?: (id: string) => void;
   deliveryDefaults?: ReadonlyArray<{ id: string; label: string }>;
@@ -761,14 +758,6 @@ export function SavedTasks({
                         },
                       ]
                     : []),
-                  ...(onGraph
-                    ? [
-                        {
-                          label: 'Edit workflow steps',
-                          onSelect: () => onGraph(task.id, task.name),
-                        },
-                      ]
-                    : []),
                   ...(onSettings
                     ? [
                         {
@@ -879,7 +868,7 @@ export function SavedTasks({
                         <span>
                           {task.notify_only
                             ? 'Reminder'
-                            : `${task.step_count} ${task.step_count === 1 ? 'step' : 'steps'}`}
+                            : `${task.step_count} ${task.step_count === 1 ? 'message' : 'messages'}`}
                         </span>
                         <span aria-hidden>·</span>
                         <span>{lastRun}</span>
@@ -936,8 +925,8 @@ export function SavedTasks({
                           <span className="visually-hidden">
                             Open run of {task.name}:{' '}
                           </span>
-                          {run && run.steps_total > 0
-                            ? `Step ${Math.min(run.steps_done + 1, run.steps_total)}/${run.steps_total}`
+                          {run && run.steps_total > 1
+                            ? `Message ${Math.min(run.steps_done + 1, run.steps_total)} of ${run.steps_total}`
                             : runStatus(run?.status ?? 'running').label}
                         </button>
                       ) : (
@@ -1093,7 +1082,7 @@ export default function TaskLibrary() {
     ReadonlyArray<{ id: string; label: string }>
   >([]);
   const execution = useMemo(() => taskRuns(controller), [controller]);
-  // The apps set up here (every page), for a prompt step to name the ones it uses (Apps owns them).
+  // The apps set up here (every page), for "Always ask me" to list (Apps owns them).
   const loadApps = useCallback(
     async (signal?: AbortSignal) => {
       const found: { id: string; name: string; icon: string }[] = [];
@@ -1357,39 +1346,6 @@ export default function TaskLibrary() {
         />
       </EditorFrame>
     );
-  if (selected?.session.kind === 'graph')
-    return (
-      <EditorFrame
-        title="Edit workflow steps"
-        label="Workflow step editor"
-        onBack={close}
-      >
-        <TaskGraphEditor
-          key={selected.session.taskId}
-          session={selected.session}
-          taskId={selected.session.taskId}
-          load={controller.taskGraph}
-          loadApps={loadApps}
-          save={selected.graph}
-          onSaved={saved}
-          onCancel={close}
-          onBuilder={() =>
-            taskEditSessions.open(
-              'task',
-              selected.session.taskId,
-              selected.label,
-            )
-          }
-          onTaskSettings={() =>
-            taskEditSessions.open(
-              'settings',
-              selected.session.taskId,
-              selected.label,
-            )
-          }
-        />
-      </EditorFrame>
-    );
   // New and Edit share the full-page editor (B253).
   if (selected?.session.kind === 'task')
     return (
@@ -1409,13 +1365,6 @@ export default function TaskLibrary() {
           onSaved={saved}
           onCancel={close}
           deliveryChannels={delivery?.channels ?? []}
-          onAdvancedSteps={() =>
-            taskEditSessions.open(
-              'graph',
-              selected.session.taskId,
-              selected.label,
-            )
-          }
           onTaskSettings={() =>
             taskEditSessions.open(
               'settings',
@@ -1443,12 +1392,7 @@ export default function TaskLibrary() {
           <h2>Continue editing</h2>
           <ul className="workflow-recovery-list">
             {sessions.drafts.map((draft) => {
-              const area =
-                draft.kind === 'graph'
-                  ? 'Steps'
-                  : draft.kind === 'settings'
-                    ? 'Settings'
-                    : 'Details';
+              const area = draft.kind === 'settings' ? 'Settings' : 'Details';
               const stateLabel = draft.uncertain
                 ? 'save outcome needs review'
                 : draft.busy
@@ -1533,7 +1477,6 @@ export default function TaskLibrary() {
         }
         deliveryOptions={delivery?.channels ?? []}
         onSetDeliveryDefaults={saveDeliveryDefaults}
-        onGraph={(id, name) => taskEditSessions.open('graph', id, name)}
         onSettings={(id, name) => taskEditSessions.open('settings', id, name)}
       />
       <AppTemplates
@@ -1550,7 +1493,7 @@ export default function TaskLibrary() {
           }
         }}
         title={runsFor?.name || 'Workflow runs'}
-        description="Run it, follow its progress and answer approvals"
+        description="Run it, see how each run ended and answer what it asks"
         closeLabel="Close workflow runs"
         className="workflow-run-drawer"
       >
@@ -1560,11 +1503,9 @@ export default function TaskLibrary() {
             taskId={runsFor.id}
             loadReview={controller.taskRunReview}
             loadHistory={controller.taskRuns}
-            loadApprovals={controller.taskApprovals}
             loadRun={controller.taskRun}
             run={execution.run}
             stop={execution.stop}
-            respondApproval={execution.respondApproval}
             openConversation={(id) => {
               setRunsFor(null);
               openConversation(id);

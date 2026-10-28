@@ -320,6 +320,8 @@ class Harness:
         self.groups: tuple[str, ...] = DEFAULT_GROUPS
         self.skill_records: tuple = ()
         self.app_scope: dict | None = None
+        # Learning's ways of working in use (L3b, E7): the stable section the agent reads at a turn's start.
+        self.ways = ""
         self._client: Any = None
         model_ref = shape.model_ref
         # Compaction is A4's contract: the window here never asks for it, so only per-call rewrites show.
@@ -346,6 +348,7 @@ class Harness:
         monkeypatch.setattr("row_bot.memory_policy.build_auto_recall", self._recall)
         monkeypatch.setattr("row_bot.memory_policy.touch_selected_memories", lambda decision: None)
         monkeypatch.setattr("row_bot.memory_policy.record_recall_trace", lambda decision, **kwargs: None)
+        monkeypatch.setattr("row_bot.learning.ways_of_working_text", lambda: self.ways)
 
     def _recall(self, *args: Any, **kwargs: Any) -> SimpleNamespace:
         return SimpleNamespace(allowed=bool(self.memories), reason="selected" if self.memories else "no_match",
@@ -603,6 +606,31 @@ def turn_media_request_changes_tools(h: Harness) -> list[tuple[dict, dict]]:
     return [(last, later)]
 
 
+WAYS_V1 = "WAYS OF WORKING:\nUsing tools:\n- Read a file before summarising it."
+WAYS_V2 = WAYS_V1 + "\nHow to work:\n- Say which file each figure came from."
+
+
+def iteration_ways_of_working_used_mid_turn(h: Harness) -> list[tuple[dict, dict]]:
+    """(a) A way of working put into use mid-turn applies from the next turn (read at turn start, E7)."""
+    h.ways = WAYS_V1
+    state = h.new_turn(None, "Summarise notes.txt for me.", turn="t1")
+    first = h.agent_request(state, turn="t1")
+    _step(state, "call_1", "read_file", {"path": "notes.txt"}, _paragraphs("notes", 6))
+    h.ways = WAYS_V2
+    return [(first, h.agent_request(state, turn="t1"))]
+
+
+def turn_ways_of_working_steady(h: Harness) -> list[tuple[dict, dict]]:
+    """(b) The ways of working in use, unchanged from turn N to N+1: the prefix holds."""
+    h.ways = WAYS_V1
+    state = h.new_turn(None, "Summarise notes.txt for me.", turn="t1")
+    _step(state, "call_1", "read_file", {"path": "notes.txt"}, _paragraphs("notes", 6))
+    last = h.agent_request(state, turn="t1")
+    _answer(state, "Here are the notes in three bullets.")
+    state = h.new_turn(state, "Now compare them with last quarter.", turn="t2")
+    return [(last, h.agent_request(state, turn="t2"))]
+
+
 def chat_only_turn(h: Harness) -> list[tuple[dict, dict]]:
     """Chat Only: turn N -> turn N+1 a minute later with a different recall."""
     h.memories = [MEMORY_A]
@@ -629,6 +657,8 @@ SCENARIOS: dict[str, Callable[[Harness], list[tuple[dict, dict]]]] = {
     "iteration_dedups_repeated_tool_output": iteration_dedups_repeated_tool_output,
     "turn_media_request_changes_tools": turn_media_request_changes_tools,
     "chat_only_turn": chat_only_turn,
+    "iteration_ways_of_working_used_mid_turn": iteration_ways_of_working_used_mid_turn,
+    "turn_ways_of_working_steady": turn_ways_of_working_steady,
 }
 
 # Today's breaks, by the work package of the context and cost plan that fixes them. A package
@@ -659,6 +689,29 @@ def test_each_request_is_a_prefix_of_the_next(agent_module, monkeypatch, scenari
 
     for earlier, later in SCENARIOS[scenario](harness):
         assert_prefix(earlier, later)
+
+
+def test_a_new_way_of_working_costs_one_cache_miss_on_its_first_turn(agent_module, monkeypatch) -> None:
+    # E7: a new version of the ways of working changes the system prompt once, on the first turn after it went
+    # into use; from that turn's second call on, every request is a prefix of the next again.
+    harness = Harness(agent_module, monkeypatch, SHAPES[0])
+    harness.ways = WAYS_V1
+    state = harness.new_turn(None, "Summarise notes.txt for me.", turn="t1")
+    _step(state, "call_1", "read_file", {"path": "notes.txt"}, _paragraphs("notes", 6))
+    last = harness.agent_request(state, turn="t1")
+    _answer(state, "Here are the notes in three bullets.")
+
+    harness.ways = WAYS_V2
+    state = harness.new_turn(state, "Now compare them with last quarter.", turn="t2")
+    first = harness.agent_request(state, turn="t2")
+    _step(state, "call_2", "read_file", {"path": "last_quarter.txt"}, _paragraphs("old", 6))
+    second = harness.agent_request(state, turn="t2")
+
+    with pytest.raises(PrefixBroken, match="system changed"):
+        assert_prefix(last, first)
+    assert "Say which file each figure came from." in json.dumps(first["system"])
+    assert "Say which file each figure came from." not in json.dumps(last["system"])
+    assert_prefix(first, second)
 
 
 # ── DEBUG prefix diff ───────────────────────────────────────────────────────

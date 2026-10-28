@@ -572,55 +572,24 @@ def _query_tools() -> str:
             f"- Global catalog: {len(enabled)} enabled{suffix}, {len(disabled)} disabled",
         ]
         profile_scope = _active_thread_profile_scope()
-        profile = profile_scope.get("profile") if isinstance(profile_scope, dict) else None
-        allow_tools = profile_scope.get("allow_tools") if isinstance(profile_scope, dict) else []
-        runtime_surface = (
-            str(profile_scope.get("runtime_surface") or "").strip()
-            if isinstance(profile_scope, dict)
-            else ""
-        )
-        if isinstance(profile, dict) and allow_tools:
-            active_label = profile.get("display_name") or profile.get("slug") or "active profile"
-            state = "enabled" if profile.get("enabled", True) else "disabled"
-            lines.extend([
-                "",
-                "**Effective Thread Tool Scope**",
-                f"- Active profile: {active_label} ({profile.get('slug')}, {state})",
-                (
-                    "- Runtime enforcement: selected tools are runtime-bound for this thread; "
-                    "other global tools are not bound while this profile is active."
-                ),
-                f"- Profile-selected tool groups: {_format_selected_tool_ids(allow_tools)}",
-            ])
-            runtime_allowlist = profile_scope.get("runtime_allowlist") or []
-            if runtime_allowlist and list(runtime_allowlist) != list(allow_tools):
-                lines.append(
-                    f"- Runtime allow-list: {_format_selected_tool_ids(runtime_allowlist)}"
-                )
+        profile = profile_scope.get("profile")
+        runtime_allowlist = _clean_tool_ids(profile_scope.get("runtime_allowlist") or [])
+        runtime_surface = str(profile_scope.get("runtime_surface") or "").strip()
+        if isinstance(profile, dict) or runtime_allowlist:
+            lines.extend(["", "**Effective Thread Tool Scope**"])
+            if isinstance(profile, dict):
+                active_label = profile.get("display_name") or profile.get("slug") or "active profile"
+                state = "enabled" if profile.get("enabled", True) else "disabled"
+                lines.extend([
+                    f"- Active profile: {active_label} ({profile.get('slug')}, {state})",
+                    f"- {_PROFILE_TOOLS} Its capability: {_capability(profile)}.",
+                ])
+            if runtime_allowlist:
+                lines.append(f"- Runtime allow-list for this turn: {_format_selected_tool_ids(runtime_allowlist)}")
             if runtime_surface.startswith("agent_child"):
                 lines.append(
-                    "- skill_search and skill_load, when present, are separate from the tool-group "
-                    "allowlist; loaded skills can guide the child but cannot add tools or relax its "
-                    "profile, approval, or workspace boundaries."
-                )
-            lines.append("")
-            lines.append("Global tools:")
-        elif isinstance(profile, dict):
-            active_label = profile.get("display_name") or profile.get("slug") or "active profile"
-            state = "enabled" if profile.get("enabled", True) else "disabled"
-            lines.extend([
-                "",
-                "**Effective Thread Tool Scope**",
-                f"- Active profile: {active_label} ({profile.get('slug')}, {state})",
-                (
-                    "- Runtime enforcement: no profile allow-list is active; "
-                    "this profile inherits all globally enabled tools."
-                ),
-            ])
-            if runtime_surface.startswith("agent_child"):
-                lines.append(
-                    "- skill_search and skill_load, when present, are separate from the tool-group "
-                    "allowlist; loaded skills can guide the child but cannot add tools or relax its "
+                    "- skill_search and skill_load, when present, are separate from the tools; "
+                    "loaded skills can guide the child but cannot add tools or relax its "
                     "profile, approval, or workspace boundaries."
                 )
             lines.extend(["", "Global tools:"])
@@ -805,13 +774,15 @@ def _query_insights() -> str:
         else:
             lines.append("- No active insights")
         try:
-            from row_bot.evolution import TERMINAL_PROPOSAL_STATUSES, list_action_runs, list_proposals
+            from row_bot.evolution import TERMINAL_PROPOSAL_STATUSES, learning_draft, list_action_runs, list_proposals
 
             proposals = list_proposals()
+            # Learning's drafts wait to be tested in Learning (L3b): their text doesn't reach the agent before.
             active_proposals = [
                 proposal
                 for proposal in proposals
                 if proposal.get("status") not in TERMINAL_PROPOSAL_STATUSES
+                and not learning_draft(proposal)
             ]
             lines.append(f"- Active proposals: {len(active_proposals)}")
             for proposal in active_proposals[:6]:
@@ -930,11 +901,14 @@ def _clean_tool_ids(items: object) -> list[str]:
     ]
 
 
-def _profile_allow_tools(profile: dict | None) -> list[str]:
-    if not isinstance(profile, dict):
-        return []
+# A profile lists no tools (F31): what a turn may do is its capability and the approval level.
+_PROFILE_TOOLS = ("Profiles list no tools: every enabled tool is available, and the profile's capability "
+                  "and the approval level decide what may run.")
+
+
+def _capability(profile: dict) -> str:
     tool_policy = profile.get("tool_policy_json") if isinstance(profile.get("tool_policy_json"), dict) else {}
-    return _clean_tool_ids(tool_policy.get("allow_tools") or [])
+    return str(tool_policy.get("capability") or "read_only")
 
 
 def _active_runtime_context() -> dict:
@@ -1031,15 +1005,11 @@ def _active_thread_profile_scope() -> dict:
         except Exception:
             profile = None
 
-    allow_tools = _profile_allow_tools(profile)
-    if not allow_tools and profile is None and runtime_allowlist:
-        allow_tools = list(runtime_allowlist)
     return {
         "thread_id": thread_id,
         "runtime_surface": runtime_surface,
         "profile_ref": profile_ref,
         "profile": profile,
-        "allow_tools": allow_tools,
         "runtime_allowlist": runtime_allowlist,
     }
 
@@ -1070,7 +1040,6 @@ def _query_agents() -> str:
             f"- By status: {_counts_by(sampled_runs, 'status')}",
             (
                 "- Defaults: "
-                f"{runtime_settings.max_iterations} model rounds; "
                 f"depth {runtime_settings.max_spawn_depth}; "
                 f"{runtime_settings.max_concurrent_children} active per parent; "
                 f"{runtime_settings.max_active_children_global} active globally; "
@@ -1129,38 +1098,16 @@ def _query_agents() -> str:
 def _query_agent_profiles() -> str:
     try:
         from row_bot.agent_profiles import list_agent_profiles
-        from row_bot.agent_tool_catalog import (
-            count_tool_ids_by_source,
-            format_tool_source_counts,
-        )
 
         profiles = list_agent_profiles(enabled_only=False)
         enabled = [profile for profile in profiles if profile.get("enabled", True)]
-        selected_profiles = []
-        aggregate_tool_counts: dict[str, int] = {}
-        for profile in profiles:
-            tool_policy = profile.get("tool_policy_json") if isinstance(profile.get("tool_policy_json"), dict) else {}
-            allow_tools = [
-                str(name)
-                for name in tool_policy.get("allow_tools") or []
-                if str(name or "").strip()
-            ]
-            if not allow_tools:
-                continue
-            selected_profiles.append(profile)
-            for source, count in count_tool_ids_by_source(allow_tools).items():
-                aggregate_tool_counts[source] = aggregate_tool_counts.get(source, 0) + count
         lines = [
             "**Agent Profiles**",
             f"- Profiles: {len(enabled)} enabled / {len(profiles)} total",
             f"- Sources: {_counts_by(profiles, 'source')}",
             f"- Scopes: {_counts_by(profiles, 'scope')}",
-            f"- Tool modes: {len(profiles) - len(selected_profiles)} inherited enabled tools / "
-            f"{len(selected_profiles)} selected tools",
+            f"- Tools: {_PROFILE_TOOLS}",
         ]
-        aggregate_text = format_tool_source_counts(aggregate_tool_counts)
-        if aggregate_text:
-            lines.append(f"- Selected tool sources: {aggregate_text}")
         profile_scope = _active_thread_profile_scope()
         thread_id = str(profile_scope.get("thread_id") or "").strip()
         active = profile_scope.get("profile")
@@ -1170,33 +1117,8 @@ def _query_agent_profiles() -> str:
             lines.append(
                 "- Active thread profile: "
                 f"{active.get('display_name') or active.get('slug')} "
-                f"({active.get('slug')}, {state})"
+                f"({active.get('slug')}, {state}, {_capability(active)})"
             )
-            active_allow_tools = _clean_tool_ids(profile_scope.get("allow_tools") or [])
-            if active_allow_tools:
-                source_counts = format_tool_source_counts(count_tool_ids_by_source(active_allow_tools))
-                source_suffix = f"; {source_counts}" if source_counts else ""
-                lines.append(
-                    "- Active profile tool mode: "
-                    f"selected tools ({len(active_allow_tools)} selected{source_suffix})"
-                )
-                lines.append(
-                    f"- Active profile selected tools: {_format_selected_tool_ids(active_allow_tools)}"
-                )
-                lines.append(
-                    "- Active profile enforcement: selected tools are runtime-bound; "
-                    "other global tools are not bound for this profile."
-                )
-                runtime_allowlist = _clean_tool_ids(profile_scope.get("runtime_allowlist") or [])
-                if runtime_allowlist and runtime_allowlist != active_allow_tools:
-                    lines.append(
-                        f"- Active runtime allow-list: {_format_selected_tool_ids(runtime_allowlist)}"
-                    )
-            else:
-                lines.append(
-                    "- Active profile tool mode: inherited enabled tools "
-                    "(broad/default; no profile allow-list)"
-                )
         elif active_ref:
             lines.append(f"- Active thread profile: {active_ref} (not found)")
         elif thread_id:
@@ -1211,23 +1133,8 @@ def _query_agent_profiles() -> str:
         lines.append("Available profiles:")
         for profile in profiles[:10]:
             state = "enabled" if profile.get("enabled", True) else "disabled"
-            tool_policy = profile.get("tool_policy_json") if isinstance(profile.get("tool_policy_json"), dict) else {}
             skill_policy = profile.get("skill_policy_json") if isinstance(profile.get("skill_policy_json"), dict) else {}
-            allow_tools = [
-                str(name)
-                for name in tool_policy.get("allow_tools") or []
-                if str(name or "").strip()
-            ]
-            tool_mode = "selected tools" if allow_tools else "inherits enabled tools"
-            policy_bits = [
-                str(tool_policy.get("capability") or "read_only"),
-                f"tools={tool_mode}",
-                f"selected={len(allow_tools)}",
-                f"skills={len(skill_policy.get('skills_override') or [])}",
-            ]
-            source_counts = format_tool_source_counts(count_tool_ids_by_source(allow_tools)) if allow_tools else ""
-            if source_counts:
-                policy_bits.append(f"sources {source_counts}")
+            policy_bits = [_capability(profile), f"skills={len(skill_policy.get('skills_override') or [])}"]
             description = _short_status_text(
                 profile.get("when_to_use") or profile.get("description"),
                 90,
@@ -2486,7 +2393,10 @@ def _send_feedback(
 
 
 def _apply_controlled_proposal(proposal_id: str) -> str:
-    """Apply a proposal through the controlled action-run path."""
+    """Apply a proposal through the controlled action-run path. The approval card pausing the run and Stop are
+    not failures: they go on up."""
+
+    from langgraph.errors import GraphBubbleUp
 
     try:
         from row_bot.evolution import apply_proposal
@@ -2501,6 +2411,8 @@ def _apply_controlled_proposal(proposal_id: str) -> str:
         if rollback:
             details.append(f"Rollback ref: {rollback}")
         return "\n".join(details)
+    except (GraphBubbleUp, InterruptedError):
+        raise
     except Exception as exc:
         return f"Failed to apply proposal: {exc}"
 

@@ -23,9 +23,9 @@ Each profile row can:
 - **Start chat** with that profile;
 - **View**, **Duplicate**, and, for your own profiles, **Edit**, turn on or off, or **Delete**.
 
-**Create profile** describes a new role: its name, description and when to use it, instructions, capability (read only, write capable, or orchestrator), allowed tools and skills, context mode, workspace mode and approval mode. Keep the role narrow: describe the outcome, the sources it may use, and what it must not do.
+**Create profile** describes a new role: its name, description and when to use it, instructions, capability (read only, write capable, or orchestrator), skills, context mode, workspace mode and approval mode. A profile lists no tools: every agent has the tools a chat has, and its capability and the approval level decide what it may do. **Read only** lets it look, never change or send. Keep the role narrow: describe the outcome, the sources it may use, and what it must not do.
 
-To use a profile in an existing conversation, choose it from the composer's **+ › Agent**, which lists each agent with a line on what it does. Profiles do not grant capabilities by themselves. A selected tool must still be enabled, available, and allowed by the conversation's approvals.
+To use a profile in an existing conversation, choose it from the composer's **+ › Agent**, which lists each agent with a line on what it does. Profiles do not grant capabilities by themselves. A tool must still be enabled, available, and allowed by the conversation's approvals.
 
 ## Goals
 
@@ -56,13 +56,13 @@ A completed agent's result is evidence for the parent, not automatic permission 
 
 For coding work, a parent can assign an agent to an existing local folder. Row-Bot registers that folder as the agent's code folder and applies writer ownership to the resolved folder, not merely the process working directory. Agents assigned to distinct folders or worktrees can write in parallel; writers targeting the same folder wait and run serially.
 
-New runs also receive a checkpointed work budget. Settings › Models › **Limits for long work** shows the recommended steps per run, helper levels, helpers at a time, and the optional helper time limit. Extra agents wait in a first-in, first-out queue when capacity is full; changing a setting affects new runs, not work already in progress.
+New runs also receive a checkpointed work budget with no step limit to set: a run goes on while it makes progress. Settings › Models › **Limits for long work** shows helper levels, helpers at a time, and the optional helper time limit. Extra agents wait in a first-in, first-out queue when capacity is full; changing a setting affects new runs, not work already in progress.
 
 If a run appears stuck, open its conversation to read its last update before stopping it. If several agents edit the same resource, give them distinct folders or worktrees, narrow their ownership, or run them sequentially. Keep consequential final actions with the parent and a human approval point.
 
 Row-Bot saves the parent's first continuation checkpoint when asynchronous delegation begins. If a child process outlives its launching shell or the app restarts, resume repairs only genuinely unanswered tool calls with an interruption marker, then wakes the parent from durable child results. It does not replay previously executed work. If a checkpoint cannot be repaired safely, the run remains stopped for review.
 
-Repeated model-and-tool states are detected before a run can loop indefinitely. The fourth identical no-progress state is blocked; a fifth ends the run cleanly with a durable reason. Reaching a configured work limit also finalizes the run instead of leaving it marked as active.
+Repeated model-and-tool states are detected before a run can loop indefinitely. The fourth identical no-progress state is blocked; a fifth ends the run cleanly with a durable reason. After a very long run of steps (a safety ceiling of 1,000) a turn stops and asks **Keep going?**; send **Continue** to pick up from there.
 
 ## What Is Saved
 

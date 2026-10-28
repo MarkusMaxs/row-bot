@@ -38,35 +38,26 @@ def test_load_and_review_do_not_mutate_or_allocate_secret_or_conversation(owner,
     tasks, _, task_id = owner
     before = tasks.read_task_for_edit(task_id)
     monkeypatch.setattr(tasks, "generate_webhook_secret", lambda: pytest.fail("secret generated during review"))
-    snapshot = review(owner, trigger_type="webhook", persistent_enabled=True)
-    assert snapshot.fields.trigger_type == "webhook" and snapshot.fields.persistent_enabled
+    snapshot = review(owner, trigger_type="webhook", missed_runs="run_once")
+    assert snapshot.fields.trigger_type == "webhook" and snapshot.fields.missed_runs == "run_once"
     assert not snapshot.webhook_configured and snapshot.conversation_id is None
     assert tasks.read_task_for_edit(task_id) == before
     assert tasks.get_recent_runs() == []
 
 
-def test_explicit_settings_save_preserves_graph_schedule_delivery_and_run_state(owner):
+def test_explicit_settings_save_preserves_messages_schedule_delivery_and_run_state(owner):
     tasks, _, task_id = owner
-    tasks.update_task(task_id, schedule="daily:08:00", channels=[],
-        steps=[{"id": "p", "type": "prompt", "prompt": "Hidden metadata", "future": {"v": 1}}])
+    tasks.update_task(task_id, schedule="daily:08:00", channels=[])
     before = tasks.get_task(task_id)
-    result = save(review(owner, concurrency_group="synthetic-gpu", approval_mode="approve",
-                        persistent_enabled=True, model_override="model:synthetic:agent"))
+    result = save(review(owner, missed_runs="run_once", approval_mode="approve",
+                        model_override="model:synthetic:agent", send_results="digest"))
     after = tasks.get_task(task_id)
-    assert result.fields.concurrency_group == "synthetic-gpu"
-    assert result.conversation_id.startswith("pt_")
-    assert after["steps"] == before["steps"] and after["schedule"] == "daily:08:00"
+    assert result.fields.missed_runs == "run_once"
+    assert result.fields.send_results == after["send_results"] == "digest"
+    assert result.conversation_id is None, "saving settings never makes a conversation"
+    assert after["prompts"] == before["prompts"] and after["schedule"] == "daily:08:00"
     assert after["channels"] == [] and not after["enabled"]
     assert tasks.get_recent_runs() == []
-
-
-def test_turning_persistence_off_retains_existing_conversation_and_history(owner, monkeypatch):
-    tasks, _, task_id = owner
-    monkeypatch.setattr(tasks, "_delete_thread", lambda *a: pytest.fail("delete user content"), raising=False)
-    tasks.update_task(task_id, persistent_thread_id="existing-thread")
-    result = save(review(owner, persistent_enabled=False))
-    assert result.conversation_id is None
-    assert tasks.get_task(task_id)["persistent_thread_id"] is None
 
 
 def test_webhook_secret_generated_only_on_activation_and_never_in_dto(owner):
@@ -76,7 +67,7 @@ def test_webhook_secret_generated_only_on_activation_and_never_in_dto(owner):
     assert len(secret) >= 24 and result.webhook_configured
     assert secret not in json.dumps(asdict(result))
     assert "secret" not in asdict(result)
-    result = save(review(owner, concurrency_group="other"))
+    result = save(review(owner, missed_runs="run_once"))
     assert tasks.get_task(task_id)["trigger"]["secret"] == secret
     assert secret not in json.dumps(asdict(result))
 
@@ -84,7 +75,7 @@ def test_webhook_secret_generated_only_on_activation_and_never_in_dto(owner):
 def test_existing_unprotected_legacy_webhook_is_not_silently_rekeyed(owner):
     tasks, _, task_id = owner
     tasks.update_task(task_id, trigger={"type": "webhook", "secret": "", "future": 3})
-    result = save(review(owner, concurrency_group="other"))
+    result = save(review(owner, missed_runs="run_once"))
     assert not result.webhook_configured
     assert tasks.get_task(task_id)["trigger"] == {"type": "webhook", "secret": "", "future": 3}
 
@@ -147,7 +138,7 @@ def test_download_rejects_stale_revision_and_non_webhook(owner):
     snapshot = control.get_task_settings(owner[2])
     with pytest.raises(control.TaskSettingsError, match="task_webhook_unavailable"):
         control.export_webhook_configuration(owner[2], expected_revision=snapshot.revision, validate=lambda: None)
-    save(review(owner, concurrency_group="updated"))
+    save(review(owner, missed_runs="run_once"))
     with pytest.raises(control.TaskSettingsError, match="task_revision_conflict"):
         control.export_webhook_configuration(owner[2], expected_revision=snapshot.revision, validate=lambda: None)
 
@@ -206,13 +197,13 @@ def test_unchanged_legacy_model_is_not_rewritten_or_revalidated(owner, monkeypat
     tasks, _, task_id = owner
     tasks.update_task(task_id, model_override="legacy-model")
     monkeypatch.setattr(tasks, "_canonicalize_workflow_model_override", lambda *a: pytest.fail("legacy rewritten"))
-    result = save(review(owner, concurrency_group="other"))
+    result = save(review(owner, missed_runs="run_once"))
     assert result.fields.model_override == "legacy-model"
 
 
 @pytest.mark.parametrize("change", [
     {"approval_mode": "everything"}, {"trigger_type": "unknown"}, {"trigger_type": "task_complete"},
-    {"trigger_task_id": "unexpected"}, {"persistent_enabled": 1}, {"concurrency_group": " x "},
+    {"trigger_task_id": "unexpected"}, {"missed_runs": "sometimes"},
     {"agent_profile_id": "../outside"}, {"model_override": "x" * 1025},
 ])
 def test_invalid_fields_never_save(owner, change):
@@ -230,14 +221,14 @@ def test_completion_trigger_saved_without_execution_and_missing_or_cycles_reject
     assert tasks.get_recent_runs() == []
     tasks.update_task(child, trigger={"type": "task_complete", "target_task": task_id})
     with pytest.raises(control.TaskSettingsError, match="task_trigger_cycle"):
-        save(review(owner, concurrency_group="changed"))
+        save(review(owner, missed_runs="run_once"))
     with pytest.raises(control.TaskSettingsError, match="task_trigger_target_unavailable"):
         save(review(owner, trigger_type="task_complete", trigger_task_id="missing"))
 
 
 @pytest.mark.parametrize("reject_at", [1, 2])
 def test_revocation_rolls_back_settings_after_admission_or_before_commit(owner, reject_at):
-    snapshot = review(owner, concurrency_group="changed")
+    snapshot = review(owner, missed_runs="run_once")
     before = owner[0].read_task_for_edit(owner[2])
     calls = 0
     def validate():
@@ -251,7 +242,7 @@ def test_revocation_rolls_back_settings_after_admission_or_before_commit(owner, 
 
 
 def test_concurrent_settings_double_submit_admits_one_revision(owner):
-    snapshot = review(owner, concurrency_group="changed")
+    snapshot = review(owner, missed_runs="run_once")
     barrier = threading.Barrier(2)
     results = []
     def submit():

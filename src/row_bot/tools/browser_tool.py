@@ -681,7 +681,7 @@ def browser_upload(ref: str, files: list[str]) -> str:
 def _payload(source: Any) -> dict[str, Any]:
     from row_bot.media_sources import SourceError
 
-    limit = 50 * 1024 * 1024
+    limit = 500 * 1024 * 1024
     if source.size_bytes > limit:
         raise SourceError(f"{source.name} is over 50 MB, too large to upload from here.")
     if source.ref:

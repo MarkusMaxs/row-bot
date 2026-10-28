@@ -38,9 +38,9 @@ StoppedBy = Literal["", "you", "agent", "limit", "size", "conversation", "quit",
 Problem = Literal["", "not_saved", "too_large", "nothing_recorded"]
 
 DEFAULT_MINUTES = 5
-MAX_MINUTES: dict[str, int] = {"browser": 15, "screen": 10}
-# A chat holds files up to 25 MB; recordings stop before their video reaches this.
-SIZE_LIMIT = 20 * 1024 * 1024
+MAX_MINUTES: dict[str, int] = {"browser": 60, "screen": 60}
+# A chat holds files up to MAX_ATTACHMENT_BYTES; recordings stop before their video reaches this.
+SIZE_LIMIT = 190 * 1024 * 1024
 # Finished recordings listed per conversation (their videos stay in its files).
 KEEP_PER_CONVERSATION = 100
 _FOLDER = "recordings"

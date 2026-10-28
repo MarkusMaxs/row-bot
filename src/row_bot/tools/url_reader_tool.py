@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import re
+import socket
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -30,20 +31,87 @@ class _ReadURLInput(BaseModel):
 
 
 _USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
-_PDF_MAX_BYTES = 25 * 1024 * 1024
-_PDF_MAX_PAGES = 200
+_PDF_MAX_BYTES = 200 * 1024 * 1024
+_PDF_MAX_PAGES = 2000
 _TIMEOUT = 15
 _MAX_REDIRECTS = 10
 _REDIRECTS = {301, 302, 303, 307, 308}
 _NOT_PUBLIC = "not_public"
 NOT_PUBLIC_MESSAGE = (
-    "This link can't be read: read_url opens public web pages only, never an address on this computer, "
-    "the local network or a cloud metadata service (this includes links that redirect there)."
+    "This link can't be read: read_url opens public web pages, and an address on this computer or your "
+    "network only once this chat allows it; never a cloud metadata service, and not a link that redirects "
+    "to an address this chat hasn't allowed."
 )
 
 
 class _NotPublic(Exception):
     pass
+
+
+def _browser_grants():
+    """The browser's grants and this conversation: an address allowed in either tool opens in both."""
+    from row_bot.tools import browser_tool
+
+    conversation = browser_tool._get_thread_id()
+    return browser_tool.get_session_manager().get_session(conversation), conversation
+
+
+def _local_permission(url: str) -> str | None:
+    """Ask before reading an address on this computer or the person's network (5.3.1 A2): the refusal, or None.
+
+    None too for any other link, which ``_public_get`` checks. Like the browser, it asks once per address
+    and chat by the approval level, and a server Row-Bot started in this chat opens without asking. Row-Bot
+    itself never does.
+    """
+    from row_bot.browser import local_access as _local
+    from row_bot.tools.approval_gate import approval_check
+
+    origin = _local.local_development_origin(url)
+    if origin is None:
+        return None
+    if _local.is_row_bot_origin(origin):
+        return _local.row_bot_refusal(origin)
+    session, conversation = _browser_grants()
+    if session.local_address_grant(conversation, origin) is not None:
+        return None
+    if _local.row_bot_server(origin, conversation):
+        session.allow_local_address(conversation, origin, source="row_bot_server")
+        return None
+    label = _local.address_label(origin)
+    refusal, line = approval_check(
+        {**_local.approval_request(origin, tool="read_url"),
+         "question": f"Allow Row-Bot to read {label} in this chat?"},
+        risks=("reads an address on this computer or your network",),
+        blocked_message=(f"BLOCKED: Reading {label} needs approval, and this chat is on Block. "
+                         "Ask the person to allow it or change the approval level."),
+        cancelled_message=f"The person didn't allow {label}; it wasn't read.",
+    )
+    if refusal:
+        return refusal
+    session.allow_local_address(conversation, origin, source=_local.source_of(line))
+    return None
+
+
+def _granted_addresses(url: str) -> list[str] | None:
+    """The addresses of a local link this chat allowed, looked up once; None when it isn't allowed."""
+    from row_bot.browser import local_access as _local
+    from row_bot.browser.addresses import canonical_address, is_metadata_address
+
+    origin = _local.local_development_origin(url)
+    if origin is None or _local.is_row_bot_origin(origin):
+        return None
+    session, conversation = _browser_grants()
+    if session.local_address_grant(conversation, origin) is None:
+        return None
+    parts = urlsplit(url)
+    try:
+        found = socket.getaddrinfo(parts.hostname, _local.origin_port(origin), type=socket.SOCK_STREAM)
+    except OSError:
+        raise ConnectionError(f"could not resolve {parts.hostname}") from None
+    addresses = list(dict.fromkeys(item[4][0].split("%", 1)[0] for item in found))
+    if not addresses or any(is_metadata_address(canonical_address(address)) for address in addresses):
+        return None
+    return addresses
 
 
 @contextmanager
@@ -52,8 +120,8 @@ def _public_get(url: str) -> Iterator[tuple[str, httpx.Response]]:
 
     A page the agent reads can tell it what to read next, so each hop (the link and every redirect) is
     checked on its own: http(s) without a user name or password, a name that resolves only to public
-    addresses, and a connection to one of those checked addresses with no second lookup, so a rebinding name
-    can't swap in a private one.
+    addresses (or an address on this computer or the network this chat allowed), and a connection to one of
+    those checked addresses with no second lookup, so a rebinding name can't swap in a private one.
     """
     deadline = time.monotonic() + _TIMEOUT * 4
     for _hop in range(_MAX_REDIRECTS + 1):
@@ -66,7 +134,9 @@ def _public_get(url: str) -> Iterator[tuple[str, httpx.Response]]:
         try:
             addresses = _public_addresses(target.raw_host.decode("ascii").rstrip("."), _NOT_PUBLIC)
         except ValueError as exc:
-            raise _NotPublic() from exc
+            addresses = _granted_addresses(str(target))
+            if addresses is None:
+                raise _NotPublic() from exc
         except ConnectionError:
             raise ConnectionError(f"could not resolve {target.host}") from None
         transport = _Pinned(target.host, addresses, deadline)
@@ -106,8 +176,13 @@ def _read_url(url: str, offset: int = 0, limit: int = PAGE_CHARS) -> str:
     """Fetch a webpage or PDF and return a page of its text content."""
     from bs4 import BeautifulSoup
 
+    url = str(url or "").strip()
+    # Asked before fetching: the approval pauses the turn, which a fetch error must not swallow.
+    refusal = _local_permission(url)
+    if refusal:
+        return refusal
     try:
-        with _public_get(str(url or "").strip()) as (source, response):
+        with _public_get(url) as (source, response):
             chunks, size = [], 0
             for chunk in response.iter_bytes(64 * 1024):
                 size += len(chunk)

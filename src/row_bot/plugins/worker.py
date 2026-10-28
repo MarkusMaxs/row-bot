@@ -22,7 +22,7 @@ from row_bot.plugins.worker_protocol import Peer, ProtocolError, unpack
 from row_bot.plugins.worker_ownership import WindowsJob as _WindowsJob
 
 MAX_FRAME = 4 * 1024 * 1024
-CALL_TIMEOUT = 60.0
+CALL_TIMEOUT = 600.0  # A plugin may do real work (an export, a render); Stop still ends it (5.3.1 A5).
 
 
 class WorkerError(RuntimeError):
