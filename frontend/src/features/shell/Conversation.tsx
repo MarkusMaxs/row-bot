@@ -165,6 +165,11 @@ const CONTEXT_HIDDEN_KEY = 'row-bot.context-hidden.v1';
 
 /** Below 740px Context floats; a floating chat docks it again from 780px. */
 /** Too narrow for the details rail beside a comfortable reading column (U3). */
+/** Room for the details as a card beside a full reading column (U21): a wide window. */
+export function isRoomyChat(width: number, roomy: boolean): boolean {
+  return roomy ? width >= 1060 : width >= 1100;
+}
+
 export function isNarrowChat(width: number, narrow: boolean): boolean {
   return narrow ? width < 980 : width < 940;
 }
@@ -528,6 +533,7 @@ export default function Conversation({
   const chatContentRef = useRef<HTMLDivElement>(null);
   const chatWorkspaceRef = useRef<HTMLDivElement>(null);
   const [narrowChat, setNarrowChat] = useState(false);
+  const [roomyChat, setRoomyChat] = useState(false);
   const contextHost = useContextHost();
   const compactPlacement = contextPlacement === 'compact';
   // Without a host (isolated renders) Context renders in place, as before.
@@ -594,7 +600,10 @@ export default function Conversation({
     if (!element) return;
     // A hidden section (Home, a route) measures 0: keep the last mode.
     const measure = (width: number) => {
-      if (width > 0) setNarrowChat((narrow) => isNarrowChat(width, narrow));
+      if (width > 0) {
+        setNarrowChat((narrow) => isNarrowChat(width, narrow));
+        setRoomyChat((roomy) => isRoomyChat(width, roomy));
+      }
     };
     measure(element.getBoundingClientRect().width);
     if (typeof ResizeObserver === 'undefined') return;
@@ -3152,7 +3161,7 @@ export default function Conversation({
       deliveries={deliveries}
     >
       <div
-        className={`chat-workspace${compactContext ? ' compact-context' : ''}${pinnedContext ? ' details-wide' : ''}${pinnedContext && cardActive ? ' details-open' : ''}`}
+        className={`chat-workspace${compactContext ? ' compact-context' : ''}${pinnedContext ? ` details-wide ${roomyChat ? 'details-float' : 'details-rail'}` : ''}${pinnedContext && cardActive ? ' details-open' : ''}`}
         ref={chatWorkspaceRef}
       >
         <div
