@@ -74,8 +74,12 @@ class PageRecorder:
         on_end: Callable[[str, Path | None], None],
         clock: Callable[[], float] = time.monotonic,
         tick: float = 1.0 / FPS,
+        width: int = 0,
     ) -> None:
         self.path = Path(path)
+        # The video is at least this wide: a smaller first picture (the chat's live thumbnail, when someone
+        # has the chat open) is scaled up rather than setting the whole recording's size.
+        self.width = int(width)
         self._tick = float(tick)
         self.max_seconds = float(max_seconds)
         self.size_limit = int(size_limit)
@@ -190,7 +194,7 @@ class PageRecorder:
                 if data is not None:
                     if container is None:
                         first = Image.open(io.BytesIO(data))
-                        scale = min(1.0, MAX_SIDE / max(first.size))
+                        scale = min(MAX_SIDE / max(first.size), max(1.0, self.width / first.size[0]))
                         size = (_even(first.size[0] * scale), _even(first.size[1] * scale))
                         self.path.parent.mkdir(parents=True, exist_ok=True)
                         container = av.open(str(self.path), mode="w", format="mp4")
