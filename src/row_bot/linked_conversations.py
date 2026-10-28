@@ -18,6 +18,7 @@ Rules:
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
 import threading
 import time
@@ -165,9 +166,53 @@ def resolve(target: str, *, exclude: str = "") -> str:
     named = [conversation_id for conversation_id in found if conversation_id != exclude]
     if len(named) == 1:
         return named[0]
-    if not named:
-        raise LinkError(f"No conversation is called “{given}”. Use conversation_links, or its id.")
-    raise LinkError(f"{len(named)} conversations are called “{given}”: use its id.")
+    if len(named) > 1:
+        raise LinkError(f"{len(named)} conversations are called “{given}”: use its id.")
+    workflow = _workflow_conversation(given, exclude=exclude)
+    if workflow:
+        return workflow
+    near = _near_names(given)
+    raise LinkError(f"No conversation or workflow is called “{given}”."
+                    + (f" Did you mean {', '.join(f'“{name}”' for name in near)}?" if near else "")
+                    + " Use conversation_links, or its id.")
+
+
+def _bare(name: str) -> str:
+    """A name without its leading icon, for matching: "⚡ Growth | X content" is "growth | x content"."""
+    return re.sub(r"^[^\w]+", "", str(name or ""), flags=re.UNICODE).strip().casefold()
+
+
+def _workflow_conversation(given: str, *, exclude: str = "") -> str:
+    """A workflow's own conversation, by the workflow's id or name; made now if it hasn't run yet."""
+    import row_bot.tasks as tasks_db
+
+    wanted = _bare(given)
+    matches = [task for task in tasks_db.list_tasks()
+               if not task.get("notify_only") and (task["id"] == given or _bare(task["name"]) == wanted)]
+    if len(matches) > 1:
+        raise LinkError(f"{len(matches)} workflows are called “{given}”: use its id from task_list.")
+    if not matches:
+        return ""
+    conversation_id = tasks_db._prepare_task_thread(matches[0])
+    if conversation_id == exclude:
+        raise LinkError("That's this conversation.")
+    return conversation_id
+
+
+def _near_names(given: str) -> list[str]:
+    """Up to three conversation or workflow names close to *given*."""
+    import difflib
+
+    import row_bot.tasks as tasks_db
+    from row_bot import threads
+
+    with closing(sqlite3.connect(threads.DB_PATH)) as conn:
+        names = [str(row[0]) for row in conn.execute(
+            "SELECT name FROM thread_meta WHERE COALESCE(thread_type, '') != 'agent_child' "
+            "AND COALESCE(name, '') != '' ORDER BY updated_at DESC LIMIT 500")]
+    names += [str(task["name"]) for task in tasks_db.list_tasks() if not task.get("notify_only")]
+    by_bare = {_bare(name): name for name in reversed(names)}
+    return [by_bare[bare] for bare in difflib.get_close_matches(_bare(given), list(by_bare), n=3, cutoff=0.6)]
 
 
 # --- Starting and proposing --------------------------------------------------------------------------
