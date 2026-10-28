@@ -30,6 +30,8 @@ Topics (add one here, then publish it where its state changes):
   needing them).
 - ``models``: the saved model catalog: refreshed (at start-up, every six hours,
   on Refresh, after a provider sign-in), or a provider disconnected (B411).
+- ``notices``: a new background notice ("Row-Bot sent you report.pdf", a
+  workflow finished), for windows with no conversation stream to carry it.
 - ``learning``: Row-Bot Learning (preview): a setting or command, a job or
   version changing state, a comparison starting, moving on or ending, the
   vault taking new work, a personal model's use (``learning.changed``).
@@ -45,7 +47,8 @@ from typing import Literal, ParamSpec, TypeVar, get_args
 P = ParamSpec("P")
 R = TypeVar("R")
 
-Topic = Literal["conversations", "runs", "approvals", "helpers", "processes", "monitor", "models", "learning"]
+Topic = Literal["conversations", "runs", "approvals", "helpers", "processes", "monitor", "models", "notices",
+                "learning"]
 TOPICS: tuple[str, ...] = get_args(Topic)
 
 
