@@ -106,6 +106,8 @@ def test_a_mark_resets_when_its_message_is_gone() -> None:
 
 
 def test_browser_snapshots_are_stubbed_on_the_same_jumps(monkeypatch) -> None:
+    # About stubbing alone: the progress note after silent tool rounds (one request each) is kept out of it.
+    monkeypatch.setattr(agent, "SILENT_ROUNDS", 1_000)
     conversation = AgentConversation(agent, monkeypatch, context_window=40_000)
     conversation.say("Walk through the docs pages.")
     requests = []
