@@ -220,6 +220,10 @@ test('a run on Hugging Face: its stage, steps, cost so far and Cancel; lost cont
 
   for (const [state, words] of [
     ['uploading', 'Uploading your examples to Hugging Face'],
+    [
+      'queued',
+      'Hugging Face is waiting for a free Nvidia A100. No charge while it waits.',
+    ],
     ['setting-up', 'Setting up training on Hugging Face…'],
     ['training', /on Hugging Face · step 118 of \d+/],
     ['exporting', 'Building the model file on Hugging Face…'],

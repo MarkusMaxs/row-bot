@@ -5650,6 +5650,8 @@ def c1_learning(action: str, name: str = "", x_fixture_token: str = Header(defau
                 hub.say(remote.id, "progress", step=118 if stage == "training" else steps, steps_total=steps,
                         loss=0.31, seconds_per_step=41.0)
             trainer.tick()
+        if name == "queued":  # Hugging Face has no free card of the kind yet (SCHEDULING)
+            trainer.tick()
         if name == "lost":
             hub.fail["job"] = hub_module.HubError("network")
             trainer.tick()
