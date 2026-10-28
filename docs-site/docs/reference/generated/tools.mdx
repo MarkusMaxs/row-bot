@@ -8,7 +8,7 @@ import GeneratedNotice from '@site/src/components/GeneratedNotice';
 # Tools
 
 <!-- generated-from: scripts/docs/collect_inventory.py -->
-<!-- inventory-hash: f7e24a7dc29b74de -->
+<!-- inventory-hash: 9d2f0a8fe959dc1b -->
 
 <GeneratedNotice source="scripts/docs/collect_inventory.py" />
 
@@ -35,6 +35,7 @@ import GeneratedNotice from '@site/src/components/GeneratedNotice';
 | goal | goal_guide | Guidance for durable /goal progress tracking. | Operation-dependent approval | `tool_guides/goal_guide/SKILL.md` | `src/row_bot/tools/goal_tool.py` |
 | image_gen | Image Gen | Image generation tool - generate and edit images via OpenAI / Google | No tool-wide destructive classification |  | `src/row_bot/tools/image_gen_tool.py` |
 | mcp | mcp_guide | Guidance for using external MCP tools safely. | Approval-gated: MCP destructive tool lookup failed: %s | `tool_guides/mcp_guide/SKILL.md` | `src/row_bot/tools/mcp_tool.py` |
+| media | Media | Library Media for the agent (5.3.1 B3): ``media_find``, ``media_tag`` and ``media_bring`` | No tool-wide destructive classification |  | `src/row_bot/tools/media_tool.py` |
 | memory | Memory | Memory tool - save, search, list, update, delete, link, and explore memories | Approval-gated: delete_memory |  | `src/row_bot/tools/memory_tool.py` |
 | outlook | Outlook | Outlook mail and calendar through Microsoft Graph v1.0, signed in with the person's own Microsoft app | Operation-dependent approval |  | `src/row_bot/tools/outlook_tool.py` |
 | pages | pages_guide | Guidance for making interactive pages beside the chat with page_create, page_update and page_read. | Operation-dependent approval | `tool_guides/pages_guide/SKILL.md` | `src/row_bot/tools/pages_tool.py` |

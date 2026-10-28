@@ -5309,6 +5309,37 @@ class PagePage(WireModel):
     items: list[PageView] = Field(max_length=500)
 
 
+MediaTag = Annotated[str, StringConstraints(min_length=1, max_length=40)]
+
+
+class MediaItem(WireModel):
+    """One picture, video or sound in Library › Media (5.3.1 B3), from the chat that keeps it."""
+    ref: str = Field(min_length=3, max_length=300)
+    name: str = Field(min_length=1, max_length=240)
+    kind: Literal["image", "video", "audio"]
+    mime_type: str = Field(max_length=64)
+    size: int = Field(ge=1)
+    added_at: str = Field(max_length=40)
+    conversation_id: str = Field(min_length=1, max_length=256)
+    conversation_title: str = Field(default="", max_length=256)
+    tags: list[MediaTag] = Field(default_factory=list, max_length=12)
+
+
+class MediaPage(WireModel):
+    """Library › Media: newest first."""
+    items: list[MediaItem] = Field(max_length=500)
+
+
+class MediaTagsWrite(WireModel):
+    ref: str = Field(min_length=3, max_length=300)
+    tags: list[MediaTag] = Field(max_length=12)
+
+
+class MediaTags(WireModel):
+    ref: str = Field(min_length=3, max_length=300)
+    tags: list[MediaTag] = Field(max_length=12)
+
+
 class PageTheme(WireModel):
     """Row-Bot's colours for both themes (token name to colour) and the one in use."""
     mode: Literal["light", "dark"]

@@ -1086,6 +1086,7 @@ _STATUS['upload_too_large'] = 413
 # An answer that doesn't fit Row-Bot's question, or answers sent for an approval (N4).
 _STATUS['question_answer_invalid'] = 422
 _STATUS['approval_edit_invalid'] = 422
+_STATUS['media_unavailable'] = 404
 _STATUS['scheduled_post_unavailable'] = 404
 _STATUS['app_not_connected'] = 409  # A workflow template whose app is not connected yet.
 # Pages (N5): gone, not valid, too big, written to too often, or nothing to send.
@@ -5589,6 +5590,28 @@ def create_router(
         from row_bot.pages import views
 
         return await respond(request, dto.PagePage, await call(views, (conversation_id or "")[:256] or None))
+
+    @router.get("/media")
+    async def media_list(request: Request, query: str = "", kind: str = "") -> JSONResponse:
+        # Library › Media (5.3.1 B3): every picture, video and sound in the chats, newest first.
+        await session(request)
+        from row_bot import media_library
+
+        items = await call(media_library.items, query=query[:200],
+                           kind=kind if kind in {"image", "video", "audio"} else "", limit=500)
+        return await respond(request, dto.MediaPage, {"items": items})
+
+    @router.put("/media/tags")
+    async def media_tags(request: Request) -> JSONResponse:
+        await session(request, lane="mutation")
+        body = await _body(request, dto.MediaTagsWrite, 16 * 1024)
+        from row_bot import media_library
+
+        try:
+            tags = await call(media_library.set_tags, body.ref, body.tags)
+        except media_library.MediaError:
+            raise ProtocolError("media_unavailable", 404) from None
+        return await respond(request, dto.MediaTags, {"ref": body.ref, "tags": tags})
 
     @router.get("/pages/{page_id}")
     async def page_read(request: Request, page_id: str) -> JSONResponse:

@@ -949,6 +949,11 @@ export interface ClientTransport {
   ): Promise<Wire.ExportSaved>;
   attention?(signal?: AbortSignal): Promise<Wire.AttentionSnapshot>;
   pendingApprovals?(signal?: AbortSignal): Promise<Wire.PendingApprovalPage>;
+  media?(
+    filter: { query?: string; kind?: string },
+    signal?: AbortSignal,
+  ): Promise<Wire.MediaPage>;
+  setMediaTags?(ref: string, tags: string[]): Promise<Wire.MediaTags>;
   scheduledPosts?(signal?: AbortSignal): Promise<Wire.ScheduledPostPage>;
   cancelScheduledPost?(id: string): Promise<Wire.ScheduledPostCancelled>;
   monitorLogs?(limit?: number, signal?: AbortSignal): Promise<Wire.MonitorLogs>;
