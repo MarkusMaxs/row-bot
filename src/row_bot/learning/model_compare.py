@@ -196,6 +196,11 @@ def summarize(arms: Sequence[Mapping[str, Any]], tables: Mapping[str, Mapping[st
                     default=None) if baseline else None
     if not rows:
         overall = {"verdict": "unclear", "recommend": None, "line": "Nothing could be compared."}
+    elif not baseline or not any(baseline in row["passed"] for row in rows):
+        # Only the main model ran beside it: nothing says whether training helped (C1, 28 Oct).
+        overall = {"verdict": "unclear", "recommend": None,
+                   "line": f"Row-Bot couldn't run {baseline_label}, so it can't tell yet whether training helped. "
+                           "Not used."}
     elif recommend is not None and not worse:
         overall = {"verdict": "better", "recommend": recommend["kind"],
                    "line": f"Better at {kinds.phrase(recommend['kind'])} than {baseline_label}: "
@@ -318,11 +323,16 @@ class Comparer:
         model = _trained_from(version, self._root) or weights.MODELS.get(
             gate.read_settings(self._root).starting_model, weights.QWEN35_9B)
         found = weights.status(model, self._root)
-        if found.state != "downloaded":
+        built = base_model.read(model.id, self._root)
+        # A version trained on Hugging Face brings its untouched starting model as a GGUF the job built (C1): it
+        # runs here without the starting model's own files on this computer.
+        built_here = built is not None and bool(built.gguf) and             (base_model.folder(model.id, self._root) / str(built.gguf)).is_file()
+        if found.state != "downloaded" and not built_here:
             return None, "engine_missing"
         recipe = recipes.for_model(model.id, hardware.peek()) or recipes.current(self._root)
         return base_model.ensure(root=self._root, engine_status=engine.status(self._root), model=model,
-                                 weights_folder=found.folder, weights_bytes=model.weights_bytes or model.download_bytes,
+                                 weights_folder=found.folder if found.state == "downloaded" else None,
+                                 weights_bytes=model.weights_bytes or model.download_bytes,
                                  recipe=recipe, runtime=runtime)
 
     def _baseline(self, version: int, runtime: str = "ollama") -> tuple[str, str, str | None, str | None, str | None]:

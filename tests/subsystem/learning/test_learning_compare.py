@@ -408,3 +408,50 @@ def test_a_version_is_compared_with_its_own_starting_model_after_the_person_chan
 
     assert served == ["qwen3.5-2b"]
     assert next(arm for arm in result["arms"] if arm["key"] == "base")["model_ref"] == BASE
+
+
+@pytest.mark.parametrize(("built", "served_from"), [(True, None), (False, "missing")])
+def test_a_version_trained_on_hugging_face_is_compared_with_the_starting_model_its_job_built(
+        learning_on, monkeypatch, built, served_from):
+    """C1, 28 Oct: a 9B trained on Hugging Face on a computer that never downloaded the 9B's own files said "The
+    starting model couldn't run here", although the job had built and Row-Bot had downloaded its untouched GGUF."""
+
+    from row_bot.learning.training import base_model, weights
+
+    LearningStore(learning_on).create()
+    save_learning_settings(learning_on, enabled=True, starting_model="qwen3.5-9b")
+    folder = releases.version_dir(1, learning_on)
+    releases.write_state(folder, releases.VersionState(version=1, phase=releases.READY, job_id="job_1",
+                                                       model_ref=PERSONAL, runtime="row_bot"))
+    monkeypatch.setattr(weights, "status", lambda model, root=None: weights.WeightsStatus("not_downloaded"))
+    if built:
+        target = base_model.folder("qwen3.5-9b", learning_on)
+        target.mkdir(parents=True)
+        (target / "qwen3.5-9b-Q8_0.gguf").write_bytes(b"GGUF untouched")
+        base_model.write(base_model.BaseState("qwen3.5-9b", "exported", gguf="qwen3.5-9b-Q8_0.gguf",
+                                              runtime="row_bot"), learning_on)
+    served: list[tuple] = []
+    monkeypatch.setattr(base_model, "ensure", lambda **kwargs: served.append(
+        (kwargs["model"].id, kwargs["weights_folder"])) or (BASE, None))
+    comparer = _comparer(learning_on)
+    comparer._baseline_model = None  # noqa: SLF001 - the product's own starting model this time
+
+    ref, reason = comparer._starting_model("row_bot", 1)  # noqa: SLF001
+
+    if built:
+        assert (ref, reason, served) == (BASE, None, [("qwen3.5-9b", None)])
+    else:
+        assert (ref, reason, served) == (None, "engine_missing", [])
+
+
+def test_without_its_starting_model_the_verdict_never_claims_no_difference_from_it():
+    arms = [{"key": "new", "label": "v2 (new)"}, {"key": "main", "label": "GPT-6.1 Sol"}]
+    tables = {"new": {"document_lookups": (15, 16)}, "main": {"document_lookups": (16, 16)}}
+
+    _rows, overall = model_compare.summarize(arms, tables, new="new", baseline="base",
+                                             baseline_label="the starting model")
+
+    assert overall == {"verdict": "unclear", "recommend": None,
+                       "line": "Row-Bot couldn't run the starting model, so it can't tell yet whether training "
+                               "helped. Not used."}
+
