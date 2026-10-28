@@ -85,6 +85,7 @@ def test_the_panel_reads_changes_and_goes_back_on_a_project(service, studio, mon
                              json={"base": 1, "scenes": scenes, "captions": True})
         assert changed.status_code == 200, changed.text
         assert (changed.json()["number"], changed.json()["versions"][0]["by"]) == (2, "you")
+        assert changed.json()["status"] in {"voicing", "rendering", "made"}, "the panel follows it being made"
         assert changed.json()["changed"] == [scenes[0]["scene_id"]]
         second = _made(client, headers, project.project_id)
         assert [scene["line"] for scene in second["scenes"]] == ["Then pick the plan that fits.", "First, sign up."]
