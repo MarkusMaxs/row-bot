@@ -44,6 +44,8 @@ class _VideoInput(BaseModel):
     voice_lines: bool | None = Field(default=None, description="Say the lines (default true).")
     aspect: Literal["", "16:9", "1:1", "9:16"] | None = Field(
         default=None, description="create, change: the video's shape ('' keeps its first video's).")
+    brand: bool | None = Field(default=None, description="create, change: use the brand kit (default true): "
+                                                          "its colour, captions, logo, intro and outro.")
     shape: Literal["16:9", "1:1", "9:16", "gif"] | None = Field(
         default=None, description="export: the same version in this shape (X, YouTube 16:9; Shorts, Reels 9:16), "
                                   "each scene reframed on its zoom, or a GIF.")
@@ -113,7 +115,7 @@ def _export(project, shape: str, number: int | None) -> str:
 def _video(action: str = "status", project: str = "", title: str = "", scenes: list | None = None,
            music: str | None = None, music_volume: float | None = None, captions: bool | None = None,
            voice_lines: bool | None = None, note: str = "", version: int | None = None, aspect: str | None = None,
-           shape: str | None = None) -> str:
+           shape: str | None = None, brand: bool | None = None) -> str:
     from row_bot import video_projects
     from row_bot.video_projects import ProjectError
 
@@ -126,7 +128,8 @@ def _video(action: str = "status", project: str = "", title: str = "", scenes: l
             found = video_projects.create(conversation, title, raw, music=music or "",
                                           music_volume=0.3 if music_volume is None else music_volume,
                                           captions=bool(captions), voice_lines=voice_lines is not False,
-                                          aspect=aspect or "", by="row-bot", note=note)
+                                          aspect=aspect or "", brand=brand is not False, by="row-bot",
+                                          note=note)
             return _make(found, None)
         found = video_projects.get(project, conversation)
         if found is None:
@@ -134,7 +137,8 @@ def _video(action: str = "status", project: str = "", title: str = "", scenes: l
         if action == "change":
             changed = video_projects.change(found, by="row-bot", note=note, scenes=raw if scenes is not None else None,
                                             title=title or None, music=music, music_volume=music_volume,
-                                            captions=captions, voice_lines=voice_lines, aspect=aspect)
+                                            captions=captions, voice_lines=voice_lines, aspect=aspect,
+                                            brand=brand)
             return _make(found, changed.number)
         if action == "undo":
             if len(found.versions) < 2:

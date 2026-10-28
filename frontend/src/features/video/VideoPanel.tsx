@@ -33,6 +33,7 @@ import {
 } from '../../ui/primitives';
 import { shortTime } from '../shell/conversation-groups';
 import { editLive } from '../shell/video-edits';
+import { VideoBrandEditor } from './VideoBrandEditor';
 import { VideoTimeline } from './VideoTimeline';
 import {
   SHAPES,
@@ -49,7 +50,7 @@ import {
 const FRAME = 1 / 30;
 const POLL_MS = 1500;
 
-type Draft = { scenes: VideoSceneWrite[]; captions: boolean };
+type Draft = { scenes: VideoSceneWrite[]; captions: boolean; brand: boolean };
 /** Unsaved edits per project and version, so they outlive the panel moving between side and full screen. */
 const drafts = new Map<string, Draft>();
 const WIDE = '(min-width: 768px)';
@@ -135,6 +136,8 @@ export default function VideoPanel({
   const [url, setUrl] = useState('');
   const [loop, setLoop] = useState(false);
   const [mode, setMode] = useState<'scenes' | 'timeline'>('scenes');
+  // The brand kit loads the first time its section opens.
+  const [brandOpen, setBrandOpen] = useState(false);
   const [time, setTime] = useState(0);
   const history = useRef<Draft[]>([]);
   const wide = useWide();
@@ -266,6 +269,7 @@ export default function VideoPanel({
             base: view.number,
             scenes: edited.scenes,
             captions: edited.captions,
+            brand: edited.brand,
             note: 'Edited in the panel',
           }),
         )
@@ -510,6 +514,17 @@ export default function VideoPanel({
             }
           />
           <span aria-hidden>Captions</span>
+        </label>
+        <label className="video-captions">
+          <Toggle
+            label="Brand kit"
+            checked={edited.brand}
+            disabled={!latest}
+            onChange={(event) =>
+              edit({ ...edited, brand: event.target.checked })
+            }
+          />
+          <span aria-hidden>Brand</span>
         </label>
       </div>
       {wide && mode === 'timeline' && (
@@ -800,6 +815,21 @@ export default function VideoPanel({
           </ul>
         </section>
       )}
+      <Disclosure
+        summary="Brand kit"
+        className="video-brand-disclosure"
+        onOpenChange={(open) => open && setBrandOpen(true)}
+      >
+        {brandOpen && (
+          <VideoBrandEditor
+            onSaved={() =>
+              setNotice(
+                'Brand kit saved: save a change or make the video again to use it.',
+              )
+            }
+          />
+        )}
+      </Disclosure>
       <p className="video-panel-foot" aria-live="polite">
         {error ? (
           <span role="alert" className="video-panel-error">

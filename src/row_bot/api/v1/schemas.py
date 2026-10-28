@@ -5181,6 +5181,18 @@ class VideoProjectExport(WireModel):
     shape: Literal["16:9", "1:1", "9:16", "gif"]
 
 
+class VideoBrand(WireModel):
+    """The brand kit (5.3.1 B3): the look every video project uses unless a version turns it off."""
+    colour: str = Field(pattern=r"^#[0-9a-fA-F]{6}$")
+    captions: Literal["box", "bold", "title"]
+    # A picture from Library › Media, by its reference; "" for none.
+    logo: str = Field(max_length=512)
+    logo_corner: Literal["top-left", "top-right", "bottom-left", "bottom-right"]
+    intro: str = Field(max_length=120)
+    outro: str = Field(max_length=120)
+    music_mood: Literal["calm", "upbeat", "focused", "warm"]
+
+
 class VideoProjectView(WireModel):
     """A video project at one version (5.3.1 B3), shared by the Video panel and Row-Bot."""
     project_id: VideoProjectId
@@ -5208,6 +5220,8 @@ class VideoProjectView(WireModel):
     # Its shape ("" keeps its first video's), and its exports in other shapes or as a GIF.
     aspect: Literal["", "16:9", "1:1", "9:16"]
     exports: list[VideoExportView] = Field(max_length=4)
+    # Made with the brand kit.
+    brand: bool
 
 
 class VideoProjectChange(WireModel):
@@ -5217,6 +5231,7 @@ class VideoProjectChange(WireModel):
     title: str = Field(default="", max_length=80)
     music_volume: float | None = Field(default=None, ge=0, le=1)
     captions: bool | None = None
+    brand: bool | None = None
     note: str = Field(default="", max_length=200)
 
 

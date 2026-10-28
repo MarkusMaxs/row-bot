@@ -1768,6 +1768,10 @@ const CATALOG: Record<string, Entry> = {
     "One of the scenes' videos can't be used any more. Ask Row-Bot to swap it.",
     'none',
   ],
+  video_brand_invalid: [
+    'The brand kit couldn’t be saved: pick its logo from your pictures again.',
+    'none',
+  ],
   video_project_not_made: [
     'Make this version first: its other shapes come from it.',
     'none',

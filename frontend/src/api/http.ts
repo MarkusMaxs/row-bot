@@ -1,6 +1,7 @@
 import * as wire from '../../../contracts/client-platform/v1/typescript/client';
 import type {
   ClientTransport,
+  VideoBrand,
   VideoProjectChange,
   VideoProjectExport,
 } from './types';
@@ -455,6 +456,12 @@ export class HttpTransport implements ClientTransport {
   }
   makeVideoProject(projectId: string) {
     return wire.makeVideoProject(this.base, this.session(), projectId);
+  }
+  videoBrand(signal?: AbortSignal) {
+    return wire.getVideoBrand(this.base, this.session(), signal);
+  }
+  saveVideoBrand(brand: VideoBrand) {
+    return wire.saveVideoBrand(this.base, this.session(), brand);
   }
   exportVideoProject(projectId: string, shape: VideoProjectExport['shape']) {
     return wire.exportVideoProject(this.base, this.session(), projectId, {

@@ -88,6 +88,18 @@
       "title": "Base",
       "type": "integer"
     },
+    "brand": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Brand"
+    },
     "captions": {
       "anyOf": [
         {

@@ -1035,6 +1035,7 @@ _STATUS.update(
         "video_project_invalid": 422,
         "video_project_needs_ffmpeg": 409,
         "video_project_not_made": 409,
+        "video_brand_invalid": 422,
         "sent_file_unavailable": 404,
         "sent_file_expired": 410,
         "sent_files_gone": 409,
@@ -5520,6 +5521,29 @@ def create_router(
         body = await _body(request, dto.VideoProjectRestore, 4 * 1024)
         result = await _project_call(restore_video_project, _project_id(project_id), body.number)
         return await respond(request, dto.VideoProjectView, result)
+
+    @router.get("/video-brand")
+    async def video_brand_route(request: Request) -> JSONResponse:
+        await session(request)
+        from dataclasses import asdict
+
+        from row_bot import video_brand
+
+        return await respond(request, dto.VideoBrand, asdict(await call(video_brand.load)))
+
+    @router.put("/video-brand")
+    async def save_video_brand(request: Request) -> JSONResponse:
+        await session(request, lane="mutation")
+        from dataclasses import asdict
+
+        from row_bot import video_brand
+
+        body = await _body(request, dto.VideoBrand, 8 * 1024)
+        try:
+            saved = await call(video_brand.save, body.model_dump())
+        except video_brand.BrandError:
+            raise ProtocolError("video_brand_invalid", 422) from None
+        return await respond(request, dto.VideoBrand, asdict(saved))
 
     @router.post("/video-projects/{project_id}/export")
     async def export_video_project_route(request: Request, project_id: str) -> JSONResponse:

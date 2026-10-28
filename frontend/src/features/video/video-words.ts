@@ -31,9 +31,11 @@ export const SPEEDS = [0.5, 1, 1.5, 2, 3, 4] as const;
 export function draftOf(view: VideoProjectView): {
   scenes: VideoSceneWrite[];
   captions: boolean;
+  brand: boolean;
 } {
   return {
     captions: view.captions,
+    brand: view.brand,
     scenes: view.scenes.map((scene) => ({
       scene_id: scene.scene_id,
       source: scene.source,
@@ -49,7 +51,7 @@ export function draftOf(view: VideoProjectView): {
 
 export function isDirty(
   view: VideoProjectView,
-  draft: { scenes: VideoSceneWrite[]; captions: boolean },
+  draft: { scenes: VideoSceneWrite[]; captions: boolean; brand: boolean },
 ): boolean {
   return JSON.stringify(draftOf(view)) !== JSON.stringify(draft);
 }

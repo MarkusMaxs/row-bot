@@ -94,6 +94,7 @@ function view(patch: Partial<VideoProjectView> = {}): VideoProjectView {
     checks_passed: true,
     aspect: '',
     exports: [],
+    brand: true,
     ...patch,
   };
 }
@@ -197,6 +198,7 @@ it('saves edits as a new version made on the one shown, and offers nothing until
   await userEvent.click(screen.getByRole('button', { name: 'Save and make' }));
   expect(controller.changeVideoProject).toHaveBeenCalledWith('vid-1a2b3c4d', {
     base: 2,
+    brand: true,
     captions: false,
     note: 'Edited in the panel',
     scenes: [
