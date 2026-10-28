@@ -197,7 +197,8 @@ def test_a_small_windows_tool_search_finds_tools_by_their_word_forms_and_group_n
         return results[0]["name"] if results else None
 
     assert first("calculator") == "calculate"
-    assert first("transcripts") == "youtube_transcript"
+    assert first("youtube transcripts") == "youtube_transcript"
+    assert first("transcripts") == "transcribe"  # the sound group's name in Settings: "Voice, music and transcripts"
     assert first("vision") == "analyze_image"  # its group's name in Settings ("👁️ Vision")
     assert first("file delivery") == "send_file"  # its group ("file_delivery")
     assert first("Mezze House") is None

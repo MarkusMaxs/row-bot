@@ -328,7 +328,7 @@ def test_every_builtin_tool_keeps_todays_first_result(every_builtin_tool) -> Non
 
 def test_every_builtin_tool_is_found_by_other_forms_of_its_words(every_builtin_tool) -> None:
     for query, tool in {
-        "calculator": "calculate", "charting": "create_chart", "transcripts": "youtube_transcript",
+        "calculator": "calculate", "charting": "create_chart", "youtube transcripts": "youtube_transcript",
         "retrying": "agent_retry", "cloning": "clone_repository", "repositories": "clone_repository",
         "delegation": "delegate_work", "installer": "row_bot_install_update", "vision": "analyze_image",
     }.items():
