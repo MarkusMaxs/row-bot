@@ -268,9 +268,12 @@ def _finish(run: Mapping[str, Any], task: Mapping[str, Any] | None, status: str,
     else:
         notice = reason or "The run didn't finish."
     delivery_status, delivery_detail = "", ""
-    if task is not None and status in {"completed", "unsure", "denied"}:
+    if task is not None and _delivers(task, status):
+        text = outcome(status, notice, done)
+        if reply and status in {"completed", "unsure"}:
+            text += "\n\n" + reply
         try:
-            delivery_status, delivery_detail = tasks._deliver_to_channels(dict(task), reply or notice)
+            delivery_status, delivery_detail = tasks._deliver_to_channels(dict(task), text)
         except Exception as exc:
             logger.warning("Delivering workflow run %s failed", run_id, exc_info=True)
             delivery_status, delivery_detail = "delivery_failed", f"Delivery failed: {exc}"
@@ -281,6 +284,26 @@ def _finish(run: Mapping[str, Any], task: Mapping[str, Any] | None, status: str,
     if task is None:
         return
     tasks.after_run_finished(dict(task), run_id, thread_id, status, notice, delivery_status, delivery_detail)
+
+
+def outcome(status: str, notice: str, done: list[Mapping[str, Any]]) -> str:
+    """What a run did, in one line, ahead of what it delivers (G8): what went out, or that nothing did."""
+    sent = "; ".join(str(item.get("result") or "") for item in done if item.get("result"))
+    if status == "unsure":
+        return f"Not sure it went through · {notice}"
+    if status == "denied":
+        return "You said no · nothing went out"
+    if status in {"failed", "expired"}:
+        return f"Didn't finish · {notice}" if notice else "Didn't finish"
+    return f"Sent · {sent}" if sent else "Finished · nothing was posted or sent"
+
+
+def _delivers(task: Mapping[str, Any], status: str) -> bool:
+    """Whether this run's ending goes to the workflow's channels now (a digest sends it later)."""
+    rule = task.get("send_results") or "every_run"
+    if rule == "every_run":
+        return status in {"completed", "unsure", "denied", "failed"}
+    return rule == "needs_me" and status in {"unsure", "failed"}
 
 
 def _first_line(text: str) -> str:

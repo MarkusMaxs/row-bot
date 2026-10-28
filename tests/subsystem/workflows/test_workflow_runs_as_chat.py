@@ -279,3 +279,73 @@ def test_the_workflows_always_ask_apps_reach_every_turn_of_its_conversation(work
     workflows.update_task(task["id"], always_ask=["builtin:account:x"], safety_mode="full")
     run(workflows, platform, Rules(reply("Done.")), workflows.get_task(task["id"]))
     assert seen == [{"step": False, "items": ["builtin:account:x"]}]
+
+
+# ── What reaches the channels (5.3.1 G8) ─────────────────────────────────────
+
+
+@pytest.fixture
+def delivered(workflows, monkeypatch) -> list[str]:
+    """What each run sent to the workflow's channels (none are real here)."""
+    sent: list[str] = []
+
+    def deliver(task, text, **_):
+        sent.append(text)
+        return "delivered", "Delivered to Telegram"
+    monkeypatch.setattr(workflows, "_deliver_to_channels", deliver)
+    return sent
+
+
+def test_each_delivery_says_first_what_the_run_did(workflows, platform, delivered):  # noqa: F811
+    report = run(workflows, platform, Recording(reply("Three new posts about local AI today.")),
+                 create(workflows, "Read what's new about local AI."))
+    fake = Recording((("interrupt", X_POST),), posted())
+    task = create(workflows)
+    waiting = run(workflows, platform, fake, task)
+    resolve(platform, pending_approval(workflows, waiting["thread_id"]), "approve", "approve-post")
+    settle(platform, waiting["thread_id"])
+
+    assert report["status"] == "completed"
+    assert delivered == ["Finished · nothing was posted or sent\n\nThree new posts about local AI today.",
+                         f"Sent · Posted on X as @row_bot_ai: {POST_LINK}\n\nPosted."]
+    assert latest(workflows, task["id"])["status_message"] == "Delivered to Telegram"
+
+
+def test_only_when_it_needs_me_sends_a_run_that_didnt_finish_and_nothing_else(workflows, platform, delivered,
+                                                                              monkeypatch):  # noqa: F811
+    from row_bot import workflow_turns
+    monkeypatch.setattr(workflow_turns, "RETRY_WAITS", ())
+    quiet = create(workflows, "Read what's new.")
+    workflows.update_task(quiet["id"], send_results="needs_me")
+    fake = Recording(reply("Nothing new."), (("error", "The provider is busy."),))
+    done = run(workflows, platform, fake, workflows.get_task(quiet["id"]))
+    failed = run(workflows, platform, fake, workflows.get_task(quiet["id"]))
+
+    assert (done["status"], done["status_message"]) == ("completed", "")
+    assert failed["status"] == "failed"
+    assert delivered == [f"Didn't finish · {failed['notice']}"]
+
+
+def test_a_daily_digest_sends_one_line_per_run_once_a_day_from_six(workflows, platform, delivered):  # noqa: F811
+    from datetime import datetime, timedelta
+    task = create(workflows, "Read what's new.", name="Daily read")
+    workflows.update_task(task["id"], send_results="digest")
+    fake = Recording(reply("One new release."), (("interrupt", X_POST),), posted())
+    first = run(workflows, platform, fake, workflows.get_task(task["id"]))
+    waiting = run(workflows, platform, fake, workflows.get_task(task["id"]))
+    resolve(platform, pending_approval(workflows, waiting["thread_id"]), "approve", "approve-post")
+    settle(platform, waiting["thread_id"])
+    assert delivered == [], "a digest workflow sends nothing per run"
+    finished = datetime.fromisoformat(latest(workflows, task["id"])["finished_at"]).astimezone()
+    evening = finished.replace(hour=18, minute=5) + (timedelta(days=1) if finished.hour >= 18 else timedelta())
+
+    assert workflows.send_due_digests(evening.replace(hour=17, minute=59)) == 0, "not before six"
+    assert workflows.send_due_digests(evening) == 1
+    assert workflows.send_due_digests(evening + timedelta(hours=2)) == 0, "once a day"
+
+    [digest] = delivered
+    when = lambda run: datetime.fromisoformat(run["finished_at"]).astimezone()  # noqa: E731
+    stamp = (lambda moment: f"{moment:%H:%M}" if moment.date() == evening.date() else f"{moment:%a %H:%M}")
+    assert first["status"] == "completed"
+    assert digest == (f"Daily digest · 2 runs\n{stamp(when(first))} · Finished · nothing was posted or sent\n"
+                      f"{stamp(finished)} · Sent · Posted on X as @row_bot_ai: {POST_LINK}")

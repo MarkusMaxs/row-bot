@@ -6462,6 +6462,8 @@ class TaskSettingsFields(WireModel):
     always_ask: list[Annotated[str, StringConstraints(min_length=1, max_length=512)]] = Field(
         default_factory=list, max_length=16
     )
+    # When its results go to its channels: after every run, only when a run needs the person, or a daily digest.
+    send_results: Literal["every_run", "needs_me", "digest"] = "every_run"
 
 
 class TaskSettingsSnapshot(WireModel):
