@@ -32,7 +32,7 @@ def checkout(tmp_path: Path) -> Path:
 
 
 def test_every_version_file_follows_the_new_release(checkout: Path) -> None:
-    cut_release.main(["9.8.7", "--root", str(checkout)])
+    cut_release.main(["9.8.7", "--root", str(checkout), "--no-docs"])
 
     assert gate._source_versions(checkout) == ("9.8.7", "9.8.7")
     iss = (checkout / "installer/row_bot_setup.iss").read_text(encoding="utf-8")
@@ -66,7 +66,7 @@ def test_line_endings_survive_the_bump(checkout: Path) -> None:
     command = checkout / "Start Row-Bot.command"
     command.write_bytes(command.read_bytes().replace(b"\r\n", b"\n"))
 
-    cut_release.main(["9.8.7-rc.1", "--root", str(checkout)])
+    cut_release.main(["9.8.7-rc.1", "--root", str(checkout), "--no-docs"])
 
     assert b'__version__ = "9.8.7-rc.1"\r\n' in version_py.read_bytes()
     assert b"\r\n" not in command.read_bytes()
@@ -77,6 +77,6 @@ def test_a_malformed_version_changes_nothing(checkout: Path) -> None:
     before = {relative: (checkout / relative).read_bytes() for relative in cut_release.VERSION_FILES}
 
     with pytest.raises(SystemExit):
-        cut_release.main(["5.0", "--root", str(checkout)])
+        cut_release.main(["5.0", "--root", str(checkout), "--no-docs"])
 
     assert {relative: (checkout / relative).read_bytes() for relative in cut_release.VERSION_FILES} == before

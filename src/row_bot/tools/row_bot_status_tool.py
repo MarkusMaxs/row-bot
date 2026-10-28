@@ -494,11 +494,15 @@ def _query_memory() -> str:
         from row_bot.knowledge_graph import count_entities, count_relations
         entities = count_entities()
         relations = count_relations()
-        return (
-            f"**Knowledge Graph**\n"
-            f"- Entities: {entities}\n"
-            f"- Relations: {relations}"
-        )
+        lines = ["**Knowledge Graph**", f"- Entities: {entities}", f"- Relations: {relations}"]
+        try:
+            from row_bot.dream_cycle import get_dream_status
+            summary = get_dream_status().get("last_summary")
+            if summary:
+                lines.append(f"- Last Dream Cycle: {summary}")
+        except Exception:
+            pass
+        return "\n".join(lines)
     except Exception as exc:
         return f"**Knowledge Graph**\nError: {exc}"
 

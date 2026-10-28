@@ -75,7 +75,7 @@ MODELS = {name: getattr(schemas, name) for name in (
     "InsightsSnapshot", "InsightCommand", "InsightReceipt",
     "LearningSnapshot", "LearningTraining", "LearningDownload", "LearningHardware", "LearningConversation", "LearningLessonPage", "LearningCommand", "LearningReceipt", "LearningVersionDetails",
     "KnowledgeEditorState", "KnowledgeReviewRequest", "KnowledgeReview", "KnowledgeReceipt",
-    "KnowledgeGraphSnapshot", "BackgroundProcessView", "BackgroundProcessPage", "BackgroundProcessOutput", "RecordingView", "RecordingPage", "VideoEditView", "VideoEditPage", "DeliveryView", "DeliveryPage", "PageDecisionView", "PageView", "PagePage", "PageTheme", "PageFrameRequest", "PageFrame", "PageStateWrite", "PageDecisionWrite", "PageDownload", "WorkspaceFolderPage", "SandboxJobView", "SandboxJobPage", "SandboxStatusView", "SandboxStartPayload", "LocalAddressGrantView", "LocalAddressPage", "MonitorSnapshot", "MonitorLogs", "SystemDiagnosis", "SystemDiagnosisSettings", "InstallCountSnapshot", "InstallCountChoice", "InstallCountDeletion", "UpdateRelease", "UpdateEngineView", "UpdateHostRequest", "UpdateHostView", "UpdateHeldBack", "UpdateSnapshot", "UpdateCommand", "UpdateReceipt", "MigrationScanRequest", "MigrationSource", "MigrationSources", "MigrationPreviewSummary", "MigrationPreviewItem", "MigrationPreview", "MigrationApplyReviewRequest", "MigrationApplyReview", "MigrationApplyCommand", "MigrationFailedItem", "MigrationApplyReceipt", "OnboardingSnapshot", "OnboardingCommand", "OnboardingReceipt", "LocalRuntimeSnapshot", "ModelTestResult", "ProviderKeyCheckRequest", "ProviderKeyCheck", "DreamRunRequest", "DreamRunReview", "DreamRunCommand", "DreamRunReceipt",
+    "KnowledgeGraphSnapshot", "BackgroundProcessView", "BackgroundProcessPage", "BackgroundProcessOutput", "RecordingView", "RecordingPage", "VideoEditView", "VideoEditPage", "VideoScene", "VideoSceneWrite", "VideoVersionView", "VideoBrand", "VideoExportView", "RowBotSandboxView", "SandboxPackView", "RowBotSandboxPage", "RowBotSandboxCreate", "RowBotSandboxLink", "VideoProjectExport", "VideoProjectView", "VideoProjectChange", "VideoProjectRestore", "DeliveryView", "DeliveryPage", "PageDecisionView", "PageView", "PagePage", "MediaItem", "MediaPage", "MediaTagsWrite", "MediaTags", "PageTheme", "PageFrameRequest", "PageFrame", "PageStateWrite", "PageDecisionWrite", "PageDownload", "WorkspaceFolderPage", "SandboxJobView", "SandboxJobPage", "SandboxStatusView", "SandboxStartPayload", "LocalAddressGrantView", "LocalAddressPage", "MonitorSnapshot", "MonitorLogs", "SystemDiagnosis", "SystemDiagnosisSettings", "InstallCountSnapshot", "InstallCountChoice", "InstallCountDeletion", "UpdateRelease", "UpdateEngineView", "UpdateHostRequest", "UpdateHostView", "UpdateHeldBack", "UpdateSnapshot", "UpdateCommand", "UpdateReceipt", "MigrationScanRequest", "MigrationSource", "MigrationSources", "MigrationPreviewSummary", "MigrationPreviewItem", "MigrationPreview", "MigrationApplyReviewRequest", "MigrationApplyReview", "MigrationApplyCommand", "MigrationFailedItem", "MigrationApplyReceipt", "OnboardingSnapshot", "OnboardingCommand", "OnboardingReceipt", "LocalRuntimeSnapshot", "ModelTestResult", "ProviderKeyCheckRequest", "ProviderKeyCheck", "DreamRunRequest", "DreamRunReview", "DreamRunCommand", "DreamRunReceipt",
     "KnowledgeMaintenanceRequest", "KnowledgeMaintenanceReview", "KnowledgeMaintenanceCommand", "KnowledgeMaintenanceReceipt",
     "KnowledgeRelationPage", "KnowledgeRelationReviewRequest", "KnowledgeRelationReview", "KnowledgeRelationReceipt",
     "SubscriptionAccountsSnapshot", "SubscriptionFlowSnapshot", "SubscriptionActionReview",
@@ -221,12 +221,26 @@ OPERATIONS = (
     ("get", "/video-edits", None, "VideoEditPage"),
     ("get", "/video-edits/{edit_id}", None, "VideoEditView"),
     ("post", "/video-edits/{edit_id}/stop", None, "VideoEditView"),
+    ("get", "/video-projects/{project_id}", None, "VideoProjectView"),
+    ("put", "/video-projects/{project_id}", "VideoProjectChange", "VideoProjectView"),
+    ("post", "/video-projects/{project_id}/restore", "VideoProjectRestore", "VideoProjectView"),
+    ("post", "/video-projects/{project_id}/make", None, "VideoProjectView"),
+    ("post", "/video-projects/{project_id}/export", "VideoProjectExport", "VideoProjectView"),
+    ("get", "/video-brand", None, "VideoBrand"),
+    ("get", "/row-bot-sandboxes", None, "RowBotSandboxPage"),
+    ("post", "/row-bot-sandboxes", "RowBotSandboxCreate", "RowBotSandboxView"),
+    ("post", "/row-bot-sandboxes/{sandbox_id}/link", None, "RowBotSandboxLink"),
+    ("post", "/row-bot-sandboxes/{sandbox_id}/{action}", None, "RowBotSandboxView"),
+    ("delete", "/row-bot-sandboxes/{sandbox_id}", None, "RowBotSandboxPage"),
+    ("put", "/video-brand", "VideoBrand", "VideoBrand"),
     ("get", "/deliveries", None, "DeliveryPage"),
     ("get", "/deliveries/{delivery_id}", None, "DeliveryView"),
     ("get", "/deliveries/{delivery_id}/files/{index}", None, "bytes"),
     ("post", "/deliveries/{delivery_id}/files/{index}/save", None, "ExportSaved"),
     ("post", "/deliveries/{delivery_id}/to-devices", None, "DeliveryView"),
     ("get", "/pages", None, "PagePage"),
+    ("get", "/media", None, "MediaPage"),
+    ("put", "/media/tags", "MediaTagsWrite", "MediaTags"),
     ("get", "/pages/{page_id}", None, "PageView"),
     ("post", "/pages/{page_id}/frame", "PageFrameRequest", "PageFrame"),
     ("put", "/pages/{page_id}/state", "PageStateWrite", "PageView"),
@@ -795,6 +809,39 @@ export const getVideoEdit = (base: string, proof: SessionProof, edit: string, si
 /** Stop a video edit; nothing is saved. It needs no approval. */
 export const stopVideoEdit = (base: string, proof: SessionProof, edit: string, signal?: AbortSignal): Promise<VideoEditView> =>
   jsonRequest(base, `/video-edits/${id(edit)}/stop`, 'VideoEditView', proof, 'POST', undefined, undefined, signal);
+/** A video project (5.3.1 B3) at one version (the latest by default). */
+export const getVideoProject = (base: string, proof: SessionProof, project: string, version?: number, signal?: AbortSignal): Promise<VideoProjectView> =>
+  jsonRequest(base, `/video-projects/${id(project)}` + query({version: version === undefined ? undefined : String(version)}), 'VideoProjectView', proof, 'GET', undefined, undefined, signal);
+/** The person's change: a new version made on ``base``, then its video. */
+export const changeVideoProject = (base: string, proof: SessionProof, project: string, body: VideoProjectChange, signal?: AbortSignal): Promise<VideoProjectView> =>
+  jsonRequest(base, `/video-projects/${id(project)}`, 'VideoProjectView', proof, 'PUT', validateWire('VideoProjectChange', body), undefined, signal);
+/** Back to an earlier version, as a new version. */
+export const restoreVideoProject = (base: string, proof: SessionProof, project: string, body: VideoProjectRestore, signal?: AbortSignal): Promise<VideoProjectView> =>
+  jsonRequest(base, `/video-projects/${id(project)}/restore`, 'VideoProjectView', proof, 'POST', validateWire('VideoProjectRestore', body), undefined, signal);
+/** Sandboxes (5.3.1 B4): second Row-Bots on made-up data. */
+export const getRowBotSandboxes = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<RowBotSandboxPage> =>
+  jsonRequest(base, '/row-bot-sandboxes', 'RowBotSandboxPage', proof, 'GET', undefined, undefined, signal);
+export const createRowBotSandbox = (base: string, proof: SessionProof, body: RowBotSandboxCreate, signal?: AbortSignal): Promise<RowBotSandboxView> =>
+  jsonRequest(base, '/row-bot-sandboxes', 'RowBotSandboxView', proof, 'POST', validateWire('RowBotSandboxCreate', body), undefined, signal);
+/** Start, stop, or reset it to its pack. */
+export const actOnRowBotSandbox = (base: string, proof: SessionProof, sandbox: string, action: 'start' | 'stop' | 'reset', signal?: AbortSignal): Promise<RowBotSandboxView> =>
+  jsonRequest(base, `/row-bot-sandboxes/${id(sandbox)}/${action}`, 'RowBotSandboxView', proof, 'POST', undefined, undefined, signal);
+/** Its address with a one-time sign-in, for the person's own window or browser. */
+export const rowBotSandboxLink = (base: string, proof: SessionProof, sandbox: string, signal?: AbortSignal): Promise<RowBotSandboxLink> =>
+  jsonRequest(base, `/row-bot-sandboxes/${id(sandbox)}/link`, 'RowBotSandboxLink', proof, 'POST', undefined, undefined, signal);
+export const deleteRowBotSandbox = (base: string, proof: SessionProof, sandbox: string, signal?: AbortSignal): Promise<RowBotSandboxPage> =>
+  jsonRequest(base, `/row-bot-sandboxes/${id(sandbox)}`, 'RowBotSandboxPage', proof, 'DELETE', undefined, undefined, signal);
+/** The brand kit every video uses unless a version turns it off. */
+export const getVideoBrand = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<VideoBrand> =>
+  jsonRequest(base, '/video-brand', 'VideoBrand', proof, 'GET', undefined, undefined, signal);
+export const saveVideoBrand = (base: string, proof: SessionProof, body: VideoBrand, signal?: AbortSignal): Promise<VideoBrand> =>
+  jsonRequest(base, '/video-brand', 'VideoBrand', proof, 'PUT', validateWire('VideoBrand', body), undefined, signal);
+/** The latest version in another shape, or as a GIF. */
+export const exportVideoProject = (base: string, proof: SessionProof, project: string, body: VideoProjectExport, signal?: AbortSignal): Promise<VideoProjectView> =>
+  jsonRequest(base, `/video-projects/${id(project)}/export`, 'VideoProjectView', proof, 'POST', validateWire('VideoProjectExport', body), undefined, signal);
+/** Make the latest version's video again. */
+export const makeVideoProject = (base: string, proof: SessionProof, project: string, signal?: AbortSignal): Promise<VideoProjectView> =>
+  jsonRequest(base, `/video-projects/${id(project)}/make`, 'VideoProjectView', proof, 'POST', undefined, undefined, signal);
 /** Files sent to the person's devices or a chat app (F7), or one conversation's: newest first. */
 export const getDeliveries = (base: string, proof: SessionProof, conversation_id?: string, signal?: AbortSignal): Promise<DeliveryPage> =>
   jsonRequest(base, '/deliveries' + query({conversation_id}), 'DeliveryPage', proof, 'GET', undefined, undefined, signal);
@@ -817,6 +864,11 @@ export const saveDeliveryFile = (base: string, proof: SessionProof, delivery: st
 /** The person's "Send to your devices instead" for files that didn't go to a chat app. No approval. */
 export const sendDeliveryToDevices = (base: string, proof: SessionProof, delivery: string, signal?: AbortSignal): Promise<DeliveryView> =>
   jsonRequest(base, `/deliveries/${id(delivery)}/to-devices`, 'DeliveryView', proof, 'POST', {}, undefined, signal);
+/** Library › Media (5.3.1 B3): every picture, video and sound in the chats, newest first. */
+export const getMedia = (base: string, proof: SessionProof, filter: {query?: string; kind?: string} = {}, signal?: AbortSignal): Promise<MediaPage> =>
+  jsonRequest(base, '/media' + query(filter), 'MediaPage', proof, 'GET', undefined, undefined, signal);
+export const setMediaTags = (base: string, proof: SessionProof, body: MediaTagsWrite, signal?: AbortSignal): Promise<MediaTags> =>
+  jsonRequest(base, '/media/tags', 'MediaTags', proof, 'PUT', validateWire('MediaTagsWrite', body), undefined, signal);
 /** Pages the agent made (N5), or one conversation's: most recently changed first. */
 export const getPages = (base: string, proof: SessionProof, conversation_id?: string, signal?: AbortSignal): Promise<PagePage> =>
   jsonRequest(base, '/pages' + query({conversation_id}), 'PagePage', proof, 'GET', undefined, undefined, signal);

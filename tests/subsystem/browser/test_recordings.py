@@ -224,3 +224,127 @@ def test_stopping_before_any_picture_saves_nothing(tmp_path):
 
     assert ended == [("you", None)]
     assert not (tmp_path / "rec.mp4").exists()
+
+
+# ── The drawn pointer, paced steps and beats (5.3.1 B4) ─────────────────────
+
+
+def test_the_drawn_pointer_eases_to_each_target_and_rings_where_it_clicks():
+    from row_bot.browser.recording import MOVE_SECONDS, RING_SECONDS, draw_pointer, pointer_at
+
+    events = [(1.0, 0.2, 0.2, False, 0.2, 0.2), (2.0, 0.8, 0.6, True, 0.2, 0.2)]
+    assert pointer_at(events, 0.5) is None, "no pointer before the first step points"
+    assert pointer_at(events, 1.5) == (0.2, 0.2, 0.0)
+    halfway = pointer_at(events, 2.0 + MOVE_SECONDS / 2)
+    assert halfway[:2] == (0.5, 0.4) and 0 < halfway[2] < 1, "half way there, eased, with its ring growing"
+    assert pointer_at(events, 2.0 + MOVE_SECONDS)[:2] == (0.8, 0.6)
+    assert pointer_at(events, 2.0 + RING_SECONDS + 0.01)[2] == 0.0, "the ring is gone"
+
+    from PIL import Image
+
+    picture = Image.new("RGB", (400, 300), (200, 30, 30))
+    draw_pointer(picture, 0.5, 0.5)
+    assert picture.getpixel((202, 154)) == (255, 255, 255), "a white arrow at the point"
+    assert picture.getpixel((380, 20)) == (200, 30, 30), "nothing elsewhere"
+
+
+@needs_encoder
+def test_a_recording_draws_the_pointer_and_keeps_its_beats(tmp_path):
+    import av
+
+    ended: list[Path | None] = []
+    clock = _Clock(0.05)
+    recorder = PageRecorder(tmp_path / "rec.mp4", max_seconds=1.5, size_limit=10_000_000,
+                            on_end=lambda _reason, video: ended.append(video), clock=clock, tick=0.001)
+    recorder.offer_frame(_jpeg((200, 30, 30), size=(400, 300)))
+    recorder.start()
+    recorder.pointer(0.5, 0.5)
+    recorder.beat("work", "Waiting for the build")
+    with pytest.raises(ValueError):
+        recorder.beat("slow")
+    assert recorder.join(10)
+
+    with av.open(str(ended[0])) as container:
+        last = list(container.decode(video=0))[-1].to_image()
+    assert min(last.getpixel((204, 156))) > 200, "the pointer is drawn into the video"
+    [(at, kind, note)] = recorder.beats
+    assert kind == "work" and note == "Waiting for the build" and at >= 0
+
+
+def test_beats_are_marked_while_recording_and_kept_with_the_saved_recording(browser, monkeypatch):
+    class _Pointed(_Capture):
+        def __init__(self, on_end):
+            super().__init__(on_end)
+            self.beats: list[tuple[float, str, str]] = []
+
+        def pointer(self, x, y, *, click=False):
+            pass
+
+        def beat(self, kind, note=""):
+            self.beats.append((12.0, kind, note))
+            return 12.0
+
+    session = browser_tool._session_manager.get_session("conversation-a")
+    monkeypatch.setattr(session, "start_recording", lambda path, *, max_seconds, size_limit, on_end,
+                        thread_id="default": browser.captures.append(_Pointed(on_end)) or browser.captures[-1])
+    assert "isn't being recorded" in _record("beat", beat="work")
+    _record("start")
+    assert _record("beat", beat="work", note="Waiting for the build") == "Marked work at 0:12: sped up in the video."
+    record = recordings.active_for("conversation-a", "browser")
+    video = Path(recordings.working_path(record))
+    video.parent.mkdir(parents=True, exist_ok=True)
+    video.write_bytes(b"\x00\x00\x00\x18ftypisom" + b"\x00" * 64)
+    from row_bot.application import attachments
+
+    monkeypatch.setattr(attachments, "register_attachment", lambda conversation, name, data: {
+        "attachment_ref": f"{conversation}:rec", "mime_type": "video/mp4"})
+    recordings.finished(record, "agent", video)
+    assert record.beats == [[12.0, "work", "Waiting for the build"]]
+    assert "Beats: 0:12 work (Waiting for the build)" in recordings.summary(record)
+    assert recordings._load(recordings._record_path(record)).beats == record.beats
+
+
+def test_while_recording_clicks_and_typing_go_at_a_viewers_pace_with_the_pointer(browser, monkeypatch):
+    import asyncio
+
+    pointed: list[tuple[float, float, bool]] = []
+    typed: list[tuple[str, str]] = []
+
+    class _Capture2:
+        def pointer(self, x, y, *, click=False):
+            pointed.append((round(x, 2), round(y, 2), click))
+
+    class _Locator:
+        async def bounding_box(self, timeout=None):
+            return {"x": 100, "y": 50, "width": 40, "height": 20}
+
+        async def click(self, **_kw):
+            typed.append(("click", ""))
+
+        async def fill(self, text, timeout=None):
+            typed.append(("fill", text))
+
+        async def press_sequentially(self, text, delay=0, timeout=None):
+            typed.append(("keys", text))
+
+    class _Mouse:
+        async def move(self, x, y, steps=1):
+            typed.append(("move", f"{x},{y}"))
+
+    tab = SimpleNamespace(page=SimpleNamespace(mouse=_Mouse(), evaluate=lambda _js: _async((400, 200))))
+    session = browser_tool._session_manager.get_session("conversation-a")
+    monkeypatch.setattr(session, "inspect", lambda _thread, _ref: {"name": "Email", "role": "textbox"})
+    monkeypatch.setattr(session, "locate", lambda _tab, _ref: _async(_Locator()))
+    monkeypatch.setattr(browser_tool, "_run", lambda _session, _thread, _label, step, **_kw: asyncio.run(step(tab)))
+    monkeypatch.setattr(browser_tool, "_recording", lambda _thread: _Capture2())
+    monkeypatch.setattr("row_bot.browser.recording.MOVE_SECONDS", 0)
+
+    assert browser_tool.browser_click("e1") == 'Clicked textbox "Email".'
+    assert pointed == [(0.3, 0.3, False), (0.3, 0.3, True)], "to the middle of the control, then a click ring"
+    typed.clear()
+    browser_tool.browser_type("e1", "ada@example.com")
+    assert [kind for kind, _ in typed] == ["move", "fill", "keys"] and typed[-1][1] == "ada@example.com"
+
+
+async def _async(value):
+    return value

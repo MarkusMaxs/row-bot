@@ -1414,6 +1414,30 @@ _S4_STEPS = [{"op": "trim", "start": 2, "end": 8}, {"op": "speed", "factor": 2},
              {"op": "captions", "text": "1\n00:00:00,500 --> 00:00:02,000\nCreate your account\n"}]
 
 
+@app.post("/__media_fixture/seed")
+def media_seed(x_fixture_token: str = Header(default="")) -> dict:
+    """Library › Media (5.3.1 B3): a chat holding a recording, two pictures and a voice line."""
+    import io
+    import wave
+
+    predecessor._authorize(x_fixture_token)
+    from row_bot import threads
+    from row_bot.application.attachments import register_attachment
+
+    thread = "media-fixture-launch"
+    threads._save_thread_meta(thread, "Launch assets", allow_recreate=True)
+    voice = io.BytesIO()
+    with wave.open(voice, "wb") as out:
+        out.setnchannels(1)
+        out.setsampwidth(2)
+        out.setframerate(16000)
+        out.writeframes(b"\x00\x00" * 8000)
+    for name, data in (("voice-line-01.wav", voice.getvalue()), ("signup-walkthrough.mp4", _s3_video()),
+                       ("pricing-step.png", _s4_steps_picture(2)), ("launch-card.png", _s4_steps_picture(1))):
+        register_attachment(thread, name, data)
+    return {"conversation_id": thread}
+
+
 def _s4_stream(text: str, config: dict):
     from row_bot import ffmpeg_runtime
     from row_bot.application.attachments import register_attachment
@@ -2340,6 +2364,55 @@ def _n5_page(thread: str, identity: str, name: str, args: dict):
     yield from _s3_steps(thread, identity, [(name, args, lambda: (_s4_in_thread(thread, lambda: run(**args)), []))])
 
 
+def _b3_project(thread: str) -> str:
+    """A two-scene video project (5.3.1 B3), its second version made from the synthetic clip, with its checks."""
+    import time as clock
+
+    from row_bot import video_edits, video_projects
+    from row_bot.application.attachments import register_attachment
+
+    clip = _s3_video()
+    for name in ("signup.mp4", "pricing.mp4"):
+        register_attachment(thread, name, clip)
+    project = video_projects.create(thread, "Launch demo", [
+        {"source": "signup.mp4", "end": 2, "line": "First, sign up in a few seconds.", "card": "Sign up"},
+        {"source": "pricing.mp4", "speed": 2, "line": "Then pick the plan that fits."}], note="First cut")
+    first = project.latest.scenes
+    video_projects.change(project, by="row-bot", note="Shorter intro", scenes=[
+        {"scene_id": first[0].scene_id, "source": "signup.mp4", "end": 1.6, "line": first[0].line,
+         "card": "Sign up"},
+        {"scene_id": first[1].scene_id, "source": "pricing.mp4", "speed": 2, "line": first[1].line}])
+    saved = register_attachment(thread, "Launch demo v2.mp4", clip)
+    edit = video_edits.VideoEdit(
+        edit_id="edit-" + fixture_id(f"b3:{thread}:edit")[:8], conversation_id=thread, kind="video",
+        summary="Joined 2 videos and cut 2 scenes", output_name="Launch demo v2.mp4", started_at=clock.time() - 4,
+        status="saved", expected_seconds=3.0, ended_at=clock.time(), media_ref=str(saved["attachment_ref"]),
+        mime_type="video/mp4", size_bytes=len(clip), marks=[0.0, 1.6, 3.0], checks_passed=True,
+        checks=["Length 0:03, 640×400.", "Sound: present (average -19.2 dB, peak -3.1 dB).", "Black: none.",
+                "Still: none."])
+    video_edits._ensure_loaded()
+    video_edits._RECORDS[edit.edit_id] = edit
+    video_edits._save(edit)
+    voiced = video_projects.get(project.project_id).latest.scenes
+    for scene in voiced:
+        scene.voice, scene.voiced = f"{scene.scene_id}.wav", scene.line
+    video_projects._update(project, 2, scenes=voiced, status="rendering", edit_id=edit.edit_id)
+    return video_projects.summary(video_projects.get(project.project_id))
+
+
+def _b3_stream(text: str, config: dict):
+    call = predecessor._record("submit", config, "b3-video")
+    thread = call["conversation_id"]
+    identity = f"b3:{call['generation_id']}"
+    try:
+        args = {"action": "create", "title": "Launch demo"}
+        yield from _s3_steps(thread, identity, [("video", args, lambda: (_b3_project(thread), []))])
+        yield from _natural_final(call, thread, "Here's the launch demo: two scenes, voiced, 3 seconds. "
+                                  "Its checks passed.", "b3")
+    finally:
+        call["quiesced"] = True
+
+
 def _n5_stream(text: str, config: dict):
     call = predecessor._record("submit", config, "n5-page")
     thread = call["conversation_id"]
@@ -2522,6 +2595,10 @@ def stream(text: str, enabled_tools: list[str], config: dict, *, stop_event=None
     if text.startswith("n10 ") and text.rstrip().endswith("fixture"):
         # Outlook's own cards (N10): an email to send, or an event that invites people.
         yield from _n10_stream(text, config)
+        return
+    if text.strip() == "b3 video fixture":
+        # A video project Row-Bot made (5.3.1 B3): its card opens the Video panel.
+        yield from _b3_stream(text, config)
         return
     if text.startswith("n4 ") and text.rstrip().endswith("fixture"):
         # Row-Bot asks questions with options (N4): one question, or two as steps.

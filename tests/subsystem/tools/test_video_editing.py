@@ -225,6 +225,76 @@ def test_voice_lines_and_ducked_music_are_laid_on_the_finished_video_at_one_loud
     assert plan.has_audio and describe(steps) == "Trimmed, added a voice, added music and set the sound level"
 
 
+def test_a_projects_scenes_are_cut_in_order_with_speed_zoom_card_caption_and_their_voice_at_each_start():
+    """5.3.1 B3: a video project renders in one run; each scene is a piece of one of the inputs."""
+    from row_bot.video_editing import SceneCut, Step
+
+    scenes = Step(op="scenes", style="caption", scenes=[
+        SceneCut(input=1, start=1, end=3, card="Sign up", line="First, sign up."),
+        SceneCut(input=0, start=0, end=4, speed=2, zoom=(0.5, 0.5, 0.5, 0.5), voice="line-2.wav"),
+    ])
+    plan = build_plan([InputVideo("input-1.mp4", HD), InputVideo("input-2.mp4", SILENT)], [scenes], "output.mp4",
+                      sounds={"line-2.wav": "sound-1.wav"})
+
+    # The second input starts 6 s into the joined inputs: its 1–3 s is 7–9 s there, and comes first.
+    assert plan.graph.index("trim=start=7:end=9") < plan.graph.index("trim=start=0:end=4")
+    assert "setpts=PTS/2" in plan.graph and "atempo=2" in plan.graph
+    assert "crop=" in plan.graph, "the second scene punches in"
+    assert len(plan.overlays) == 3, "the card, the first scene's caption and the 2× badge"
+    assert "file:sound-1.wav" in plan.args and "adelay=2000|2000" in plan.graph, "its line starts with it"
+    assert (plan.duration, plan.marks) == (4.0, [0.0, 2.0, 4.0])
+    assert plan.summary == "Joined 2 videos and cut 2 scenes"
+    with pytest.raises(EditError, match="Scene 1: .* outside its video"):
+        build_plan([InputVideo("input-1.mp4", HD)],
+                   [Step(op="scenes", scenes=[SceneCut(input=0, start=8)])], "output.mp4")
+
+
+def test_a_project_in_another_shape_reframes_each_scene_on_its_zoom_and_keeps_the_speed_badge_in_frame():
+    from row_bot.video_editing import SceneCut, Step, gif_arguments
+
+    scenes = Step(op="scenes", aspect="9:16", scenes=[
+        SceneCut(input=0, end=2, zoom=(0.75, 0.0, 0.25, 0.5)), SceneCut(input=0, start=2, end=6, speed=2)])
+    plan = build_plan([InputVideo("input-1.mp4", HD)], [scenes], "output.mp4")
+
+    # 640×360 tall is 202×360: the first scene centred on its zoom (the right edge), the second in the middle.
+    assert "crop=202:360:438:0" in plan.graph and "crop=202:360:219:0" in plan.graph
+    assert (plan.width, plan.height, plan.marks) == (202, 360, [0.0, 2.0, 4.0])
+    assert len(plan.overlays) == 1, "the 2× badge, laid on the tall picture"
+    same = build_plan([InputVideo("input-1.mp4", HD)], [Step(op="scenes", aspect="16:9", scenes=[SceneCut(input=0)])],
+                      "output.mp4")
+    assert "crop=" not in same.graph and (same.width, same.height) == (640, 360), "its own shape: as it is"
+    with pytest.raises(EditError, match="16:9, 1:1 or 9:16"):
+        build_plan([InputVideo("input-1.mp4", HD)], [Step(op="scenes", aspect="4:3", scenes=[SceneCut(input=0)])],
+                   "output.mp4")
+
+    gif = gif_arguments("input-1.mp4", "output.gif")
+    assert gif[gif.index("-filter_complex") + 1].startswith("[0:v]fps=12,scale=480:-2")
+    assert "palettegen" in " ".join(gif) and gif[-1] == "file:output.gif" and "file:input-1.mp4" in gif
+
+
+def test_the_brand_kit_puts_an_intro_and_outro_on_its_colour_and_its_logo_in_a_corner():
+    from row_bot.video_editing import Look, SceneCut, Step
+
+    logo = io.BytesIO()
+    Image.new("RGBA", (200, 100), (255, 0, 0, 255)).save(logo, format="PNG")
+    look = Look(colour=(17, 34, 51), captions="bold", logo=logo.getvalue(), logo_corner="bottom-right",
+                intro="Row-Bot", outro="row-bot.ai")
+    scenes = Step(op="scenes", style="caption", look=look, scenes=[
+        SceneCut(input=0, end=3, card="Sign up", line="First, sign up.", voice="line-1.wav")])
+    plan = build_plan([InputVideo("input-1.mp4", HD)], [scenes], "output.mp4", sounds={"line-1.wav": "sound-1.wav"})
+
+    assert plan.graph.count("color=c=0x112233:s=640x360") == 2, "an intro and an outro card on its colour"
+    assert plan.graph.count("anullsrc") == 2, "each with silence, so the sound stays in step"
+    assert (plan.duration, plan.marks) == (7.0, [2.0, 5.0]), "the scene starts after the intro"
+    assert "adelay=2000|2000" in plan.graph, "its line starts with the scene, after the intro"
+    card, caption, intro, outro, mark = (_picture(png) for _name, png in plan.overlays)
+    assert card.getpixel((2, card.height // 2))[:3] == (17, 34, 51), "the title card is the brand's colour"
+    assert caption.getpixel((0, 0))[3] == 0, "a bold caption has no box"
+    assert intro.getpixel((0, 0))[3] == 0 and outro.getpixel((0, 0))[3] == 0, "plain titles on the coloured cards"
+    assert (mark.width, mark.height) == (72, 36), "the logo, a tenth of the picture's height"
+    assert "overlay=x=552:y=308" in plan.graph, "in the bottom-right corner, 16 px in"
+
+
 def test_a_silent_video_gets_its_narration_and_sounds_are_checked():
     plan = build_plan([InputVideo(path="input-1.mp4", info=SILENT)],
                       parse_steps([{"op": "sound", "source": "line.wav"}]), "output.mp4",

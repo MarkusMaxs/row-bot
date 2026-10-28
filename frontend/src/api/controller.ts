@@ -18,6 +18,10 @@ import type {
   ClientState,
   PageDecisionWrite,
   PageTheme,
+  RowBotSandboxCreate,
+  VideoBrand,
+  VideoProjectChange,
+  VideoProjectExport,
   DictationScope,
   DictationHandle,
   DictationResult,
@@ -848,6 +852,7 @@ export class ClientController {
         session_ttl_seconds: result.session_ttl_seconds,
         server_utc_offset_minutes: result.server_utc_offset_minutes ?? null,
         server_timezone: result.server_timezone ?? null,
+        sandbox: result.sandbox ?? false,
         native_adapter: result.native_adapter,
         limits: result.limits,
       };
@@ -2784,6 +2789,42 @@ export class ClientController {
   /** The sidebar's one indicator: problems and an update (rows 12, 13). */
   attention = (signal?: AbortSignal) =>
     this.query(() => this.transport.attention?.(signal));
+  /** Library › Media (5.3.1 B3). */
+  media = (filter: { query?: string; kind?: string }, signal?: AbortSignal) =>
+    this.query(() => this.transport.media?.(filter, signal));
+  setMediaTags = (ref: string, tags: string[]) =>
+    this.query(() => this.transport.setMediaTags?.(ref, tags));
+  /** A video project (5.3.1 B3): read, change, go back, make again. */
+  videoProject = (projectId: string, version?: number, signal?: AbortSignal) =>
+    this.query(() => this.transport.videoProject?.(projectId, version, signal));
+  changeVideoProject = (projectId: string, change: VideoProjectChange) =>
+    this.query(() => this.transport.changeVideoProject?.(projectId, change));
+  restoreVideoProject = (projectId: string, number: number) =>
+    this.query(() => this.transport.restoreVideoProject?.(projectId, number));
+  makeVideoProject = (projectId: string) =>
+    this.query(() => this.transport.makeVideoProject?.(projectId));
+  /** Sandboxes (5.3.1 B4): second Row-Bots on made-up data. */
+  rowBotSandboxes = (signal?: AbortSignal) =>
+    this.query(() => this.transport.rowBotSandboxes?.(signal));
+  createRowBotSandbox = (body: RowBotSandboxCreate) =>
+    this.query(() => this.transport.createRowBotSandbox?.(body));
+  actOnRowBotSandbox = (
+    sandboxId: string,
+    action: 'start' | 'stop' | 'reset',
+  ) => this.query(() => this.transport.actOnRowBotSandbox?.(sandboxId, action));
+  rowBotSandboxLink = (sandboxId: string) =>
+    this.query(() => this.transport.rowBotSandboxLink?.(sandboxId));
+  deleteRowBotSandbox = (sandboxId: string) =>
+    this.query(() => this.transport.deleteRowBotSandbox?.(sandboxId));
+  /** The brand kit (5.3.1 B3). */
+  videoBrand = (signal?: AbortSignal) =>
+    this.query(() => this.transport.videoBrand?.(signal));
+  saveVideoBrand = (brand: VideoBrand) =>
+    this.query(() => this.transport.saveVideoBrand?.(brand));
+  exportVideoProject = (
+    projectId: string,
+    shape: VideoProjectExport['shape'],
+  ) => this.query(() => this.transport.exportVideoProject?.(projectId, shape));
   /** Every approval waiting for the person, wherever it was raised (B255). */
   pendingApprovals = (signal?: AbortSignal) =>
     this.query(() => this.transport.pendingApprovals?.(signal));

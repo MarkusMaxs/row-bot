@@ -1,5 +1,11 @@
 import * as wire from '../../../contracts/client-platform/v1/typescript/client';
-import type { ClientTransport } from './types';
+import type {
+  ClientTransport,
+  RowBotSandboxCreate,
+  VideoBrand,
+  VideoProjectChange,
+  VideoProjectExport,
+} from './types';
 import { sha256Hex } from '../platform/crypto';
 import { ATTACHMENT_LIMITS } from './limits';
 
@@ -420,6 +426,68 @@ export class HttpTransport implements ClientTransport {
   }
   attention(signal?: AbortSignal) {
     return wire.getAttention(this.base, this.session(), signal);
+  }
+  media(filter: { query?: string; kind?: string }, signal?: AbortSignal) {
+    return wire.getMedia(this.base, this.session(), filter, signal);
+  }
+  setMediaTags(ref: string, tags: string[]) {
+    return wire.setMediaTags(this.base, this.session(), { ref, tags });
+  }
+  videoProject(projectId: string, version?: number, signal?: AbortSignal) {
+    return wire.getVideoProject(
+      this.base,
+      this.session(),
+      projectId,
+      version,
+      signal,
+    );
+  }
+  changeVideoProject(projectId: string, change: VideoProjectChange) {
+    return wire.changeVideoProject(
+      this.base,
+      this.session(),
+      projectId,
+      change,
+    );
+  }
+  restoreVideoProject(projectId: string, number: number) {
+    return wire.restoreVideoProject(this.base, this.session(), projectId, {
+      number,
+    });
+  }
+  makeVideoProject(projectId: string) {
+    return wire.makeVideoProject(this.base, this.session(), projectId);
+  }
+  rowBotSandboxes(signal?: AbortSignal) {
+    return wire.getRowBotSandboxes(this.base, this.session(), signal);
+  }
+  createRowBotSandbox(body: RowBotSandboxCreate) {
+    return wire.createRowBotSandbox(this.base, this.session(), body);
+  }
+  actOnRowBotSandbox(sandboxId: string, action: 'start' | 'stop' | 'reset') {
+    return wire.actOnRowBotSandbox(
+      this.base,
+      this.session(),
+      sandboxId,
+      action,
+    );
+  }
+  rowBotSandboxLink(sandboxId: string) {
+    return wire.rowBotSandboxLink(this.base, this.session(), sandboxId);
+  }
+  deleteRowBotSandbox(sandboxId: string) {
+    return wire.deleteRowBotSandbox(this.base, this.session(), sandboxId);
+  }
+  videoBrand(signal?: AbortSignal) {
+    return wire.getVideoBrand(this.base, this.session(), signal);
+  }
+  saveVideoBrand(brand: VideoBrand) {
+    return wire.saveVideoBrand(this.base, this.session(), brand);
+  }
+  exportVideoProject(projectId: string, shape: VideoProjectExport['shape']) {
+    return wire.exportVideoProject(this.base, this.session(), projectId, {
+      shape,
+    });
   }
   pendingApprovals(signal?: AbortSignal) {
     return wire.getPendingApprovals(this.base, this.session(), signal);

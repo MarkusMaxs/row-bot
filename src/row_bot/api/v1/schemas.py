@@ -5111,7 +5111,7 @@ class VideoEditView(WireModel):
     output_name: str = Field(max_length=120)
     # The saved video, or the contact sheet of the stills, shown with a preview (None until saved).
     media_ref: str | None = Field(max_length=512)
-    mime_type: Literal["video/mp4", "image/jpeg", "image/png"] | None
+    mime_type: Literal["video/mp4", "image/jpeg", "image/png", "image/gif"] | None
     size_bytes: int | None = Field(ge=0)
     frame_count: int = Field(ge=0, le=64)
     stopped_by: Literal["", "you", "agent", "conversation", "quit"]
@@ -5126,6 +5126,159 @@ class VideoEditPage(WireModel):
     """Video edits: those running now first, then finished ones, newest first."""
     items: list[VideoEditView] = Field(max_length=200)
     running: int = Field(ge=0)
+
+
+VideoProjectId = Annotated[str, StringConstraints(pattern=r"^vid-[0-9a-f]{8}$")]
+VideoSceneId = Annotated[str, StringConstraints(pattern=r"^s[0-9a-f]{6}$")]
+
+
+class VideoScene(WireModel):
+    """One scene of a video project (5.3.1 B3): a piece of a video, its speed, zoom, card and line."""
+    scene_id: VideoSceneId
+    # Its video: a recording (rec-…), an edit (edit-…), a file in the chat or a workspace path.
+    source: str = Field(min_length=1, max_length=512)
+    start: float = Field(ge=0)
+    end: float | None = Field(ge=0)
+    speed: float = Field(ge=0.25, le=4)
+    # [x, y, width, height], each 0 to 1: the region the scene punches in on.
+    zoom: list[float] | None = Field(min_length=4, max_length=4)
+    card: str = Field(max_length=120)
+    line: str = Field(max_length=300)
+    # Its voice says the line as it is now (else it's voiced again when the video is made).
+    voiced: bool
+    # Where it starts on this version's video and how long it lasts there (None until it's made).
+    at: float | None = Field(ge=0)
+    length: float | None = Field(ge=0)
+    # What the live preview plays: its video and its voice line, by reference (None when there's none to play).
+    source_ref: str | None = Field(default=None, max_length=512)
+    voice_ref: str | None = Field(default=None, max_length=512)
+
+
+class VideoSceneWrite(WireModel):
+    """A scene as the Video panel writes it (an empty id is a new scene)."""
+    scene_id: str = Field(default="", max_length=16, pattern=r"^(s[0-9a-f]{6})?$")
+    source: str = Field(min_length=1, max_length=512)
+    start: float = Field(default=0, ge=0)
+    end: float | None = Field(default=None, ge=0)
+    speed: float = Field(default=1, ge=0.25, le=4)
+    zoom: list[float] | None = Field(default=None, min_length=4, max_length=4)
+    card: str = Field(default="", max_length=120)
+    line: str = Field(default="", max_length=300)
+
+
+class VideoVersionView(WireModel):
+    number: int = Field(ge=1)
+    at: str = Field(max_length=80)
+    by: Literal["you", "row-bot"]
+    # What changed, in a few words.
+    note: str = Field(max_length=200)
+
+
+class VideoExportView(WireModel):
+    """The same version in another shape, or as a GIF: the edit that makes it."""
+    shape: Literal["16:9", "1:1", "9:16", "gif"]
+    edit: VideoEditView
+
+
+class VideoProjectExport(WireModel):
+    shape: Literal["16:9", "1:1", "9:16", "gif"]
+
+
+class VideoBrand(WireModel):
+    """The brand kit (5.3.1 B3): the look every video project uses unless a version turns it off."""
+    colour: str = Field(pattern=r"^#[0-9a-fA-F]{6}$")
+    captions: Literal["box", "bold", "title"]
+    # A picture from Library › Media, by its reference; "" for none.
+    logo: str = Field(max_length=512)
+    logo_corner: Literal["top-left", "top-right", "bottom-left", "bottom-right"]
+    intro: str = Field(max_length=120)
+    outro: str = Field(max_length=120)
+    music_mood: Literal["calm", "upbeat", "focused", "warm"]
+
+
+class VideoProjectView(WireModel):
+    """A video project at one version (5.3.1 B3), shared by the Video panel and Row-Bot."""
+    project_id: VideoProjectId
+    conversation_id: str = Field(min_length=1, max_length=256)
+    title: str = Field(min_length=1, max_length=80)
+    latest: int = Field(ge=1)
+    # Every kept version, newest first.
+    versions: list[VideoVersionView] = Field(max_length=50)
+    number: int = Field(ge=1)
+    scenes: list[VideoScene] = Field(max_length=60)
+    # The scenes this version added or changed against the one before it.
+    changed: list[VideoSceneId] = Field(max_length=60)
+    music: str = Field(max_length=200)
+    music_volume: float = Field(ge=0, le=1)
+    captions: bool
+    voice_lines: bool
+    # draft (not made yet), voicing, rendering, made, failed or stopped.
+    status: Literal["draft", "voicing", "rendering", "made", "failed", "stopped"]
+    problem: str = Field(max_length=400)
+    # The edit that makes (or made) this version's video.
+    edit: VideoEditView | None
+    # The review card's checks: sound, black and still stretches.
+    checks: list[str] = Field(max_length=12)
+    checks_passed: bool | None
+    # Its shape ("" keeps its first video's), and its exports in other shapes or as a GIF.
+    aspect: Literal["", "16:9", "1:1", "9:16"]
+    exports: list[VideoExportView] = Field(max_length=4)
+    # Made with the brand kit.
+    brand: bool
+
+
+class VideoProjectChange(WireModel):
+    """The person's change in the Video panel, made on version ``base``: a new version, then its video."""
+    base: int = Field(ge=1)
+    scenes: list[VideoSceneWrite] = Field(min_length=1, max_length=60)
+    title: str = Field(default="", max_length=80)
+    music_volume: float | None = Field(default=None, ge=0, le=1)
+    captions: bool | None = None
+    brand: bool | None = None
+    note: str = Field(default="", max_length=200)
+
+
+class VideoProjectRestore(WireModel):
+    """Back to an earlier version, as a new version."""
+    number: int = Field(ge=1)
+
+
+RowBotSandboxId = Annotated[str, StringConstraints(pattern=r"^box-[0-9a-f]{8}$")]
+SandboxPack = Literal["empty", "shop", "charity", "paperwork", "code"]
+
+
+class RowBotSandboxView(WireModel):
+    """A sandbox (5.3.1 B4): a second Row-Bot on its own data folder, port and workspace, on made-up data."""
+    sandbox_id: RowBotSandboxId
+    name: str = Field(min_length=1, max_length=60)
+    pack: SandboxPack
+    pack_name: str = Field(max_length=80)
+    status: Literal["stopped", "starting", "running", "failed"]
+    # Its address while it runs (on this computer only).
+    url: str = Field(max_length=200)
+    problem: str = Field(max_length=300)
+
+
+class SandboxPackView(WireModel):
+    pack: SandboxPack
+    name: str = Field(max_length=80)
+
+
+class RowBotSandboxPage(WireModel):
+    items: list[RowBotSandboxView] = Field(max_length=5)
+    packs: list[SandboxPackView] = Field(max_length=8)
+    # False inside a sandbox: a sandbox starts no sandboxes of its own.
+    available: bool
+
+
+class RowBotSandboxCreate(WireModel):
+    name: str = Field(default="", max_length=60)
+    pack: SandboxPack = "empty"
+
+
+class RowBotSandboxLink(WireModel):
+    """The sandbox's address with a one-time sign-in, for the person's own window or browser."""
+    url: str = Field(max_length=600)
 
 
 SandboxJobId = Annotated[str, StringConstraints(pattern=r"^prep-[0-9a-f]{8}$")]
@@ -5307,6 +5460,37 @@ class PageView(WireModel):
 class PagePage(WireModel):
     """Library › Pages, or one chat's pages: most recently changed first."""
     items: list[PageView] = Field(max_length=500)
+
+
+MediaTag = Annotated[str, StringConstraints(min_length=1, max_length=40)]
+
+
+class MediaItem(WireModel):
+    """One picture, video or sound in Library › Media (5.3.1 B3), from the chat that keeps it."""
+    ref: str = Field(min_length=3, max_length=300)
+    name: str = Field(min_length=1, max_length=240)
+    kind: Literal["image", "video", "audio"]
+    mime_type: str = Field(max_length=64)
+    size: int = Field(ge=1)
+    added_at: str = Field(max_length=40)
+    conversation_id: str = Field(min_length=1, max_length=256)
+    conversation_title: str = Field(default="", max_length=256)
+    tags: list[MediaTag] = Field(default_factory=list, max_length=12)
+
+
+class MediaPage(WireModel):
+    """Library › Media: newest first."""
+    items: list[MediaItem] = Field(max_length=500)
+
+
+class MediaTagsWrite(WireModel):
+    ref: str = Field(min_length=3, max_length=300)
+    tags: list[MediaTag] = Field(max_length=12)
+
+
+class MediaTags(WireModel):
+    ref: str = Field(min_length=3, max_length=300)
+    tags: list[MediaTag] = Field(max_length=12)
 
 
 class PageTheme(WireModel):
@@ -7667,6 +7851,7 @@ class MediaAvailable(WireModel):
     mime_type: Literal[
         "image/png",
         "image/jpeg",
+        "image/gif",
         "video/mp4",
         "audio/mpeg",
         "audio/ogg",
@@ -7916,6 +8101,7 @@ class AttachmentView(WireModel):
     mime_type: Literal[
         "image/png",
         "image/jpeg",
+        "image/gif",
         "video/mp4",
         "audio/mpeg",
         "audio/ogg",
@@ -8110,6 +8296,8 @@ class TraceSpecialization(WireModel):
         "request_corrected",
         # A conversation this one started or proposed (5.3.1 C), followed live by its link id.
         "linked_conversation",
+        # A video project a video step made or changed (5.3.1 B3): its card opens the Video panel.
+        "video_project",
     ]
     skill_id: str = Field(default="", max_length=180)
     display_name: str = Field(default="", max_length=180)
@@ -8149,6 +8337,8 @@ class TraceSpecialization(WireModel):
     page_id: str = Field(default="", max_length=64, pattern=r"^(page-[0-9a-f]{8})?$")
     # linked_conversation (5.3.1 C): the card reads the link's state by this id (conversation links).
     link_id: str = Field(default="", max_length=32, pattern=r"^([0-9a-f]{32})?$")
+    # video_project (5.3.1 B3): the card re-reads the project by this id and opens it in the Video panel.
+    project_id: str = Field(default="", max_length=32, pattern=r"^(vid-[0-9a-f]{8})?$")
 
 
 class TranscriptTraceItem(WireModel):
@@ -8517,6 +8707,8 @@ class HandshakeView(Choices):
     server_utc_offset_minutes: int | None = Field(default=None, ge=-1440, le=1440)
     # The computer's IANA zone: a new schedule keeps its times in it unless another is chosen (N9).
     server_timezone: str | None = Field(default=None, max_length=64)
+    # A sandbox (5.3.1 B4): a second Row-Bot on made-up data; the client shows its mark.
+    sandbox: bool = False
     native_adapter: NativeAdapter
     limits: Limits
 

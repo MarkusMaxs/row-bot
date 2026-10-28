@@ -1,0 +1,66 @@
+{
+  "additionalProperties": false,
+  "description": "The brand kit (5.3.1 B3): the look every video project uses unless a version turns it off.",
+  "properties": {
+    "captions": {
+      "enum": [
+        "box",
+        "bold",
+        "title"
+      ],
+      "title": "Captions",
+      "type": "string"
+    },
+    "colour": {
+      "pattern": "^#[0-9a-fA-F]{6}$",
+      "title": "Colour",
+      "type": "string"
+    },
+    "intro": {
+      "maxLength": 120,
+      "title": "Intro",
+      "type": "string"
+    },
+    "logo": {
+      "maxLength": 512,
+      "title": "Logo",
+      "type": "string"
+    },
+    "logo_corner": {
+      "enum": [
+        "top-left",
+        "top-right",
+        "bottom-left",
+        "bottom-right"
+      ],
+      "title": "Logo Corner",
+      "type": "string"
+    },
+    "music_mood": {
+      "enum": [
+        "calm",
+        "upbeat",
+        "focused",
+        "warm"
+      ],
+      "title": "Music Mood",
+      "type": "string"
+    },
+    "outro": {
+      "maxLength": 120,
+      "title": "Outro",
+      "type": "string"
+    }
+  },
+  "required": [
+    "colour",
+    "captions",
+    "logo",
+    "logo_corner",
+    "intro",
+    "outro",
+    "music_mood"
+  ],
+  "title": "VideoBrand",
+  "type": "object"
+}

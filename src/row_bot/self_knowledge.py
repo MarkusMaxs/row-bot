@@ -355,22 +355,9 @@ def get_dynamic_state() -> str:
     except Exception:
         pass
 
-    # Memory/entity count
-    try:
-        from row_bot.knowledge_graph import count_entities
-        count = count_entities()
-        parts.append(f"- Knowledge graph: {count} entities")
-    except Exception:
-        pass
-
-    # Last dream cycle summary
-    try:
-        from row_bot.dream_cycle import get_dream_status
-        dream_status = get_dream_status()
-        if dream_status.get("last_summary"):
-            parts.append(f"- Last dream cycle: {dream_status['last_summary']}")
-    except Exception:
-        pass
+    # The knowledge graph's size and the last Dream Cycle are left out (5.3.1 G9): they change with nearly
+    # every turn, and the turn context sends this whole block again whenever any line of it changes.
+    # row_bot_status reports both when they're asked for.
 
     # Active channels
     try:
