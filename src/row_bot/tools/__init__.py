@@ -65,6 +65,7 @@ _CORE_TOOL_MODULES = (
     "row_bot.tools.image_gen_tool",
     "row_bot.tools.video_gen_tool",
     "row_bot.tools.video_editing_tool",
+    "row_bot.tools.sound_tool",
     "row_bot.tools.file_delivery_tool",
     "row_bot.tools.pages_tool",
     "row_bot.tools.media_tool",
@@ -74,6 +75,7 @@ _CORE_TOOL_MODULES = (
     "row_bot.tools.agent_tool",
     "row_bot.tools.goal_tool",
     "row_bot.tools.conversation_setup_tool",
+    "row_bot.tools.linked_conversations_tool",
     "row_bot.tools.updater_tool",
 )
 

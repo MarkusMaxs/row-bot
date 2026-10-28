@@ -5984,6 +5984,10 @@ class CloneWorkspaceSetupPayload(WireModel):
     repo_url: str = Field(min_length=1, max_length=2048)
 
 
+class ConversationLinkPayload(WireModel):
+    link_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+
+
 class MediaSavePayload(WireModel):
     media_ref: Reference
 
@@ -7135,6 +7139,8 @@ class Command(WireModel):
         "conversation.queue.edit",
         "conversation.queue.remove",
         "conversation.queue.dispatch",
+        "conversation.link.start",
+        "conversation.link.dismiss",
         "artifact.edit",
         "task.create",
         "task.update",
@@ -7316,6 +7322,8 @@ COMMAND_PAYLOADS = {
     # The conversation's interrupted agent work: Resume runs it, Dismiss stops it.
     "agent.resume": EmptyPayload,
     "agent.dismiss": EmptyPayload,
+    "conversation.link.start": ConversationLinkPayload,
+    "conversation.link.dismiss": ConversationLinkPayload,
     "media.save": MediaSavePayload,
     "conversation.queue.edit": QueueEditPayload,
     "conversation.queue.remove": QueueItemCommand,
@@ -7914,6 +7922,8 @@ class CommandReceipt(WireModel):
     approval_id: OpaqueId | None = None
     attachment_ref: Reference | None = None
     saved_name: str | None = Field(default=None, max_length=128)
+    # conversation.link.start (5.3.1 C): the conversation the person started from a proposal.
+    linked_conversation_id: OpaqueId | None = None
     binding_id: OpaqueId | None = None
     code: str | None = Field(default=None, max_length=80)
     current_revision: str | None = Field(default=None, min_length=1, max_length=128)
@@ -7967,6 +7977,8 @@ class ConversationView(WireModel):
     incognito: bool = False
     updated_at: str = Field(default="", max_length=80)
     parent_conversation_id: OpaqueId | None = None
+    # A conversation another one started (5.3.1 C): that conversation's id.
+    started_from: OpaqueId | None = None
     activity_state: Literal["active", "attention", "terminal"] | None = None
     activity_phase: str = Field(default="", max_length=64)
     category: Literal["chat", "designer", "code", "workflow"] = "chat"
@@ -8127,6 +8139,8 @@ class TraceSpecialization(WireModel):
         "question_answered", "page",
         # A call the model got wrong and sent again (U11): a quiet line, never its error text.
         "request_corrected",
+        # A conversation this one started or proposed (5.3.1 C), followed live by its link id.
+        "linked_conversation",
     ]
     skill_id: str = Field(default="", max_length=180)
     display_name: str = Field(default="", max_length=180)
@@ -8164,6 +8178,8 @@ class TraceSpecialization(WireModel):
     answers: list[TraceQuestionAnswer] = Field(default_factory=list, max_length=4)
     # page (N5): the page a step made or changed; the card re-reads its title and opens it by id.
     page_id: str = Field(default="", max_length=64, pattern=r"^(page-[0-9a-f]{8})?$")
+    # linked_conversation (5.3.1 C): the card reads the link's state by this id (conversation links).
+    link_id: str = Field(default="", max_length=32, pattern=r"^([0-9a-f]{32})?$")
 
 
 class TranscriptTraceItem(WireModel):
@@ -8203,6 +8219,28 @@ class TranscriptTraceGroup(WireModel):
     ]
 
 
+class LinkedFrom(WireModel):
+    id: OpaqueId
+    title: str = Field(min_length=1, max_length=160)
+    kind: Literal["message", "reply"] = "message"
+
+
+class ConversationLinkView(WireModel):
+    """A conversation another one started or proposed, as its card shows it (5.3.1 C)."""
+
+    link_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    title: str = Field(min_length=1, max_length=160)
+    conversation_id: OpaqueId | None
+    state: Literal["proposed", "working", "waiting", "done", "dismissed", "expired"]
+    proposed: bool
+    mode: Literal["fresh", "fork"]
+
+
+class ConversationLinkPage(WireModel):
+    schema_version: Literal[1] = 1
+    items: list[ConversationLinkView] = Field(max_length=50)
+
+
 class TranscriptRow(WireModel):
     id: str = Field(min_length=1, max_length=1024)
     message_id: str | None = Field(default=None, max_length=256)
@@ -8221,7 +8259,10 @@ class TranscriptRow(WireModel):
     # messages to it: the row's text is a short public note.
     # Learning (preview): "personal_model_fallback" is the quiet line where the main
     # model finished a turn the personal model got stuck on.
-    note: Literal["continuation", "agent_task", "agent_guidance", "page", "personal_model_fallback"] | None = None
+    note: Literal["continuation", "agent_task", "agent_guidance", "page", "personal_model_fallback",
+                  "linked"] | None = None
+    # A message from another conversation (5.3.1 C, note "linked"): where it came from.
+    linked_from: LinkedFrom | None = None
     # A delegated agent's approval announced in its parent conversation: the
     # row is answered in place with the approval card.
     approval_id: str | None = Field(default=None, max_length=128)
