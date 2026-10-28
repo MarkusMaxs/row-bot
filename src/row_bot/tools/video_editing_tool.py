@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 
 from row_bot.tools import registry
 from row_bot.tools.base import BaseTool
+from row_bot.tools.video_project_tool import langchain_tool as video_project_tool
 
 # How long a call waits for its edit before it carries on in the background.
 INLINE_SECONDS = 15
@@ -86,11 +87,9 @@ def _sounds(steps) -> dict:
 
 def _check(inputs: list[str]) -> str:
     """Read a finished video: sound level, black and still stretches (the review card's checks)."""
-    import subprocess
-
     from row_bot import ffmpeg_runtime, video_edits
     from row_bot.media_sources import SourceError
-    from row_bot.video_editing import check_arguments, read_checks
+    from row_bot.video_editing import EditError
 
     if len(inputs) != 1:
         return "Check one video at a time: name it in inputs (edit-…, rec-…, a file in this chat or a path)."
@@ -110,20 +109,37 @@ def _check(inputs: list[str]) -> str:
             path.write_bytes(source.read_bytes(limit=2 * 1024 ** 3))
         else:
             path = Path(source.path)
-        info = video_edits.probe_video(ffmpeg, str(path), Path(folder))
         try:
-            done = subprocess.run(ffmpeg.command(*check_arguments(path, has_audio=info.has_audio)),
-                                  capture_output=True, text=True, timeout=1800, check=False)
-        except subprocess.TimeoutExpired:
-            return "Checking took too long: check a shorter part (trim it first)."
-    checks = read_checks(done.stderr or "", info)
+            checks = video_edits.check_file(ffmpeg, path, Path(folder))
+        except EditError as error:
+            return str(error)
     return f"Checks for {source.label}:\n" + "\n".join(f"- {line}" for line in checks.lines)
 
 
+def ffmpeg_consent(purpose: str, tool: str) -> tuple[str, str, bool]:
+    """(refusal, approval line, download): asks to download ffmpeg the first time, by the approval level."""
+    from row_bot import ffmpeg_runtime
+    from row_bot.tools.approval_gate import approval_check
+
+    if ffmpeg_runtime.find() is not None:
+        return "", "", False
+    wheel = ffmpeg_runtime.current_wheel()
+    if wheel is None:
+        return ffmpeg_runtime.unavailable_reason(), "", False
+    refusal, line = approval_check(
+        ffmpeg_runtime.consent_request(purpose, tool, wheel=wheel),
+        risks=ffmpeg_runtime.consent_risks(wheel),
+        blocked_message=("BLOCKED: Video editing needs ffmpeg, and downloading it needs approval, but this chat "
+                         "is on Block. Install ffmpeg yourself or change the approval level."),
+        cancelled_message="The person didn't allow downloading ffmpeg; nothing was downloaded or edited.",
+    )
+    return refusal, line, not refusal
+
+
 def _start(action: str, inputs: list[str], steps: list, name: str, count: int, times: list[float]) -> str:
-    from row_bot import ffmpeg_runtime, video_edits
+    from row_bot import video_edits
     from row_bot.media_sources import SourceError
-    from row_bot.tools.approval_gate import approval_check, with_approval
+    from row_bot.tools.approval_gate import with_approval
     from row_bot.video_editing import MAX_FRAMES, MAX_INPUTS, EditError, parse_steps
 
     conversation = _conversation()
@@ -146,23 +162,9 @@ def _start(action: str, inputs: list[str], steps: list, name: str, count: int, t
         sounds = _sounds(parsed)
     except (EditError, SourceError) as exc:
         return str(exc)
-    line = ""
-    download = False
-    if ffmpeg_runtime.find() is None:
-        wheel = ffmpeg_runtime.current_wheel()
-        if wheel is None:
-            return ffmpeg_runtime.unavailable_reason()
-        purpose = "frames" if action == "frames" else "edit"
-        refusal, line = approval_check(
-            ffmpeg_runtime.consent_request(purpose, "edit_video", wheel=wheel),
-            risks=ffmpeg_runtime.consent_risks(wheel),
-            blocked_message=("BLOCKED: Video editing needs ffmpeg, and downloading it needs approval, but this chat "
-                             "is on Block. Install ffmpeg yourself or change the approval level."),
-            cancelled_message="The person didn't allow downloading ffmpeg; nothing was downloaded or edited.",
-        )
-        if refusal:
-            return refusal
-        download = True
+    refusal, line, download = ffmpeg_consent("frames" if action == "frames" else "edit", "edit_video")
+    if refusal:
+        return refusal
     default = "frame" if action == "frames" else (Path(sources[0].label).stem or "video") + "-edited"
     request = video_edits.Request(
         conversation_id=conversation,
@@ -409,7 +411,7 @@ class VideoEditingTool(BaseTool):
     @property
     def untrusted_tool_names(self) -> set[str]:
         # A failed edit quotes ffmpeg's own words, which can carry a file's metadata.
-        return {"edit_video"}
+        return {"edit_video", "video"}
 
     def as_langchain_tools(self) -> list:
         return [
@@ -425,7 +427,8 @@ class VideoEditingTool(BaseTool):
                     "the workspace. The first use may ask to download ffmpeg."
                 ),
                 args_schema=_EditInput,
-            )
+            ),
+            video_project_tool(),
         ]
 
     def execute(self, query: str) -> str:

@@ -98,6 +98,7 @@ BROWSER_SMOKE_SPECS = (
     "workflow-review",
     "pages",
     "library-media",
+    "video-panel",
     "x-accounts",
     "outlook",
     "incognito",

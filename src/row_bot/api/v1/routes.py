@@ -1030,6 +1030,10 @@ _STATUS.update(
         "recording_unavailable": 404,
         "local_address_unavailable": 404,
         "video_edit_unavailable": 404,
+        "video_project_unavailable": 404,
+        "video_project_stale": 409,
+        "video_project_invalid": 422,
+        "video_project_needs_ffmpeg": 409,
         "sent_file_unavailable": 404,
         "sent_file_expired": 410,
         "sent_files_gone": 409,
@@ -5470,6 +5474,59 @@ def create_router(
         if result is None:
             raise ProtocolError("video_edit_unavailable", 404)
         return await respond(request, dto.VideoEditView, result)
+
+    # Video projects (5.3.1 B3): the Video panel reads a project and adds the person's versions.
+    def _project_id(value: str) -> str:
+        from row_bot.video_projects import PROJECT_ID
+
+        if not PROJECT_ID.fullmatch(str(value or "")):
+            raise ProtocolError("video_project_unavailable", 404)
+        return value
+
+    async def _project_call(function: Any, *args: Any) -> Any:
+        from row_bot.application.video_project_views import ProjectRefused
+
+        try:
+            result = await call(function, *args)
+        except ProjectRefused as error:
+            raise ProtocolError(str(error), _STATUS[str(error)]) from None
+        if result is None:
+            raise ProtocolError("video_project_unavailable", 404)
+        return result
+
+    @router.get("/video-projects/{project_id}")
+    async def video_project(request: Request, project_id: str, version: int | None = None) -> JSONResponse:
+        await session(request)
+        from row_bot.application.video_project_views import read_video_project
+
+        result = await _project_call(read_video_project, _project_id(project_id), version)
+        return await respond(request, dto.VideoProjectView, result)
+
+    @router.put("/video-projects/{project_id}")
+    async def change_video_project_route(request: Request, project_id: str) -> JSONResponse:
+        await session(request, lane="mutation")
+        from row_bot.application.video_project_views import change_video_project
+
+        body = await _body(request, dto.VideoProjectChange, 256 * 1024)
+        result = await _project_call(change_video_project, _project_id(project_id), body.model_dump())
+        return await respond(request, dto.VideoProjectView, result)
+
+    @router.post("/video-projects/{project_id}/restore")
+    async def restore_video_project_route(request: Request, project_id: str) -> JSONResponse:
+        await session(request, lane="mutation")
+        from row_bot.application.video_project_views import restore_video_project
+
+        body = await _body(request, dto.VideoProjectRestore, 4 * 1024)
+        result = await _project_call(restore_video_project, _project_id(project_id), body.number)
+        return await respond(request, dto.VideoProjectView, result)
+
+    @router.post("/video-projects/{project_id}/make")
+    async def make_video_project_route(request: Request, project_id: str) -> JSONResponse:
+        await session(request, lane="mutation")
+        from row_bot.application.video_project_views import make_video_project
+
+        result = await _project_call(make_video_project, _project_id(project_id))
+        return await respond(request, dto.VideoProjectView, result)
 
     # Files sent to the person's devices or a chat app (F7). Every signed-in device is the owner's,
     # so each sees every delivery; a download needs the session and ends when its copy expires.

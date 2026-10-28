@@ -1759,6 +1759,19 @@ const CATALOG: Record<string, Entry> = {
   process_unavailable: ['That command is no longer running.', 'none'],
   recording_unavailable: ['That recording is no longer listed.', 'none'],
   video_edit_unavailable: ['That video edit is no longer listed.', 'none'],
+  video_project_unavailable: ['That video is no longer here.', 'none'],
+  video_project_stale: [
+    'The video changed meanwhile. Look at the new version, then change it again.',
+    'review',
+  ],
+  video_project_invalid: [
+    "One of the scenes' videos can't be used any more. Ask Row-Bot to swap it.",
+    'none',
+  ],
+  video_project_needs_ffmpeg: [
+    'Making the video needs ffmpeg. Ask Row-Bot to make it once, and it offers to download ffmpeg.',
+    'none',
+  ],
   sent_file_unavailable: ['That file is no longer here to download.', 'none'],
   sent_file_expired: [
     'This download has ended: sent files stay for 7 days. Ask Row-Bot to send it again.',

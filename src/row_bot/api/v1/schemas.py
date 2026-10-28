@@ -5128,6 +5128,90 @@ class VideoEditPage(WireModel):
     running: int = Field(ge=0)
 
 
+VideoProjectId = Annotated[str, StringConstraints(pattern=r"^vid-[0-9a-f]{8}$")]
+VideoSceneId = Annotated[str, StringConstraints(pattern=r"^s[0-9a-f]{6}$")]
+
+
+class VideoScene(WireModel):
+    """One scene of a video project (5.3.1 B3): a piece of a video, its speed, zoom, card and line."""
+    scene_id: VideoSceneId
+    # Its video: a recording (rec-…), an edit (edit-…), a file in the chat or a workspace path.
+    source: str = Field(min_length=1, max_length=512)
+    start: float = Field(ge=0)
+    end: float | None = Field(ge=0)
+    speed: float = Field(ge=0.25, le=4)
+    # [x, y, width, height], each 0 to 1: the region the scene punches in on.
+    zoom: list[float] | None = Field(min_length=4, max_length=4)
+    card: str = Field(max_length=120)
+    line: str = Field(max_length=300)
+    # Its voice says the line as it is now (else it's voiced again when the video is made).
+    voiced: bool
+    # Where it starts on this version's video and how long it lasts there (None until it's made).
+    at: float | None = Field(ge=0)
+    length: float | None = Field(ge=0)
+
+
+class VideoSceneWrite(WireModel):
+    """A scene as the Video panel writes it (an empty id is a new scene)."""
+    scene_id: str = Field(default="", max_length=16, pattern=r"^(s[0-9a-f]{6})?$")
+    source: str = Field(min_length=1, max_length=512)
+    start: float = Field(default=0, ge=0)
+    end: float | None = Field(default=None, ge=0)
+    speed: float = Field(default=1, ge=0.25, le=4)
+    zoom: list[float] | None = Field(default=None, min_length=4, max_length=4)
+    card: str = Field(default="", max_length=120)
+    line: str = Field(default="", max_length=300)
+
+
+class VideoVersionView(WireModel):
+    number: int = Field(ge=1)
+    at: str = Field(max_length=80)
+    by: Literal["you", "row-bot"]
+    # What changed, in a few words.
+    note: str = Field(max_length=200)
+
+
+class VideoProjectView(WireModel):
+    """A video project at one version (5.3.1 B3), shared by the Video panel and Row-Bot."""
+    project_id: VideoProjectId
+    conversation_id: str = Field(min_length=1, max_length=256)
+    title: str = Field(min_length=1, max_length=80)
+    latest: int = Field(ge=1)
+    # Every kept version, newest first.
+    versions: list[VideoVersionView] = Field(max_length=50)
+    number: int = Field(ge=1)
+    scenes: list[VideoScene] = Field(max_length=60)
+    # The scenes this version added or changed against the one before it.
+    changed: list[VideoSceneId] = Field(max_length=60)
+    music: str = Field(max_length=200)
+    music_volume: float = Field(ge=0, le=1)
+    captions: bool
+    voice_lines: bool
+    # draft (not made yet), voicing, rendering, made, failed or stopped.
+    status: Literal["draft", "voicing", "rendering", "made", "failed", "stopped"]
+    problem: str = Field(max_length=400)
+    # The edit that makes (or made) this version's video.
+    edit: VideoEditView | None
+    # The review card's checks: sound, black and still stretches.
+    checks: list[str] = Field(max_length=12)
+    checks_passed: bool | None
+
+
+class VideoProjectChange(WireModel):
+    """The person's change in the Video panel, made on version ``base``: a new version, then its video."""
+    base: int = Field(ge=1)
+    scenes: list[VideoSceneWrite] = Field(min_length=1, max_length=60)
+    title: str = Field(default="", max_length=80)
+    music_volume: float | None = Field(default=None, ge=0, le=1)
+    captions: bool | None = None
+    note: str = Field(default="", max_length=200)
+
+
+class VideoProjectRestore(WireModel):
+    """Back to an earlier version, as a new version."""
+    number: int = Field(ge=1)
+
+
 SandboxJobId = Annotated[str, StringConstraints(pattern=r"^prep-[0-9a-f]{8}$")]
 
 
@@ -8141,6 +8225,8 @@ class TraceSpecialization(WireModel):
         "request_corrected",
         # A conversation this one started or proposed (5.3.1 C), followed live by its link id.
         "linked_conversation",
+        # A video project a video step made or changed (5.3.1 B3): its card opens the Video panel.
+        "video_project",
     ]
     skill_id: str = Field(default="", max_length=180)
     display_name: str = Field(default="", max_length=180)
@@ -8180,6 +8266,8 @@ class TraceSpecialization(WireModel):
     page_id: str = Field(default="", max_length=64, pattern=r"^(page-[0-9a-f]{8})?$")
     # linked_conversation (5.3.1 C): the card reads the link's state by this id (conversation links).
     link_id: str = Field(default="", max_length=32, pattern=r"^([0-9a-f]{32})?$")
+    # video_project (5.3.1 B3): the card re-reads the project by this id and opens it in the Video panel.
+    project_id: str = Field(default="", max_length=32, pattern=r"^(vid-[0-9a-f]{8})?$")
 
 
 class TranscriptTraceItem(WireModel):

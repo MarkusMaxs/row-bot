@@ -1,0 +1,115 @@
+"""The Video panel's API (5.3.1 B3): read a project at any version, change it (a new version by
+"you", made on the version the person saw), go back, make again. Nothing is spoken or encoded:
+the voice and the edit job are fakes.
+"""
+
+from __future__ import annotations
+
+import threading
+
+import pytest
+
+from row_bot import video_edits
+from tests.subsystem.client_protocol.test_protocol_application import _client, service  # noqa: F401
+from tests.subsystem.client_protocol.test_protocol_security import bootstrap
+
+pytestmark = pytest.mark.subsystem
+
+_MP4 = b"\x00\x00\x00\x18ftypisom" + b"\x00" * 64
+
+
+@pytest.fixture
+def studio(tmp_path, monkeypatch):
+    """ffmpeg is here; speaking returns a tiny voice file; each edit saves a tiny video with its checks."""
+    from row_bot import ffmpeg_runtime, sound
+
+    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setattr(ffmpeg_runtime, "find", lambda: object())
+    said: list[str] = []
+
+    def speak(text, **_options):
+        said.append(text)
+        return sound.Speech(wav=b"RIFF\x00\x00\x00\x00WAVE" + b"0" * 32, seconds=1.0, voice="test-voice")
+
+    def run(edit, request):
+        from row_bot.application.attachments import register_attachment
+
+        saved = register_attachment(edit.conversation_id, edit.output_name, _MP4)
+        scenes = request.steps[0].scenes
+        video_edits._set(edit, status="saved", media_ref=saved["attachment_ref"], mime_type="video/mp4",
+                         size_bytes=len(_MP4), expected_seconds=3.0 * len(scenes),
+                         marks=[3.0 * index for index in range(len(scenes) + 1)],
+                         checks=["Length 0:06, 640×360.", "Sound: present (average -18 dB, peak -2 dB)."],
+                         checks_passed=True)
+        edit.done.set()
+
+    monkeypatch.setattr(sound, "speak", speak)
+    monkeypatch.setattr(video_edits, "_run", run)
+    yield said
+    video_edits.stop_all(timeout=2)
+
+
+def _made(client, headers, project_id):
+    for _ in range(300):
+        view = client.get(f"/api/v1/video-projects/{project_id}", headers=headers).json()
+        if view["status"] not in {"voicing", "rendering"}:
+            return view
+        threading.Event().wait(0.01)
+    raise AssertionError("the video was never made")
+
+
+def test_the_panel_reads_changes_and_goes_back_on_a_project(service, studio, monkeypatch):  # noqa: F811
+    from row_bot import ffmpeg_runtime, threads, video_projects
+    from row_bot.application.attachments import register_attachment
+
+    chat = threads.create_thread("Launch demo", seed_default_skills=False)
+    register_attachment(chat, "signup.mp4", _MP4)
+    project = video_projects.create(chat, "Launch demo", [
+        {"source": "signup.mp4", "end": 3, "line": "First, sign up."},
+        {"source": "signup.mp4", "start": 3, "line": "Then pick a plan."}])
+    video_projects.make(project, 1)
+
+    with _client(service) as client:
+        _, headers = bootstrap(client)
+        first = _made(client, headers, project.project_id)
+        assert (first["status"], first["number"], first["checks_passed"]) == ("made", 1, True)
+        assert [(scene["at"], scene["length"], scene["voiced"]) for scene in first["scenes"]] == [
+            (0.0, 3.0, True), (3.0, 3.0, True)]
+        assert first["edit"]["media_ref"] and first["checks"][1].startswith("Sound: present")
+
+        scenes = [{key: scene[key] for key in ("scene_id", "source", "start", "end", "speed", "zoom", "card",
+                                                "line")} for scene in first["scenes"]]
+        scenes[1]["line"] = "Then pick the plan that fits."
+        scenes.reverse()
+        changed = client.put(f"/api/v1/video-projects/{project.project_id}", headers=headers,
+                             json={"base": 1, "scenes": scenes, "captions": True})
+        assert changed.status_code == 200, changed.text
+        assert (changed.json()["number"], changed.json()["versions"][0]["by"]) == (2, "you")
+        assert changed.json()["changed"] == [scenes[0]["scene_id"]]
+        second = _made(client, headers, project.project_id)
+        assert [scene["line"] for scene in second["scenes"]] == ["Then pick the plan that fits.", "First, sign up."]
+        assert studio[-1] == "Then pick the plan that fits.", "only the changed line is voiced again"
+        assert len(studio) == 3 and second["captions"]
+
+        stale = client.put(f"/api/v1/video-projects/{project.project_id}", headers=headers,
+                           json={"base": 1, "scenes": scenes})
+        assert (stale.status_code, stale.json()["code"]) == (409, "video_project_stale")
+
+        back = client.post(f"/api/v1/video-projects/{project.project_id}/restore", headers=headers,
+                           json={"number": 1})
+        assert back.status_code == 200, back.text
+        assert (back.json()["number"], back.json()["status"], back.json()["edit"]["edit_id"]) == (
+            3, "made", first["edit"]["edit_id"]), "going back reuses that version's video"
+        older = client.get(f"/api/v1/video-projects/{project.project_id}", params={"version": 2}, headers=headers)
+        assert older.json()["number"] == 2 and older.json()["latest"] == 3
+
+        monkeypatch.setattr(ffmpeg_runtime, "find", lambda: None)
+        refused = client.put(f"/api/v1/video-projects/{project.project_id}", headers=headers,
+                             json={"base": 3, "scenes": scenes})
+        assert (refused.status_code, refused.json()["code"]) == (409, "video_project_needs_ffmpeg")
+        assert video_projects.get(project.project_id).latest.number == 3, "nothing changes when it can't be made"
+
+        assert client.get("/api/v1/video-projects/vid-00000000", headers=headers).status_code == 404
+        assert client.get("/api/v1/video-projects/not-a-project", headers=headers).status_code == 404
+        assert client.get(f"/api/v1/video-projects/{project.project_id}", params={"version": 9},
+                          headers=headers).status_code == 404

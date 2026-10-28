@@ -1,0 +1,78 @@
+import type { Locator, Page, TestInfo } from '@playwright/test';
+import { assertNoOverflow, expect, screenshot, test } from './evidence';
+import { composer, dismissNotices, newConversation } from './unified-helpers';
+
+/*
+ * 5.3.1 B3 · the Video panel. The model's video step is scripted; the project,
+ * its versions, the card, the panel and its API run through the real server.
+ * The made video is the fixture's synthetic clip; nothing is spoken or encoded.
+ */
+
+const PHONE = { width: 390, height: 844 };
+const DESKTOP = { width: 1280, height: 900 };
+
+async function views(page: Page, info: TestInfo, name: string, focus: Locator) {
+  await expect(page.getByText('Buddy is loading…')).toHaveCount(0);
+  await dismissNotices(page);
+  for (const appearance of ['light', 'dark'] as const) {
+    await page.emulateMedia({ colorScheme: appearance });
+    await expect(page.locator('html')).toHaveAttribute(
+      'data-theme',
+      appearance,
+    );
+    await focus.scrollIntoViewIfNeeded();
+    await assertNoOverflow(page);
+    await screenshot(page, info, `${name}-${appearance}`);
+  }
+  await page.emulateMedia({ colorScheme: 'light' });
+}
+
+test('a video Row-Bot made opens beside the chat as scenes, and an edit there is a new version', async ({
+  page,
+}, info) => {
+  await page.setViewportSize(DESKTOP);
+  await newConversation(page);
+  await composer(page).fill('b3 video fixture');
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
+  const card = page
+    .getByRole('log', { name: 'Conversation' })
+    .getByRole('group', { name: 'Launch demo · video' });
+  await expect(card).toContainText('Made');
+  await expect(card).toContainText('Version 2 of 2');
+  await card.getByRole('button', { name: 'Open' }).click();
+
+  const panel = page.getByRole('region', { name: 'Launch demo video' });
+  const player = panel.getByLabel('Launch demo, version 2');
+  await expect(player).toHaveAttribute('src', /^blob:/);
+  const scenes = panel.getByRole('list', { name: 'Scenes' });
+  await expect(scenes.getByRole('listitem')).toHaveCount(2);
+  // Row-Bot's last change cut the intro: the panel marks that scene.
+  await expect(scenes.getByRole('listitem').first()).toHaveAttribute(
+    'data-changed',
+    'true',
+  );
+  await expect(scenes.getByText('1.6 s')).toBeVisible();
+  await expect(panel.getByLabel('Scene 2 speed')).toHaveValue('2');
+  await expect(panel.getByRole('region', { name: 'Review' })).toContainText(
+    'Ready to share',
+  );
+  await views(page, info, 'video-panel', panel);
+
+  // Edit by text: the line changes, a scene moves; nothing is saved until Save.
+  const line = panel.getByLabel('Scene 2 line');
+  await line.fill('Then pick the plan that fits your team.');
+  await panel.getByRole('button', { name: 'Move scene 2 up' }).click();
+  const save = panel.getByRole('group', { name: 'Unsaved changes' });
+  await expect(save).toBeVisible();
+  await views(page, info, 'video-panel-edited', save);
+
+  await page.setViewportSize(PHONE);
+  await expect(panel).toBeVisible();
+  await views(page, info, 'video-panel-phone', scenes);
+  await save.getByRole('button', { name: 'Discard' }).click();
+  await expect(save).toHaveCount(0);
+  await expect(panel.getByLabel('Scene 1 line')).toHaveValue(
+    'First, sign up in a few seconds.',
+  );
+  await page.setViewportSize(DESKTOP);
+});
