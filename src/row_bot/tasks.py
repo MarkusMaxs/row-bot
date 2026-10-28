@@ -214,6 +214,14 @@ _CREATE_TABLE_SQL = {
             value TEXT NOT NULL
         )
     """,
+    # What a workflow keeps for its next run (G4), read when a run starts.
+    "workflow_notes": """
+        CREATE TABLE IF NOT EXISTS workflow_notes (
+            task_id    TEXT PRIMARY KEY,
+            text       TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """,
 }
 
 _COLUMN_MIGRATIONS = {
@@ -332,6 +340,7 @@ _REQUIRED_COLUMNS = {
     },
     "channel_conversations": {"channel", "conversation_key", "thread_id", "updated_at"},
     "scheduler_state": {"key", "value"},
+    "workflow_notes": {"task_id", "text", "updated_at"},
 }
 
 
