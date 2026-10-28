@@ -255,7 +255,9 @@ def test_phase4_a_workflow_turn_runs_on_its_own_model_never_the_default(tmp_path
 
     tasks.run_task_background(task_id, thread_id, [])
 
-    assert started == [(thread_id, "say hi", ref)]
+    [(conversation, prompt, model)] = started
+    assert (conversation, model) == (thread_id, ref)
+    assert prompt.endswith("\n\n---\n\nsay hi")  # After the workflow's notes (G4).
     assert tasks.get_recent_runs(1)[0]["status"] == "failed"
 
 
