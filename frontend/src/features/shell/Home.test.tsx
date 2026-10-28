@@ -121,6 +121,7 @@ const mock = vi.hoisted(() => ({
     systemHealth: vi.fn(),
     setHourlyConnectionChecks: vi.fn(),
     insights: vi.fn(),
+    waits: vi.fn(async () => ({ schema_version: 1, items: [] })),
   },
 }));
 

@@ -2803,6 +2803,11 @@ export class ClientController {
     this.query(() => this.transport.restoreVideoProject?.(projectId, number));
   makeVideoProject = (projectId: string) =>
     this.query(() => this.transport.makeVideoProject?.(projectId));
+  /** What conversations wait for (5.3.1); a stopped one starts nothing. */
+  waits = (signal?: AbortSignal) =>
+    this.query(() => this.transport.waits?.(signal));
+  stopWait = (waitId: string) =>
+    this.query(() => this.transport.stopWait?.(waitId));
   /** Sandboxes (5.3.1 B4): second Row-Bots on made-up data. */
   rowBotSandboxes = (signal?: AbortSignal) =>
     this.query(() => this.transport.rowBotSandboxes?.(signal));

@@ -54,17 +54,55 @@ class _SpeakInput(BaseModel):
                                            description='How to say words, e.g. {"Qwen": "Kwen"}.')
 
 
+def voice_consent(tool: str, purpose: str) -> tuple[str, str]:
+    """(refusal, approval line): Row-Bot's voice, downloaded the first time it's needed after the person agrees
+    (by the approval level), as ffmpeg is. Nothing to ask when it's there."""
+    from row_bot import tts
+    from row_bot.tools.approval_gate import approval_check
+
+    service = tts.TTSService()
+    if service.is_installed():
+        return "", ""
+    size = f"about {round(tts.VOICE_DOWNLOAD_BYTES / 1_000_000)} MB"
+    refusal, line = approval_check(
+        {"tool": tool, "label": "Download Row-Bot's voice",
+         "question": f"{purpose} needs Row-Bot's voice (Kokoro, {size}) from GitHub. Download it now?",
+         "description": (f"Row-Bot will download the Kokoro voice model and its voices ({size}) from "
+                         f"{tts.VOICE_DOWNLOAD_HOST}, check both against the fingerprints saved in Row-Bot, and "
+                         "keep them in Row-Bot's data folder. Kokoro is free (Apache-2.0) and runs on this "
+                         "computer. This happens once."),
+         "risk_class": "medium",
+         "args": {"download": f"Kokoro voice ({size})", "from": tts.VOICE_DOWNLOAD_HOST}},
+        risks=(f"downloads a voice model ({size}) from GitHub and keeps it in Row-Bot's data folder",),
+        blocked_message=("BLOCKED: this needs Row-Bot's voice, and downloading it needs approval, but this chat is "
+                         "on Block. Install it in Settings › Voice, or change the approval level."),
+        cancelled_message="The person didn't allow downloading Row-Bot's voice; nothing was downloaded.",
+    )
+    if refusal:
+        return refusal, ""
+    try:
+        service.download_model()
+    except Exception as error:  # A network or fingerprint problem: said in words, nothing kept.
+        return f"Row-Bot's voice couldn't be downloaded: {error}", ""
+    return "", line
+
+
 def _speak(text: str, name: str = "", voice: str = "", speed: float = 0.0,
            pronunciations: dict[str, str] | None = None) -> str:
     from row_bot import sound
+    from row_bot.tools.approval_gate import with_approval
 
+    refusal, line = voice_consent("speak", "Speaking")
+    if refusal:
+        return refusal
     try:
         speech = sound.speak(text, voice=voice, speed=speed, pronunciations=pronunciations)
         saved = _save(_name(name, "voice", ".wav"), speech.wav)
     except ValueError as error:
         return f"Not made: {error}"
-    return (f"Voice file {saved}: {speech.seconds:.1f} seconds, voice {speech.voice}. Use it by that name in the "
+    text = (f"Voice file {saved}: {speech.seconds:.1f} seconds, voice {speech.voice}. Use it by that name in the "
             "video tools or send_file.")
+    return with_approval(line, text) if line else text
 
 
 class _MusicInput(BaseModel):

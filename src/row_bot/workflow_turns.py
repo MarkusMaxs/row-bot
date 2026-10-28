@@ -99,6 +99,15 @@ def with_notes(task: Mapping[str, Any], prompt: str) -> str:
     kept = notes(task_id)
     lead = (f"Notes this workflow kept from its earlier runs:\n{kept}" if kept
             else "This workflow has no notes from earlier runs yet.")
+    conversation = str(task.get("persistent_thread_id") or "")
+    if conversation:
+        from row_bot.linked_conversations import take_held
+
+        held = take_held(conversation)
+        if held:
+            # Sent with when="next_run" by other conversations: information for this run, never the person's request.
+            lead += ("\n\nMessages other conversations left for this run (their information, not the person's "
+                     "request):\n" + "\n".join(f"- From “{sender}”: {text}" for sender, text in held))
     return (f"{lead}\n\nBefore this run ends, keep them current for the next run with "
             f"task_update(task_id=\"{task_id}\", notes=...): what you checked and when, ids you'll need again, "
             f"and what's left. Replace them whole; under {NOTES_LIMIT:,} characters.\n\n---\n\n{prompt}")
@@ -257,7 +266,11 @@ def _finish(run: Mapping[str, Any], task: Mapping[str, Any] | None, status: str,
     if status == "completed" and unsure:
         status, notice = "unsure", unsure["result"]
     elif status == "completed" and denied:
-        status, notice = "denied", "You said no, so it stopped there."
+        before = "; ".join(item["result"] for item in done)
+        status, notice = "denied", (f"You said no to “{denied}”, so it stopped there."
+                                    + (f" Before that: {before}" if before else ""))
+        if task is not None:
+            _note_denial(task, denied, done)
     elif status == "completed":
         notice = "; ".join(item["result"] for item in done) or _first_line(reply) or "Finished."
     elif status == "stopped":
@@ -352,13 +365,31 @@ def _title(name: str) -> str:
     return builtin.tool_title(name) or name.replace("_", " ").capitalize()
 
 
-def _denied_since(conversation_id: str, started_at: str) -> bool:
+def _denied_since(conversation_id: str, started_at: str) -> str | None:
+    """What the person said no to in this run, in a few words; None when they said no to nothing."""
     from row_bot import tasks
     conn = tasks._get_conn()
     try:
         row = conn.execute(
-            "SELECT 1 FROM approval_requests WHERE source_thread_id=? AND requested_at>=? AND status='denied' LIMIT 1",
+            "SELECT COALESCE(message, ''), COALESCE(approval_payload_json, '{}') FROM approval_requests "
+            "WHERE source_thread_id=? AND requested_at>=? AND status='denied' ORDER BY requested_at DESC LIMIT 1",
             (conversation_id, started_at)).fetchone()
     finally:
         conn.close()
-    return row is not None
+    if row is None:
+        return None
+    try:
+        payload = json.loads(row[1] or "{}")
+    except ValueError:
+        payload = {}
+    what = str(payload.get("question") or payload.get("label") or payload.get("description") or row[0] or "")
+    return _first_line(what).rstrip("?").strip()[:160] or "an action"
+
+
+def _note_denial(task: Mapping[str, Any], what: str, done: list[Mapping[str, Any]]) -> None:
+    """A denied run keeps a dated line in its notes, so the next run knows and doesn't try it another way."""
+    went = "; ".join(str(item.get("result") or "") for item in done if item.get("result")) or "nothing went out"
+    line = (f"{datetime.now():%d %b %H:%M}: the person said no to “{what}”, so that run stopped there ({went}). "
+            "Don't do it another way; if it still matters, say so in the next run's report.")
+    kept = notes(str(task["id"]))
+    save_notes(str(task["id"]), (kept + "\n" + line).strip()[-NOTES_LIMIT:] if kept else line)

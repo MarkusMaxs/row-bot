@@ -5681,16 +5681,17 @@ def _resolve_active_skill_records(authorized_records: tuple, *, include_turn_sco
     authorized_by_id = {record.canonical_id: record for record in authorized_records}
 
     selected: list[str] = []
-    if profile:
-        skill_policy = profile.get("skill_policy_json") or {}
-        if isinstance(skill_policy, dict):
-            selected.extend(str(name) for name in (skill_policy.get("skills_override") or []))
+    skill_policy = (profile.get("skill_policy_json") or {}) if profile else {}
+    named = skill_policy.get("skills_override") if isinstance(skill_policy, dict) else None
+    if named:
+        selected.extend(str(name) for name in named)
     elif override is not None:
+        # The conversation's own skills (a workflow's, kept for every run), under a profile that names none.
         selected.extend(str(name) for name in override)
 
     if not is_background and not profile and surface != "designer":
         selected.extend(str(name) for name in state.get("pinned", []))
-    if not is_background and include_turn_scoped:
+    if include_turn_scoped:
         selected.extend(str(name) for name in state.get("auto_loaded", []))
         # Mentioned in this message: loaded for this turn only, and only if already authorized above.
         selected.extend(str(name) for name in (_current_app_scope_var.get(None) or {}).get("skills") or [])
@@ -5730,25 +5731,17 @@ def _build_runtime_skill_snapshot(
     is_child = surface.startswith("agent_child")
     background = is_background_workflow()
 
-    if profile and not is_child:
-        skill_policy = profile.get("skill_policy_json") or {}
-        selected = {
-            str(name)
-            for name in (skill_policy.get("skills_override") or [])
-        } if isinstance(skill_policy, dict) else set()
-        authorized = tuple(record for record in all_records if record.canonical_id in selected)
-    elif background:
-        try:
-            from row_bot.threads import get_thread_skills_override
-
-            selected = set(get_thread_skills_override(_current_thread_id_var.get("") or "") or [])
-        except Exception:
-            selected = set()
+    # A profile that names skills keeps a run to them; one that names none (Default) leaves the person's
+    # skills, as in a chat. A workflow run is a chat turn (F31): the same skills, and its own pinned ones.
+    skill_policy = (profile.get("skill_policy_json") or {}) if profile and not is_child else {}
+    named = skill_policy.get("skills_override") if isinstance(skill_policy, dict) else None
+    if named:
+        selected = {str(name) for name in named}
         authorized = tuple(record for record in all_records if record.canonical_id in selected)
     else:
         authorized = all_records
 
-    if tool_parents and not background:
+    if tool_parents:
         known = {record.canonical_id for record in authorized}
         try:
             authorized = authorized + tuple(
@@ -5763,8 +5756,7 @@ def _build_runtime_skill_snapshot(
     active_ids = tuple(record.canonical_id for record in active_records)
     smart_off = is_smart_off(_current_thread_id_var.get("") or "default")
     discoverable = bool(
-        not background
-        and not smart_off
+        not smart_off
         and any(record.canonical_id not in set(active_ids) for record in authorized)
     )
     fingerprint = skill_snapshot_fingerprint(

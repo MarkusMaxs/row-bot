@@ -87,6 +87,14 @@ def _make(project, number: int | None) -> str:
     refusal, line, download = ffmpeg_consent("edit", "video")
     if refusal:
         return refusal
+    target = project.version(number) if number else project.latest
+    if target is not None and video_projects.needs_voice(target):
+        from row_bot.tools.sound_tool import voice_consent
+
+        refusal, voiced = voice_consent("video", "Narrating this video")
+        if refusal:
+            return refusal
+        line = "\n".join(part for part in (line, voiced) if part)
     version = video_projects.make(project, number, download=download)
     _wait_for(project.project_id, project.conversation_id, version.number, INLINE_SECONDS)
     fresh = video_projects.get(project.project_id, project.conversation_id) or project

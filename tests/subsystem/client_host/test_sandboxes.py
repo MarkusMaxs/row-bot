@@ -207,3 +207,13 @@ def test_a_real_sandbox_starts_signs_a_browser_in_and_stops(home):
     finally:
         sandboxes.stop(sandbox.sandbox_id)
     assert sandboxes.get(sandbox.sandbox_id).status == "stopped"
+
+
+def test_a_sandbox_says_when_it_has_no_model_yet(home):
+    import json
+
+    sandbox = sandboxes.create("Demo shop", "shop")
+    assert sandboxes.view(sandbox)["needs_model"] is True, "a new sandbox signs in to a provider of its own once"
+    settings = home / "data" / "sandboxes" / sandbox.sandbox_id / "data" / "model_settings.json"
+    settings.write_text(json.dumps({"model": "model:codex:gpt-6.1-sol"}), encoding="utf-8")
+    assert sandboxes.view(sandbox)["needs_model"] is False

@@ -498,6 +498,21 @@ def _look() -> Any:
                 logo_corner=kit.logo_corner, intro=kit.intro, outro=kit.outro)
 
 
+def pointer_focus(source: str, start: float, end: float | None) -> tuple[float, float] | None:
+    """Where a recording's pointer mostly was during a scene (the median of its moves), or None: no recording, or
+    no moves then. A square or tall cut is centred there."""
+    from statistics import median
+
+    from row_bot import recordings
+
+    record = recordings.get(source) if str(source).startswith("rec-") else None
+    moves = [(x, y) for at, x, y in (record.trail if record else [])
+             if at >= start and (end is None or at <= end)]
+    if not moves:
+        return None
+    return (round(median(x for x, _y in moves), 4), round(median(y for _x, y in moves), 4))
+
+
 def _make(project_id: str, conversation_id: str, number: int, download: bool, shape: str = "") -> None:
     """Voice what needs it, then make the version's video (or, with ``shape``, the same in that shape)."""
     from row_bot import sound, video_edits
@@ -527,7 +542,9 @@ def _make(project_id: str, conversation_id: str, number: int, download: bool, sh
             media.append(found[0])
         cuts = [SceneCut(input=sources.index(scene.source), start=scene.start, end=scene.end, speed=scene.speed,
                          zoom=tuple(scene.zoom) if scene.zoom else None, card=scene.card, line=scene.line,
-                         voice=scene.voice if version.voice_lines else "") for scene in version.scenes]
+                         voice=scene.voice if version.voice_lines else "",
+                         focus=None if scene.zoom else pointer_focus(scene.source, scene.start, scene.end))
+                for scene in version.scenes]
         steps = [Step(op="scenes", scenes=cuts, style="caption" if version.captions else "",
                       aspect=shape or version.aspect, look=_look() if version.brand else None)]
         sounds: dict[str, tuple[Any, bytes, str]] = {}

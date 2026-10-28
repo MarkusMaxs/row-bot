@@ -18,6 +18,7 @@ Rules:
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
 import threading
 import time
@@ -165,9 +166,53 @@ def resolve(target: str, *, exclude: str = "") -> str:
     named = [conversation_id for conversation_id in found if conversation_id != exclude]
     if len(named) == 1:
         return named[0]
-    if not named:
-        raise LinkError(f"No conversation is called “{given}”. Use conversation_links, or its id.")
-    raise LinkError(f"{len(named)} conversations are called “{given}”: use its id.")
+    if len(named) > 1:
+        raise LinkError(f"{len(named)} conversations are called “{given}”: use its id.")
+    workflow = _workflow_conversation(given, exclude=exclude)
+    if workflow:
+        return workflow
+    near = _near_names(given)
+    raise LinkError(f"No conversation or workflow is called “{given}”."
+                    + (f" Did you mean {', '.join(f'“{name}”' for name in near)}?" if near else "")
+                    + " Use conversation_links, or its id.")
+
+
+def _bare(name: str) -> str:
+    """A name without its leading icon, for matching: "⚡ Growth | X content" is "growth | x content"."""
+    return re.sub(r"^[^\w]+", "", str(name or ""), flags=re.UNICODE).strip().casefold()
+
+
+def _workflow_conversation(given: str, *, exclude: str = "") -> str:
+    """A workflow's own conversation, by the workflow's id or name; made now if it hasn't run yet."""
+    import row_bot.tasks as tasks_db
+
+    wanted = _bare(given)
+    matches = [task for task in tasks_db.list_tasks()
+               if not task.get("notify_only") and (task["id"] == given or _bare(task["name"]) == wanted)]
+    if len(matches) > 1:
+        raise LinkError(f"{len(matches)} workflows are called “{given}”: use its id from task_list.")
+    if not matches:
+        return ""
+    conversation_id = tasks_db._prepare_task_thread(matches[0])
+    if conversation_id == exclude:
+        raise LinkError("That's this conversation.")
+    return conversation_id
+
+
+def _near_names(given: str) -> list[str]:
+    """Up to three conversation or workflow names close to *given*."""
+    import difflib
+
+    import row_bot.tasks as tasks_db
+    from row_bot import threads
+
+    with closing(sqlite3.connect(threads.DB_PATH)) as conn:
+        names = [str(row[0]) for row in conn.execute(
+            "SELECT name FROM thread_meta WHERE COALESCE(thread_type, '') != 'agent_child' "
+            "AND COALESCE(name, '') != '' ORDER BY updated_at DESC LIMIT 500")]
+    names += [str(task["name"]) for task in tasks_db.list_tasks() if not task.get("notify_only")]
+    by_bare = {_bare(name): name for name in reversed(names)}
+    return [by_bare[bare] for bare in difflib.get_close_matches(_bare(given), list(by_bare), n=3, cutoff=0.6)]
 
 
 # --- Starting and proposing --------------------------------------------------------------------------
@@ -279,23 +324,54 @@ def _level_for_child(source_id: str, requested: str) -> str:
 
 # --- Messages between conversations ------------------------------------------------------------------
 
-def send(target: str, message: str) -> str:
-    """Send a message to another conversation: it starts a turn there now, or after its current one."""
+def send(target: str, message: str, *, reply: bool = True, when: Literal["now", "next_run"] = "now") -> str:
+    """Send a message to another conversation: it starts a turn there now, or after its current one.
+
+    *reply* False: an update or note that needs no answer, so nothing comes back. *when* "next_run": to a
+    workflow, held for its next run's first message instead of starting a turn now.
+    """
     source = origin()
     message = _clean(message, _MESSAGE_CHARS, "a message")
     target_id = resolve(target, exclude=source.conversation_id)
+    if when == "next_run":
+        if _workflow_of(target_id) is None:
+            raise LinkError("Only a workflow has a next run: send it now instead.")
+        _insert(source_id=source.conversation_id, target_id=target_id, kind="message", status="held",
+                message=message, hops=0, reply_expected=0)
+        return f"Held for “{_name(target_id)}”'s next run: it reads it then. No reply comes back."
     hops = _hops_of(source.generation_id) + 1
     if hops > MAX_HOPS:
         if not _keep_going(source):
             return "Not sent: the person said to stop this chain of conversations. Tell them where things stand."
         hops = 1
     _insert(source_id=source.conversation_id, target_id=target_id, kind="message", status="queued",
-            message=message, hops=hops, reply_expected=1)
+            message=message, hops=hops, reply_expected=1 if reply else 0)
     name = _name(target_id)
     started = _deliver(target_id)
     return ((f"Sent to “{name}”: it's working on it now." if started else
              f"Sent to “{name}”: it's busy, so it gets the message when its current turn ends.")
-            + " Its reply comes back here as a message.")
+            + (" Its reply comes back here as a message." if reply else " No reply comes back."))
+
+
+def _workflow_of(conversation_id: str) -> dict[str, Any] | None:
+    import row_bot.tasks as tasks_db
+
+    return next((task for task in tasks_db.list_tasks()
+                 if str(task.get("persistent_thread_id") or "") == conversation_id), None)
+
+
+def take_held(conversation_id: str) -> list[tuple[str, str]]:
+    """Messages held for a workflow's next run, oldest first, as (from, text); they're read once."""
+    with closing(_conn()) as conn, conn:
+        found = conn.execute(f"{_SELECT} WHERE target_id = ? AND status = 'held' ORDER BY created_at",
+                             (conversation_id,)).fetchall()
+        records = [dict(zip(_COLUMNS, row)) for row in found]
+        if records:
+            conn.execute(f"UPDATE conversation_links SET status = 'done' WHERE id IN ({', '.join('?' * len(records))})",
+                         [record["id"] for record in records])
+    if records:
+        _publish()
+    return [(_name(record["source_id"]), record["message"]) for record in records]
 
 
 def _keep_going(source: Origin) -> bool:

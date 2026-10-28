@@ -5257,6 +5257,8 @@ class RowBotSandboxView(WireModel):
     # Its address while it runs (on this computer only).
     url: str = Field(max_length=200)
     problem: str = Field(max_length=300)
+    # No chat model chosen in it yet: the person opens it and signs in to a provider once (decision 4).
+    needs_model: bool = False
 
 
 class SandboxPackView(WireModel):
@@ -5269,6 +5271,25 @@ class RowBotSandboxPage(WireModel):
     packs: list[SandboxPackView] = Field(max_length=8)
     # False inside a sandbox: a sandbox starts no sandboxes of its own.
     available: bool
+
+
+class WaitView(WireModel):
+    """Something a conversation waits for (5.3.1): it carries on there when it happens."""
+
+    wait_id: str = Field(pattern=r"^[0-9a-f]{12}$")
+    conversation_id: OpaqueId
+    conversation_title: str = Field(max_length=160)
+    kind: Literal["process", "check", "time", "conversation"]
+    label: str = Field(min_length=1, max_length=120)
+    # "checks every 5 min", "at 14:00" or "watching".
+    how: str = Field(max_length=40)
+    until: str = Field(max_length=32)
+    status: Literal["waiting", "due"]
+
+
+class WaitPage(WireModel):
+    schema_version: Literal[1] = 1
+    items: list[WaitView] = Field(max_length=500)
 
 
 class RowBotSandboxCreate(WireModel):

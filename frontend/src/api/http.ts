@@ -458,6 +458,12 @@ export class HttpTransport implements ClientTransport {
   makeVideoProject(projectId: string) {
     return wire.makeVideoProject(this.base, this.session(), projectId);
   }
+  waits(signal?: AbortSignal) {
+    return wire.getWaits(this.base, this.session(), signal);
+  }
+  stopWait(waitId: string) {
+    return wire.stopWait(this.base, this.session(), waitId);
+  }
   rowBotSandboxes(signal?: AbortSignal) {
     return wire.getRowBotSandboxes(this.base, this.session(), signal);
   }

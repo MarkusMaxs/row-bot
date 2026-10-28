@@ -92,10 +92,12 @@ class _TaskCreateInput(BaseModel):
             "otherwise it asks the person)."
         ),
     )
+    timezone: str | None = Field(default=None, description="IANA zone, e.g. 'Europe/London' (default: local).")
 
 
 class _TaskListInput(BaseModel):
     include_history: bool = Field(default=False, description="Also show each task's recent runs.")
+    task_id: str | None = Field(default=None, description="One task in full: messages, notes, conversation.")
 
 
 class _TaskRunNowInput(BaseModel):
@@ -129,6 +131,7 @@ class _TaskUpdateInput(BaseModel):
         default=None,
         description="A workflow's notes for its next run, replacing the old ones; '' clears them.",
     )
+    timezone: str | None = Field(default=None, description="IANA zone, e.g. 'Europe/London' (default: local).")
 
 
 # ── Tool functions ───────────────────────────────────────────────────────────
@@ -164,6 +167,7 @@ def _task_create(
     agent_profile: str | None = None,
     approval_mode: str | None = None,
     safety_mode: str | None = None,
+    timezone: str | None = None,
 ) -> str:
     """Create a new task or quick timer."""
     try:
@@ -191,6 +195,7 @@ def _task_create(
             safety_mode=effective_approval_mode,
             agent_profile_id=agent_profile or tasks_db.DEFAULT_WORKFLOW_AGENT_PROFILE_ID,
             apply_default_skills=False,
+            timezone=timezone or None,
         )
 
         task = tasks_db.get_task(task_id)
@@ -201,7 +206,7 @@ def _task_create(
         parts.append(f"  ID: {task_id}")
         parts.append(f"  Name: {task['icon']} {task['name']}")
         if task.get("schedule"):
-            parts.append(f"  Schedule: {task['schedule']}")
+            parts.append(f"  Schedule: {task['schedule']} ({task.get('timezone') or 'this computer’s time'})")
         if task.get("at"):
             parts.append(f"  Fires at: {task['at']}")
         if task.get("notify_only"):
@@ -221,8 +226,10 @@ def _task_create(
         return f"Error creating task: {exc}"
 
 
-def _task_list(include_history: bool = False) -> str:
-    """List all tasks with their status."""
+def _task_list(include_history: bool = False, task_id: str | None = None) -> str:
+    """List all tasks with their status, or one in full."""
+    if task_id:
+        return _task_detail(task_id)
     all_tasks = tasks_db.list_tasks()
     if not all_tasks:
         return "No tasks configured yet. Use task_create to set one up."
@@ -238,6 +245,7 @@ def _task_list(include_history: bool = False) -> str:
             entry["description"] = t["description"]
         if t.get("schedule"):
             entry["schedule"] = t["schedule"]
+            entry["timezone"] = t.get("timezone") or "local"
         if t.get("at"):
             entry["fires_at"] = t["at"]
         if t.get("notify_only"):
@@ -271,6 +279,44 @@ def _task_list(include_history: bool = False) -> str:
     return bounded(compact_json(entries), tool_name="task_list", max_chars=_TASK_LIST_CHARS)
 
 
+def _task_detail(task_id: str) -> str:
+    """One workflow in full: what each run sends and keeps, when, how it may act and where it talks."""
+    from row_bot import workflow_turns
+    from row_bot.threads import _thread_exists
+
+    t = tasks_db.get_task(task_id)
+    if not t:
+        return f"Task '{task_id}' not found. Use task_list to see available tasks."
+    conversation = str(t.get("persistent_thread_id") or "")
+    detail = {
+        "id": t["id"],
+        "name": f"{t['icon']} {t['name']}",
+        "enabled": t.get("enabled", True),
+        "description": t.get("description") or "",
+        "schedule": t.get("schedule") or ("once at " + t["at"] if t.get("at") else "manual"),
+        "timezone": t.get("timezone") or "local",
+        "approval_mode": t.get("safety_mode") or "block",
+        "messages": list(t.get("prompts") or []),
+        "notes": workflow_turns.notes(t["id"]),
+        "delivery": (f"{t['delivery_channel']} → {t.get('delivery_target', 'default')}"
+                     if t.get("delivery_channel") else "in Row-Bot only"),
+        "model": t.get("model_override") or "the Brain model",
+        # Its conversation: send to it by this workflow's name or id (it's made when first needed).
+        "conversation": (f"⚡ {t['name']}" if conversation and _thread_exists(conversation)
+                         else "not yet: made by its first run or the first message sent to it"),
+        "recent_runs": [
+            {"status": r["status"], "started": r["started_at"][:16], "outcome": r.get("notice") or "",
+             "actions": _run_actions(r)}
+            for r in tasks_db.get_run_history(t["id"], limit=3)
+        ],
+    }
+    if t.get("notify_only"):
+        detail = {**detail, "type": "notification_only", "messages": [t.get("notify_label") or t["name"]]}
+    from row_bot.tool_outputs import bounded, compact_json
+
+    return bounded(compact_json(detail), tool_name="task_list", max_chars=_TASK_LIST_CHARS)
+
+
 def _run_actions(run: dict) -> list[str]:
     try:
         saved = json.loads(run.get("actions_json") or "[]")
@@ -302,6 +348,7 @@ def _task_update(
     agent_profile: str | None = None,
     run_at: str | None = None,
     notes: str | None = None,
+    timezone: str | None = None,
 ) -> str:
     """Update fields on an existing task."""
     task = tasks_db.get_task(task_id)
@@ -339,12 +386,18 @@ def _task_update(
         updates["model_override"] = model if model else None
     if agent_profile is not None:
         updates["agent_profile_id"] = agent_profile or tasks_db.DEFAULT_WORKFLOW_AGENT_PROFILE_ID
+    if timezone is not None:
+        from row_bot import schedule_zones
+
+        if timezone and not schedule_zones.is_zone(timezone):
+            return f"Error updating task: timezone must be an IANA zone such as Europe/London, not {timezone!r}."
+        updates["timezone"] = timezone
 
     if not updates:
         if noted:
             return f"Updated task '{task['icon']} {task['name']}'.\n{noted}"
         return ("No fields to update. Provide at least one of: name, schedule, prompts, approval_mode, enabled, "
-                "model, notes.")
+                "model, notes, timezone.")
 
     try:
         tasks_db.update_task(task_id, **updates)
@@ -356,6 +409,8 @@ def _task_update(
             parts.append(f"  Fires at: {task.get('at')}")
         elif "schedule" in updates:
             parts.append(f"  Schedule: {task.get('schedule') or 'manual'}")
+        if "timezone" in updates:
+            parts.append(f"  Time zone: {task.get('timezone') or 'this computer’s'}")
         if "prompts" in updates:
             parts.append(f"  Messages: {len(task['prompts'])}")
         if "safety_mode" in updates:
@@ -450,7 +505,7 @@ class TaskTool(BaseTool):
             StructuredTool.from_function(
                 func=_task_list,
                 name="task_list",
-                description="List tasks with their ids, schedules and last runs.",
+                description="List tasks with their ids, schedules and last runs, or one in full.",
                 args_schema=_TaskListInput,
             ),
             StructuredTool.from_function(

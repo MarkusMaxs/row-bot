@@ -37,6 +37,8 @@ const runtime = vi.hoisted(() => ({
   taskRunReview: vi.fn(),
   command: vi.fn(),
   taskRun: vi.fn(),
+  waits: vi.fn(async () => ({ schema_version: 1, items: [] as unknown[] })),
+  stopWait: vi.fn(async () => ({ schema_version: 1, items: [] })),
 }));
 vi.mock('../../runtime', () => ({
   useRuntime: () => ({ controller: runtime }),
@@ -913,6 +915,45 @@ it('omits the hide control when Home cannot hide the reminder', () => {
   expect(
     screen.queryByRole('button', { name: 'Hide setup reminder' }),
   ).toBeNull();
+});
+
+// Waiting (5.3.1) -----------------------------------------------------------------
+
+it('lists what conversations wait for under Waiting, not Needs you, each with Stop', async () => {
+  const user = userEvent.setup();
+  runtime.waits.mockResolvedValueOnce({
+    schema_version: 1,
+    items: [
+      {
+        wait_id: 'a1b2c3d4e5f6',
+        conversation_id: 'ship',
+        conversation_title: 'Ship 5.3.1',
+        kind: 'check',
+        label: 'CI on PR 590 is green',
+        how: 'checks every 2 min',
+        until: '2026-09-26T11:30',
+        status: 'waiting',
+      },
+    ],
+  });
+  show();
+
+  const waiting = await screen.findByRole('list', { name: 'Waiting' });
+  expect(waiting).toHaveTextContent(
+    'CI on PR 590 is greenShip 5.3.1 · checks every 2 min',
+  );
+  expect(screen.queryByRole('list', { name: 'Needs you' })).toBeNull();
+  await user.click(
+    within(waiting).getByRole('button', { name: 'Open Ship 5.3.1' }),
+  );
+  expect(handlers.onOpenConversation).toHaveBeenCalledWith('ship');
+  await user.click(
+    within(waiting).getByRole('button', { name: 'Stop waiting' }),
+  );
+  expect(runtime.stopWait).toHaveBeenCalledWith('a1b2c3d4e5f6');
+  await waitFor(() =>
+    expect(screen.queryByRole('list', { name: 'Waiting' })).toBeNull(),
+  );
 });
 
 // Ask box and quick starts -------------------------------------------------------

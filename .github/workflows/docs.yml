@@ -103,6 +103,8 @@ jobs:
         run: python scripts/docs/capture_real_ui_screenshots.py --validate-only
 
       - name: Validate docs source
+        env:
+          ROW_BOT_DOCS_PUBLISH: ${{ steps.change.outputs.publish }}
         run: python scripts/docs/validate_public_docs.py
 
       - name: Build docs review report
