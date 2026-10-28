@@ -35,6 +35,22 @@ of the turn ending:
 
 Only those two cases, only while tools are bound, at most once each, and only
 before anything of the reply has been passed on. Every attempt's tokens count.
+
+Stop ends a request at once, even one Ollama hasn't answered yet: while it
+parses a tool call Ollama sends nothing, not even headers, so a model that
+opens a call and never closes it generates for as long as nobody hangs up
+(one ran 30 minutes). Each request registers with the run's cancellation scope
+when it starts, and Stop shuts its connection down, which ends the generation;
+a call that Stop ended passes nothing more on and isn't asked again. Two
+backstops for runs nobody is watching:
+
+- a reply is never longer than the context window (``num_predict`` is the
+  request's ``num_ctx`` unless the caller sets one): a reply that long no
+  longer fits beside the model's own prompt, nor in the next step's request;
+- a request that receives nothing for ``LOCAL_CHAT_IDLE_SECONDS`` ends with
+  ``OllamaSilentError``, which says so in plain words, and so does a reply
+  that reached its length limit with nothing of it shown (it isn't asked
+  again: a model stuck in a tool call fills the window again).
 """
 
 from __future__ import annotations
@@ -43,20 +59,34 @@ import copy
 import json
 import logging
 import os
-from collections.abc import AsyncIterator, Iterator, Mapping
+import socket
+import threading
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from typing import Any
 
+import httpx
 from langchain_core.messages import BaseMessage, HumanMessage
 from langchain_ollama import ChatOllama
 from langchain_ollama.chat_models import _parse_arguments_from_tool_call
 from ollama import ResponseError
-from pydantic import Field
+from pydantic import Field, model_validator
 
+from row_bot.cancellation import CancellationScope, current_cancellation_scope
 from row_bot.providers import deferred_tools
 
 logger = logging.getLogger(__name__)
 
 OLLAMA_CHAT_KEEP_ALIVE = "30m"
+# The longest a local chat request may receive nothing. Ollama is silent while it loads the model (it gives up on a
+# load that stalls for 5 minutes), reads the prompt and writes a tool call, which it holds back until the call is
+# complete. 10 minutes leaves room for all three on slow hardware, while a model stuck in a tool call it never
+# closes no longer holds the GPU for half an hour.
+LOCAL_CHAT_IDLE_SECONDS = 600.0
+# One connection per request, so Stop can find the request's own socket (connections are local and cheap).
+_ONE_REQUEST_PER_CONNECTION = httpx.Limits(max_keepalive_connections=0)
+_REQUEST_ENDED = frozenset({
+    "http11.response_closed.complete", "http11.response_closed.failed", "connection.connect_tcp.failed",
+})
 
 # What Ollama's tool-call parsers say when the model's own call can't be read.
 _TOOL_CALL_PARSE_ERRORS = ("xml syntax error", "error parsing tool call", "failed to parse tool call")
@@ -77,11 +107,96 @@ EMPTY_REPLY_NOTE_WITHOUT_BRIDGE = (
 )
 
 
+class OllamaSilentError(RuntimeError):
+    """The local model's reply never came: Ollama sent nothing for longer than the request's idle limit, or the
+    model wrote until the reply's length limit without any of it showing (a tool call it never closed)."""
+
+    @classmethod
+    def idle(cls, seconds: float | None) -> OllamaSilentError:
+        span = "too long" if not seconds else f"{seconds / 60:g} minutes" if seconds >= 60 else f"{seconds:g} seconds"
+        return cls(f"The local model sent nothing for {span}, so Row-Bot stopped waiting for it. "
+                   "Try again, or try another model.")
+
+    @classmethod
+    def filled_window(cls) -> OllamaSilentError:
+        return cls("The local model filled its whole context window without sending a reply, so Row-Bot stopped it. "
+                   "Try again, or try another model.")
+
+
 def ollama_chat_keep_alive() -> str | None:
     """The ``keep_alive`` Row-Bot sends with chat requests, or ``None`` to defer to the server."""
     if os.environ.get("OLLAMA_KEEP_ALIVE", "").strip():
         return None
     return OLLAMA_CHAT_KEEP_ALIVE
+
+
+def _shut(sock: Any) -> None:
+    # A shutdown, not a close: only a shutdown wakes a read blocked in another thread on Linux, and it tells
+    # Ollama the client has gone.
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except (AttributeError, OSError):
+        pass  # never connected, or already closed
+
+
+class _LocalRequest:
+    """One request to Ollama, which Stop ends by shutting its connection down, connected yet or not."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._socket: Any = None
+        self._stopped = False
+        self.unregister: Callable[[], None] = lambda: None
+
+    def stop(self) -> None:
+        with self._lock:
+            self._stopped = True
+            sock = self._socket
+        _shut(sock)
+
+    def trace(self, event: str, info: Mapping[str, Any]) -> None:
+        """httpcore's ``trace`` extension: learns the request's socket, and when the request is over."""
+        if event == "connection.connect_tcp.complete":
+            sock = info["return_value"].get_extra_info("socket")
+            with self._lock:
+                self._socket, stopped = sock, self._stopped
+            if stopped:
+                _shut(sock)
+        elif event in _REQUEST_ENDED:
+            self.unregister()
+
+    async def atrace(self, event: str, info: Mapping[str, Any]) -> None:
+        self.trace(event, info)
+
+
+def _stoppable(request: httpx.Request, *, asynchronous: bool) -> None:
+    scope = current_cancellation_scope()
+    if scope is None:
+        return
+    local = _LocalRequest()
+    request.extensions["trace"] = local.atrace if asynchronous else local.trace
+    local.unregister = scope.register(local.stop, "ollama_local_request.stop")
+
+
+def _request_started(request: httpx.Request) -> None:
+    _stoppable(request, asynchronous=False)
+
+
+async def _arequest_started(request: httpx.Request) -> None:
+    _stoppable(request, asynchronous=True)
+
+
+def _raise_if_stopped(scope: CancellationScope | None, cause: BaseException | None = None) -> None:
+    """End the call once Stop was pressed: nothing more of the reply is passed on, and it isn't asked again."""
+    if scope is not None and scope.is_cancelled():
+        raise InterruptedError("execution_cancelled") from cause
+
+
+def _silent_for(error: httpx.ReadTimeout) -> float | None:
+    try:
+        return error.request.extensions["timeout"]["read"]
+    except (KeyError, RuntimeError, TypeError):
+        return None
 
 
 def _schema_types(schema: Any) -> set[str] | None:
@@ -254,6 +369,11 @@ class _Attempt:
         """Tokens were generated but nothing of the reply arrived (a dropped tool call)."""
         return not self.shown and _counts(self.held)[1] > 0
 
+    def ran_out(self) -> bool:
+        """The reply reached its length limit with nothing of it shown: asked again, it would only do so again."""
+        return not self.shown and any(
+            not isinstance(response, str) and response.get("done_reason") == "length" for response in self.held)
+
 
 class _Asking:
     """The requests of one model call: as asked, then at most one more for a call Ollama couldn't
@@ -310,10 +430,29 @@ class _Asking:
 
 class RowBotChatOllama(ChatOllama):
     """``ChatOllama`` that sends its ``num_ctx`` and ``keep_alive`` on every request,
-    passes text tool arguments through as text, and asks the model once more when
-    Ollama can't hand back its tool call."""
+    passes text tool arguments through as text, asks the model once more when
+    Ollama can't hand back its tool call, and can be stopped mid-request."""
 
     keep_alive: int | str | None = Field(default_factory=ollama_chat_keep_alive)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _stoppable_requests(cls, data: Any) -> Any:
+        """Each client registers its requests with Stop, opens one connection per request and, unless the
+        caller set a timeout, gives up on a request that receives nothing for ``LOCAL_CHAT_IDLE_SECONDS``."""
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        shared = data.get("client_kwargs") or {}
+        for key, hook in (("sync_client_kwargs", _request_started), ("async_client_kwargs", _arequest_started)):
+            own = dict(data.get(key) or {})
+            hooks = dict(own.get("event_hooks") or shared.get("event_hooks") or {})
+            hooks["request"] = [*(known for known in hooks.get("request", ()) if known is not hook), hook]
+            own.update(event_hooks=hooks, limits=_ONE_REQUEST_PER_CONNECTION)
+            if "timeout" not in own and "timeout" not in shared:
+                own["timeout"] = LOCAL_CHAT_IDLE_SECONDS
+            data[key] = own
+        return data
 
     def _chat_params(
         self,
@@ -324,7 +463,11 @@ class RowBotChatOllama(ChatOllama):
         options = kwargs.get("options")
         if isinstance(options, dict) and self.num_ctx and "num_ctx" not in options:
             kwargs["options"] = {**options, "num_ctx": self.num_ctx}
-        return super()._chat_params(messages, stop, **kwargs)
+        params = super()._chat_params(messages, stop, **kwargs)
+        options = params.get("options")
+        if isinstance(options, dict) and options.get("num_ctx") and "num_predict" not in options:
+            params["options"] = {**options, "num_predict": options["num_ctx"]}
+        return params
 
     def _create_chat_stream(
         self,
@@ -332,17 +475,25 @@ class RowBotChatOllama(ChatOllama):
         stop: list[str] | None = None,
         **kwargs: Any,
     ) -> Iterator[Mapping[str, Any] | str]:
+        scope = current_cancellation_scope()
         asking = _Asking(messages, kwargs)
         while True:
+            _raise_if_stopped(scope)
             attempt = _Attempt()
             try:
                 for response in super()._create_chat_stream(asking.messages, stop, **asking.request()):
                     for ready in attempt.take(asking.read(response)):
                         yield asking.counted(ready)
-            except ResponseError as error:
+            except Exception as error:
+                _raise_if_stopped(scope, error)
+                if isinstance(error, httpx.ReadTimeout):
+                    raise OllamaSilentError.idle(_silent_for(error)) from error
                 if asking.again_after_error(error, attempt):
                     continue
                 raise
+            _raise_if_stopped(scope)
+            if attempt.ran_out():
+                raise OllamaSilentError.filled_window()
             if asking.again_after_empty(attempt):
                 continue
             for ready in attempt.held:
@@ -355,17 +506,25 @@ class RowBotChatOllama(ChatOllama):
         stop: list[str] | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[Mapping[str, Any] | str]:
+        scope = current_cancellation_scope()
         asking = _Asking(messages, kwargs)
         while True:
+            _raise_if_stopped(scope)
             attempt = _Attempt()
             try:
                 async for response in super()._acreate_chat_stream(asking.messages, stop, **asking.request()):
                     for ready in attempt.take(asking.read(response)):
                         yield asking.counted(ready)
-            except ResponseError as error:
+            except Exception as error:
+                _raise_if_stopped(scope, error)
+                if isinstance(error, httpx.ReadTimeout):
+                    raise OllamaSilentError.idle(_silent_for(error)) from error
                 if asking.again_after_error(error, attempt):
                     continue
                 raise
+            _raise_if_stopped(scope)
+            if attempt.ran_out():
+                raise OllamaSilentError.filled_window()
             if asking.again_after_empty(attempt):
                 continue
             for ready in attempt.held:
