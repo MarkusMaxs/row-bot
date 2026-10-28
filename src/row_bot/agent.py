@@ -4283,6 +4283,15 @@ def _pre_model_trim(state: dict, config: dict | None = None) -> dict:
             segment_id = admissions.start_segment(execution.pass_id) if execution.invocation_started else execution.segment_id
             execution.invocation_started = True
             _emit_context_event("platform_segment", {"segment_id": segment_id})
+    waiting: list = []
+    steered: list = []
+    if execution is not None:
+        # What the person sent while this turn works is read now, as their own words (5.3.1). It is taken
+        # only once this request is prepared, so a failed preparation leaves it waiting.
+        from row_bot.application.client_queue import waiting_for
+        waiting = waiting_for(execution)
+        if waiting:
+            state = {**state, "messages": [*state["messages"], *(message for *_, message in waiting)]}
     llm_messages, created, inputs, prepared = _prepare_agent_request(state, config)
     _remember_request_estimate(config, getattr(prepared, "raw_estimated_input_tokens", 0))
     # A model that sees images gets the browser page's picture right after the action that took it.
@@ -4290,15 +4299,16 @@ def _pre_model_trim(state: dict, config: dict | None = None) -> dict:
     llm_messages = with_page_picture(llm_messages, str(((config or {}).get("configurable") or {}).get("thread_id") or ""))
     if execution is not None:
         generation_registry.check_dispatch(execution)
-        from row_bot.application.client_queue import acknowledge_consumed
+        from row_bot.application.client_queue import acknowledge_consumed, take
         acknowledge_consumed(execution, [str(getattr(message, "id", "") or "") for message in prepared.messages])
+        steered = take(execution, waiting)
         generation_registry.check_dispatch(execution)
     update: dict[str, Any] = {
         "llm_input_messages": llm_messages,
         "execution_budget": inputs.execution_budget,
     }
-    if created:
-        update["messages"] = created
+    if created or steered:
+        update["messages"] = [*steered, *(created or [])]
     return update
 
 

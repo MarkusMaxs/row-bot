@@ -134,11 +134,24 @@ For longer work that deserves its own chat, Row-Bot can start a conversation of 
 
 Helpers stay as they are: quick sub-tasks whose results come back in the same turn.
 
+## Messages While Row-Bot Works
+
+You can keep typing while Row-Bot works. What you send waits above the message box (**1 message waiting · Row-Bot reads it at its next step**), and Row-Bot reads it at its next step, as part of what it is doing: to steer it ("use the blue logo instead"), or to add the next thing to do. Until it is read you can **Edit** or **Discard** it; once read it shows **Row-Bot read this**, and the transcript shows it in its place when the turn ends. A message Row-Bot has no step left to read is sent as the next turn. After **Stop**, waiting messages stay until you send them.
+
+## Conversation Details
+
+The details beside a conversation show what it is working on, its outputs and goal, and, when it has any:
+
+- **Waiting**: what it waits for, each with **Stop waiting**.
+- **Running**: its background processes, recordings and video edits, each with **Stop**.
+- **Workflow**: for a workflow's conversation, its schedule, next run and last run; the button opens its runs.
+- **Linked conversations**: the conversation that started this one, and the ones it started.
+
 ## Waiting For Something
 
 A chat can wait for something and carry on by itself when it happens: a background process to finish, a check to pass (a build, a CI run, a deploy, a page showing a word), a time, or another conversation or workflow to finish. Nothing runs while it waits, so it costs nothing.
 
-- Above the message box, one line says what it waits for and how often it looks, such as **Waiting for CI on PR 590 is green · checks every 2 min**, with **Stop waiting**. The conversation shows an hourglass in the sidebar, and **Home › Waiting** lists every wait.
+- **Conversation details** list what it waits for and how often it looks, such as **CI on PR 590 is green · checks every 2 min**, each with **Stop waiting** (with details hidden, one line above the message box says the same). The conversation shows an hourglass in the sidebar, and **Home › Waiting** lists every wait.
 - When it happens, a turn starts in that chat: **Checked back: …**, with what happened. If the wait runs out first (2 hours unless Row-Bot set longer, at most a day; a time can be up to a week ahead), the turn says so.
 - A check that runs a command asks once, by the chat's approval level, showing the exact command and how often it runs; a read-only command such as `git status` asks nothing. A check never reads Row-Bot's own data.
 - Waits for a time or a check survive a restart. A wait for a background process ends when Row-Bot quits, and says so. A chat waits for at most five things at once.

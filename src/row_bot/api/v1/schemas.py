@@ -7849,7 +7849,7 @@ class ClientQueueItem(WireModel):
     generation_id: OpaqueId
     text: str = Field(max_length=16000)
     revision: Revision
-    state: Literal["queued", "dispatching", "consumed", "cancelled", "paused"]
+    state: Literal["queued", "dispatching", "consumed", "cancelled", "paused", "steered"]
     editable: bool
     removable: bool
 
