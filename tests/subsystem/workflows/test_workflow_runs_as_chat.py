@@ -351,3 +351,25 @@ def test_a_daily_digest_sends_one_line_per_run_once_a_day_from_six(workflows, pl
     assert first["status"] == "completed"
     assert digest == (f"Daily digest · 2 runs\n{read} · Finished · nothing was posted or sent\n"
                       f"{stamp(finished)} · Sent · Posted on X as @row_bot_ai: {POST_LINK}")
+
+
+def test_a_workflow_reads_in_full_with_its_messages_notes_time_zone_and_conversation(workflows):
+    """W1/W4: rewriting a workflow starts from what it says and keeps, not from a message count."""
+    import json
+
+    from row_bot.tools.task_tool import _task_list, _task_update
+    task = create(workflows, "Check the release.", "Then say what's new.")
+    workflows.update_task(task["id"], schedule="daily:09:00")
+    _task_update(task["id"], notes="Release 5.3.0 checked.")
+
+    assert _task_update(task["id"], timezone="Mars/Olympus").startswith(
+        "Error updating task: timezone must be an IANA zone such as Europe/London")
+    assert "Time zone: Europe/London" in _task_update(task["id"], timezone="Europe/London")
+    detail = json.loads(_task_list(task_id=task["id"]))
+
+    assert detail["messages"] == ["Check the release.", "Then say what's new."]
+    assert (detail["notes"], detail["schedule"], detail["timezone"]) == (
+        "Release 5.3.0 checked.", "daily:09:00", "Europe/London")
+    assert detail["conversation"].startswith("not yet"), "it hasn't run, so it has no conversation yet"
+    listed = json.loads(_task_list())
+    assert [entry["timezone"] for entry in listed if entry["id"] == task["id"]] == ["Europe/London"]

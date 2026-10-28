@@ -185,3 +185,28 @@ def test_a_started_conversation_is_never_above_this_ones_level_or_hands_off(link
     stricter = linked.start("Check the post", "Check it.", propose=True, approval_mode="approve")
     assert linked._get(proposal["link_id"])["approval_mode"] == "auto", "Hands-off is the person's, per chat"
     assert linked._get(stricter["link_id"])["approval_mode"] == "approve"
+
+
+def test_a_message_reaches_a_workflow_by_its_name_even_before_its_first_run(linked, platform):  # noqa: F811
+    from row_bot import tasks
+    fake = Recording(reply("Noted for the next post."), reply("Thanks."))
+    platform.stream_factory = fake.stream
+    task_id = tasks.create_task("Growth | X content", prompts=["Draft today's posts."], channels=[],
+                                apply_default_skills=False)
+    with pytest.raises(linked.LinkError, match="Did you mean “Growth | X content”"):
+        linked.resolve("Growth | X contnet")
+
+    conversation = linked.resolve(task_id)  # It hasn't run: reaching it makes its conversation.
+    assert conversation == tasks.get_task(task_id)["persistent_thread_id"]
+    import sqlite3
+
+    from row_bot import threads
+    with sqlite3.connect(threads.DB_PATH) as connection:  # The model its turns run on here.
+        connection.execute("UPDATE thread_meta SET model_override='fixture/model' WHERE thread_id=?", (conversation,))
+    sent = linked.send("📣 Growth | X content", "Here's a trend worth a post.")
+    settle(platform, conversation, "conversation-a")
+
+    assert sent.startswith("Sent to “⚡ Growth | X content”")
+    assert "a trend worth a post" in fake.prompts[0]
+    assert rows(platform, conversation)[0]["linked_from"]["title"] == "conversation-a"
+    assert linked.resolve("Growth | X content") == conversation, "its name reaches the same conversation"
