@@ -72,6 +72,8 @@ class Recording:
     problem: Problem = ""
     # Marked moments: [seconds into the recording, live | work | cut, a note] (5.3.1 B4).
     beats: list[list[Any]] = field(default_factory=list)
+    # Where the pointer went: [seconds, x, y], x and y 0–1 across the page; a square cut follows it.
+    trail: list[list[float]] = field(default_factory=list)
     capture: Any = None
     done: threading.Event = field(default_factory=threading.Event)
 
@@ -123,7 +125,7 @@ def _data(record: Recording) -> dict[str, Any]:
         "started_at": record.started_at, "max_seconds": record.max_seconds, "status": record.status,
         "stopped_by": record.stopped_by, "ended_at": record.ended_at, "duration_seconds": record.duration_seconds,
         "media_ref": record.media_ref, "mime_type": record.mime_type, "size_bytes": record.size_bytes,
-        "problem": record.problem, "beats": record.beats,
+        "problem": record.problem, "beats": record.beats, "trail": record.trail,
     }
 
 
@@ -162,6 +164,7 @@ def _load(path: Path) -> Recording | None:
             size_bytes=int(data.get("size_bytes") or 0), problem=data.get("problem") or "",
             beats=[[float(at), str(kind), str(note)] for at, kind, note in data.get("beats") or []
                    if kind in {"live", "work", "cut"}][:200],
+            trail=[[float(at), float(x), float(y)] for at, x, y in data.get("trail") or []][:2_000],
         )
     except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
         return None
@@ -286,6 +289,7 @@ def finished(record: Recording, reason: str, video: Path | None) -> None:
             return  # Already being saved (a second end, from a stop that failed and its capture).
         record.status = "saving"
         record.beats = [list(beat) for beat in getattr(record.capture, "beats", None) or []][:200]
+        record.trail = [list(point) for point in getattr(record.capture, "trail", None) or []][-2_000:]
         record.stopped_by = record.stopped_by or _stopped_by(reason)
         record.ended_at = time.time()
         record.duration_seconds = max(0.0, record.ended_at - record.started_at)

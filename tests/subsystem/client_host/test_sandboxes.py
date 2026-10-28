@@ -225,3 +225,13 @@ def test_a_sandbox_a_crash_left_running_is_ended_before_it_starts_again(fake_pro
     assert sandboxes.end_left_overs() == 1 and ended == [f"pid {started.pid}"]
     assert sandboxes.get(sandbox.sandbox_id).pid == 0
     assert sandboxes.end_left_overs() == 0, "nothing left"
+
+
+def test_a_sandbox_says_when_it_has_no_model_yet(home):
+    import json
+
+    sandbox = sandboxes.create("Demo shop", "shop")
+    assert sandboxes.view(sandbox)["needs_model"] is True, "a new sandbox signs in to a provider of its own once"
+    settings = home / "data" / "sandboxes" / sandbox.sandbox_id / "data" / "model_settings.json"
+    settings.write_text(json.dumps({"model": "model:codex:gpt-6.1-sol"}), encoding="utf-8")
+    assert sandboxes.view(sandbox)["needs_model"] is False

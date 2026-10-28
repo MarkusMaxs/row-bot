@@ -75,14 +75,67 @@ def test_a_voice_file_reads_the_whole_script_with_its_pronunciations(chat, voice
     assert _files(chat)["scene 1.wav"]["mime_type"] == "audio/wav"
 
 
-def test_a_voice_file_needs_a_known_voice_and_the_installed_model(chat, voice, monkeypatch):
+def test_a_voice_file_needs_a_known_voice(chat, voice):
     from row_bot.tools.sound_tool import _speak
 
     assert _speak("Hello", voice="nobody").startswith("Not made: There's no voice called nobody.")
-    monkeypatch.setattr(type(__import__("row_bot.tts", fromlist=["TTSService"]).TTSService()), "is_installed",
-                        lambda self: False)
-    assert "Install it in Settings › Voice" in _speak("Hello")
     assert voice == [] and _files(chat) == {}
+
+
+def test_without_rowbots_voice_speaking_asks_once_to_download_it(chat, voice, monkeypatch):
+    """V4: a scheduled video on a fresh profile can narrate: the voice downloads after one card, as ffmpeg does."""
+    import row_bot.tts as tts
+    from row_bot.tools import approval_gate
+    from row_bot.tools.sound_tool import _speak
+
+    installed = {"value": False}
+    downloads: list[str] = []
+    monkeypatch.setattr(tts.TTSService, "is_installed", lambda self: installed["value"])
+    monkeypatch.setattr(tts.TTSService, "download_model",
+                        lambda self, progress=None: downloads.append("kokoro") or installed.update(value=True),
+                        raising=False)
+    cards: list[dict] = []
+    answer = {"value": ("The person didn't allow downloading Row-Bot's voice; nothing was downloaded.", "")}
+    monkeypatch.setattr(approval_gate, "approval_check", lambda payload, **_: cards.append(payload) or answer["value"])
+
+    assert _speak("Hello").startswith("The person didn't allow downloading Row-Bot's voice")
+    assert downloads == [] and voice == []
+    assert cards[0]["question"] == "Speaking needs Row-Bot's voice (Kokoro, about 206 MB) from GitHub. Download it now?"
+    assert "check both against the fingerprints saved in Row-Bot" in cards[0]["description"]
+
+    answer["value"] = (None, "Approval: asked; approved by you")
+    made = _speak("Hello")
+    assert made.startswith("Approval: asked; approved by you\nVoice file voice.wav: ") and downloads == ["kokoro"]
+    assert _speak("Again").startswith("Voice file "), "once: it's there now, so nothing asks"
+    assert len(cards) == 2
+
+
+def test_a_voice_download_is_kept_only_when_its_fingerprint_matches(tmp_path, monkeypatch):
+    import hashlib
+
+    import requests
+
+    import row_bot.tts as tts
+
+    data = b"kokoro" * 1000
+
+    class Response:
+        headers = {"content-length": str(len(data))}
+
+        def raise_for_status(self):
+            pass
+
+        def iter_content(self, chunk_size):
+            yield from (data[i:i + chunk_size] for i in range(0, len(data), chunk_size))
+
+    monkeypatch.setattr(requests, "get", lambda *a, **k: Response())
+    target = tmp_path / "kokoro.onnx"
+    with pytest.raises(RuntimeError, match="didn't match the fingerprint saved in Row-Bot"):
+        tts._download_file("https://example.invalid/kokoro.onnx", target, size=len(data), sha256="0" * 64)
+    assert list(tmp_path.iterdir()) == [], "nothing kept, not even part of it"
+    tts._download_file("https://example.invalid/kokoro.onnx", target, size=len(data),
+                       sha256=hashlib.sha256(data).hexdigest())
+    assert target.read_bytes() == data
 
 
 def test_music_is_saved_in_the_chat_for_the_videos_length(chat):

@@ -160,6 +160,9 @@ class SceneCut:
     card: str = ""
     line: str = ""
     voice: str = ""
+    # Where the action is when there's no zoom (the recording's pointer, 0–1 across): a square or tall cut
+    # is centred there, so what's being used stays in frame.
+    focus: tuple[float, float] | None = None
 
 
 CARD_SECONDS = 3.0
@@ -854,8 +857,8 @@ class _Builder:
         self.duration += BOOKEND_SECONDS * (bool(look.intro) + bool(look.outro))
 
     def _reframe(self, aspect: str, scenes: list[SceneCut]) -> None:
-        """Each scene cropped to the shape around its focus: the middle of its zoom, else the middle of the
-        picture. A shape the video already has changes nothing."""
+        """Each scene cropped to the shape around its focus: the middle of its zoom, else where its pointer was,
+        else the middle of the picture. A shape the video already has changes nothing."""
         if aspect not in ASPECTS:
             raise EditError(f"A video's shape is 16:9, 1:1 or 9:16, not {aspect}.")
         target, w, h = ASPECTS[aspect], self.width, self.height
@@ -866,7 +869,7 @@ class _Builder:
         videos, _ = self._pieces(cuts, audio=False)
         for index, scene in enumerate(scenes):
             fx, fy = ((scene.zoom[0] + scene.zoom[2] / 2, scene.zoom[1] + scene.zoom[3] / 2) if scene.zoom
-                      else (0.5, 0.5))
+                      else scene.focus or (0.5, 0.5))
             left = int(min(max(0.0, fx * w - cw / 2), w - cw))
             top = int(min(max(0.0, fy * h - ch / 2), h - ch))
             out = self.label("v")

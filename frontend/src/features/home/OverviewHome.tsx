@@ -17,6 +17,7 @@ import {
   ChevronRight,
   Code2,
   HeartPulse,
+  Hourglass,
   MessageSquare,
   Palette,
   Paperclip,
@@ -61,6 +62,7 @@ import {
 } from '../shell/needs';
 import { usePendingApprovals } from '../shell/pending-approvals';
 import FixAction, { RunAgain } from './FixAction';
+import { useWaits } from '../shell/Waits';
 import { When, greeting, plural } from './home-format';
 
 export type OverviewHomeProps = {
@@ -724,6 +726,27 @@ export default function OverviewHome({
     healthFailed && 'health checks',
   ].filter((name): name is string => Boolean(name));
 
+  // What conversations wait for (5.3.1): nothing needs the person; they carry on by themselves.
+  const { waits, stop: stopWait } = useWaits();
+  const waitRows = waits.map((wait): Item => ({
+    key: wait.wait_id,
+    icon: <Hourglass size={15} aria-hidden />,
+    tone: '3',
+    title: wait.label,
+    meta: `${wait.conversation_title || 'A conversation'} · ${wait.how}`,
+    label: `Open ${wait.conversation_title || 'the conversation'}`,
+    onOpen: () => onOpenConversation(wait.conversation_id),
+    actions: (
+      <IconButton
+        size="sm"
+        label="Stop waiting"
+        onClick={() => void stopWait(wait.wait_id)}
+      >
+        <X size={15} aria-hidden />
+      </IconButton>
+    ),
+  }));
+
   const recent = conversations
     .filter((row) => !row.parent_conversation_id)
     .map((row) => ({ row, at: parseTimestamp(row.updated_at)?.getTime() ?? 0 }))
@@ -1016,6 +1039,16 @@ export default function OverviewHome({
               {scheduleError}
             </p>
           )}
+        </Section>
+      )}
+
+      {!needsModel && waitRows.length > 0 && (
+        <Section id="overview-waiting" title="Waiting" order={2}>
+          <ul className="overview-rows" aria-label="Waiting">
+            {waitRows.map((item) => (
+              <Row key={item.key} item={item} />
+            ))}
+          </ul>
         </Section>
       )}
 

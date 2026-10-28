@@ -1037,6 +1037,7 @@ _STATUS.update(
         "video_project_not_made": 409,
         "video_brand_invalid": 422,
         "row_bot_sandbox_unavailable": 404,
+        "wait_unavailable": 404,
         "row_bot_sandbox_refused": 409,
         "sent_file_unavailable": 404,
         "sent_file_expired": 410,
@@ -5558,6 +5559,36 @@ def create_router(
         inside = sandboxes.is_sandbox()
         return {"items": [] if inside else [sandboxes.view(item) for item in sandboxes.list_sandboxes()],
                 "packs": [{"pack": pack, "name": name} for pack, name in PACKS.items()], "available": not inside}
+
+    def _wait_page() -> dict:
+        from row_bot import waits
+        from row_bot.application.client_platform import ClientPlatformError
+
+        items = []
+        for record in waits.waiting():
+            try:
+                meta = service._metadata(record["conversation_id"])
+            except ClientPlatformError:
+                continue  # Its conversation is gone: nothing will start there.
+            items.append({**waits.view(record), "conversation_title": str(meta.get("name") or "")[:160]})
+        return {"schema_version": 1, "items": items[:500]}
+
+    @router.get("/waits")
+    async def waits_page(request: Request) -> JSONResponse:
+        """What conversations wait for (5.3.1): the composer, the sidebar and Home show them."""
+        await session(request)
+        return await respond(request, dto.WaitPage, await call(_wait_page))
+
+    @router.post("/waits/{wait_id}/stop")
+    async def stop_wait(request: Request, wait_id: str) -> JSONResponse:
+        await session(request, lane="mutation")
+        if len(wait_id) != 12 or any(char not in "0123456789abcdef" for char in wait_id):
+            raise ProtocolError("wait_unavailable", 404)
+        from row_bot import waits
+
+        if not await call(waits.stop, wait_id):
+            raise ProtocolError("wait_unavailable", 404)
+        return await respond(request, dto.WaitPage, await call(_wait_page))
 
     @router.get("/row-bot-sandboxes")
     async def row_bot_sandboxes(request: Request) -> JSONResponse:

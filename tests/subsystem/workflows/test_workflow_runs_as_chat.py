@@ -170,7 +170,11 @@ def test_saying_no_on_the_card_ends_the_run_as_denied(workflows, platform):  # n
     resolve(platform, pending_approval(workflows, waiting["thread_id"]), "deny", "deny-post")
     settle(platform, waiting["thread_id"])
     done = latest(workflows, task["id"])
-    assert (done["status"], done["notice"]) == ("denied", "You said no, so it stopped there.")
+    assert done["status"] == "denied"
+    assert done["notice"].startswith("You said no to “") and done["notice"].endswith("”, so it stopped there.")
+    from row_bot import workflow_turns
+    kept = workflow_turns.notes(task["id"])
+    assert "the person said no to “" in kept and "Don't do it another way" in kept, "the next run knows"
 
 
 def test_a_new_run_replaces_one_still_waiting_on_its_card(workflows, platform):  # noqa: F811
@@ -351,3 +355,25 @@ def test_a_daily_digest_sends_one_line_per_run_once_a_day_from_six(workflows, pl
     assert first["status"] == "completed"
     assert digest == (f"Daily digest · 2 runs\n{read} · Finished · nothing was posted or sent\n"
                       f"{stamp(finished)} · Sent · Posted on X as @row_bot_ai: {POST_LINK}")
+
+
+def test_a_workflow_reads_in_full_with_its_messages_notes_time_zone_and_conversation(workflows):
+    """W1/W4: rewriting a workflow starts from what it says and keeps, not from a message count."""
+    import json
+
+    from row_bot.tools.task_tool import _task_list, _task_update
+    task = create(workflows, "Check the release.", "Then say what's new.")
+    workflows.update_task(task["id"], schedule="daily:09:00")
+    _task_update(task["id"], notes="Release 5.3.0 checked.")
+
+    assert _task_update(task["id"], timezone="Mars/Olympus").startswith(
+        "Error updating task: timezone must be an IANA zone such as Europe/London")
+    assert "Time zone: Europe/London" in _task_update(task["id"], timezone="Europe/London")
+    detail = json.loads(_task_list(task_id=task["id"]))
+
+    assert detail["messages"] == ["Check the release.", "Then say what's new."]
+    assert (detail["notes"], detail["schedule"], detail["timezone"]) == (
+        "Release 5.3.0 checked.", "daily:09:00", "Europe/London")
+    assert detail["conversation"].startswith("not yet"), "it hasn't run, so it has no conversation yet"
+    listed = json.loads(_task_list())
+    assert [entry["timezone"] for entry in listed if entry["id"] == task["id"]] == ["Europe/London"]

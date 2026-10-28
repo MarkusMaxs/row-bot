@@ -19,6 +19,7 @@ import {
   FileText,
   HatGlasses,
   Home,
+  Hourglass,
   Layers,
   Library,
   LoaderCircle,
@@ -39,6 +40,7 @@ import { fallbackDue } from '../../api/live-updates';
 import AttentionIndicator from './AttentionIndicator';
 import SandboxNotice from './SandboxNotice';
 import ViewOnlyNotice from './ViewOnlyNotice';
+import { useWaits } from './Waits';
 import { useShellSettled } from '../../shell-settled';
 import { useOverlay } from '../../ui/overlays';
 import {
@@ -447,6 +449,11 @@ export default function Navigation({
     !visible.some(({ id }) => id === activeTopLevel.id)
       ? withRetainedRow(visible, activeTopLevel)
       : visible;
+  // What each conversation waits for (5.3.1): an hourglass on its row.
+  const { waits } = useWaits();
+  const waitingFor = new Map(
+    waits.map((wait) => [wait.conversation_id, wait.label] as const),
+  );
   const pinnedRows = rows.filter((row) => row.pinned);
   const recentRows = rows.filter((row) => !row.pinned);
   // The open conversation's row shows its own live generation; every other
@@ -653,6 +660,13 @@ export default function Navigation({
                 size={16}
                 role="img"
                 aria-label={activity.label}
+              />
+            ) : waitingFor.has(conversation.id) ? (
+              <Hourglass
+                className="nav-waiting"
+                size={16}
+                role="img"
+                aria-label={`Waiting for ${waitingFor.get(conversation.id)}`}
               />
             ) : (
               <ConversationGlyph row={conversation} />

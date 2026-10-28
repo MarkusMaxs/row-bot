@@ -142,6 +142,7 @@ vi.mock('../../runtime', () => {
       steering: mock.steering,
       approval: mock.approval,
       pendingApprovals: mock.pendingApprovals,
+      waits: async () => ({ schema_version: 1, items: [] }),
       receipt: mock.receipt,
       showHistory: mock.showHistory,
       showLatest: mock.showLatest,
