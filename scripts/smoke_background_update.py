@@ -133,15 +133,16 @@ def _invitation(version_root: Path, data_dir: Path, origin: str) -> str:
     env = {k: v for k, v in os.environ.items() if not k.startswith(("PYTHON", "ROW_BOT_"))}
     env.update(PYTHONDONTWRITEBYTECODE="1", ROW_BOT_DATA_DIR=str(data_dir))
     code = (
-        f"import sys; sys.path.insert(0, {str(version_root / 'app')!r}); "
+        f"import sys; sys.path.insert(0, {str(version_root / 'app' / 'src')!r}); "
         "from row_bot.access.cli import build_remote_access_parser, dispatch_access_command; "
         "sys.exit(dispatch_access_command(build_remote_access_parser().parse_args("
         f"['access', 'invite', '--data-dir', {str(data_dir)!r}, '--origin', {origin!r}, '--json'])))"
     )
-    out = subprocess.run(  # noqa: S603 - the installed runtime
-        [str(_python(version_root)), "-I", "-B", "-c", code], check=True, capture_output=True, text=True, env=env,
-    ).stdout
-    url = json.loads(out)["invitation"]["invitation_url"]
+    made = subprocess.run(  # noqa: S603 - the installed runtime
+        [str(_python(version_root)), "-I", "-B", "-c", code], capture_output=True, text=True, env=env,
+    )
+    assert made.returncode == 0, f"row-bot access invite failed: {made.stderr[-2000:]}"
+    url = json.loads(made.stdout)["invitation"]["invitation_url"]
     return urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)["invitation"][0]
 
 
