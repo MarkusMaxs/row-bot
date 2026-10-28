@@ -24,6 +24,8 @@ class RouteClassification:
     kind: RouteKind
     browser_navigation: bool = False
     require_same_origin: bool = False
+    # A change: on this computer only a person's window or browser may make it.
+    changes_state: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +64,17 @@ OAUTH_CALLBACK_PATHS: tuple[str, ...] = (
 )
 ROUTE_AUTHENTICATED_HTTP_ROUTES: frozenset[tuple[str, str]] = frozenset(
     {("POST", "/sms"), *(("GET", path) for path in OAUTH_CALLBACK_PATHS)}
+)
+# Requests that change nothing although they are not GETs, so a view-only caller on this
+# computer may make them: starting a client session, following a conversation live, and
+# the native window's helper, whose routes each check the one-time token or grant that
+# only a person's window receives.
+_VIEW_ONLY_CHANGES = re.compile(
+    r"/api/v1/(?:handshake"
+    r"|conversations/[^/]+/subscriptions"
+    r"|subscriptions/[^/]+(?:/ack)?"
+    r"|native/(?:attest|authorize|revoke|selections/complete|terminal/open|terminal/external"
+    r"|attachments/[^/]+))"
 )
 PLUGIN_WEBHOOK_PATH = re.compile(
     r"/plugin-webhooks/[a-z][a-z0-9\-]{1,63}/[a-z0-9][a-z0-9_-]{0,63}"
@@ -155,16 +168,19 @@ class AccessPolicy:
                 RouteKind.PUBLIC,
                 require_same_origin=(method == "POST"),
             )
+        changes_state = not is_safe_method(method) and not _VIEW_ONLY_CHANGES.fullmatch(path)
         for prefix in AUTHENTICATED_ROUTE_PREFIXES:
             if path == prefix or path.startswith(f"{prefix}/"):
                 return RouteClassification(
                     RouteKind.AUTHENTICATED,
                     require_same_origin=not is_safe_method(method),
+                    changes_state=changes_state,
                 )
         return RouteClassification(
             RouteKind.AUTHENTICATED,
             browser_navigation=is_browser_navigation(scope),
             require_same_origin=not is_safe_method(method),
+            changes_state=changes_state,
         )
 
     def authorize(
@@ -180,6 +196,10 @@ class AccessPolicy:
             return AuthorizationDecision(False, 403, "launcher_local_only")
         if not context.authenticated:
             return AuthorizationDecision(False, 401, "authentication_required")
+        if classification.changes_state and not context.may_act:
+            # Being on this computer is not enough to change anything: a program Row-Bot
+            # started, or its own browser, could otherwise approve Row-Bot's own actions.
+            return AuthorizationDecision(False, 403, "person_required")
         return AuthorizationDecision(True, 200, "allowed")
 
 

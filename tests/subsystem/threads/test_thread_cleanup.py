@@ -54,10 +54,6 @@ def _insert_thread_task_state(tasks, thread_id: str) -> None:
     conn = tasks._get_conn()
     try:
         conn.execute(
-            "INSERT INTO pipeline_state (run_id, task_id, thread_id) VALUES (?, ?, ?)",
-            ("run-owned", "", thread_id),
-        )
-        conn.execute(
             "INSERT INTO approval_requests "
             "(id, run_id, task_id, step_id, resume_token, status, source_thread_id, parent_thread_id) "
             "VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)",
@@ -168,7 +164,6 @@ def test_normal_thread_deletion_removes_owned_state_and_persistent_media(tmp_pat
     conn = tasks._get_conn()
     try:
         for table in (
-            "pipeline_state",
             "approval_requests",
             "approval_channel_refs",
             "channel_thread_refs",
@@ -197,13 +192,9 @@ def test_workflow_audits_survive_with_deleted_thread_links_scrubbed(tmp_path, mo
         )
         conn.execute(
             "INSERT INTO task_runs "
-            "(id, task_id, thread_id, started_at, finished_at, status, pipeline_state_id) "
-            "VALUES (?, ?, ?, ?, ?, 'completed', ?)",
-            ("run-audit", "task-audit", thread_id, now, now, "pipeline-audit"),
-        )
-        conn.execute(
-            "INSERT INTO pipeline_state (run_id, task_id, thread_id) VALUES (?, ?, ?)",
-            ("pipeline-audit", "task-audit", thread_id),
+            "(id, task_id, thread_id, started_at, finished_at, status) "
+            "VALUES (?, ?, ?, ?, ?, 'completed')",
+            ("run-audit", "task-audit", thread_id, now, now),
         )
         conn.execute(
             "INSERT INTO approval_requests "
@@ -212,7 +203,7 @@ def test_workflow_audits_survive_with_deleted_thread_links_scrubbed(tmp_path, mo
             "VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)",
             (
                 "approval-audit",
-                "pipeline-audit",
+                "run-audit",
                 "task-audit",
                 "step",
                 "resume-audit",
@@ -240,19 +231,16 @@ def test_workflow_audits_survive_with_deleted_thread_links_scrubbed(tmp_path, mo
             "SELECT persistent_thread_id FROM tasks WHERE id = 'task-audit'"
         ).fetchone()
         run = conn.execute(
-            "SELECT thread_id, pipeline_state_id FROM task_runs WHERE id = 'run-audit'"
+            "SELECT thread_id FROM task_runs WHERE id = 'run-audit'"
         ).fetchone()
         approval = conn.execute(
             "SELECT status, message, channel, source_thread_id, parent_thread_id, "
             "approval_payload_json FROM approval_requests WHERE id = 'approval-audit'"
         ).fetchone()
         assert task is not None and task[0] is None
-        assert run is not None and tuple(run) == (thread_id, None)
+        assert run is not None and tuple(run) == (thread_id,)
         assert approval is not None
         assert tuple(approval) == ("cancelled", "", "", "", "", "{}")
-        assert conn.execute(
-            "SELECT COUNT(*) FROM pipeline_state WHERE run_id = 'pipeline-audit'"
-        ).fetchone()[0] == 0
         assert conn.execute(
             "SELECT COUNT(*) FROM approval_channel_refs WHERE approval_id = 'approval-audit'"
         ).fetchone()[0] == 0

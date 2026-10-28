@@ -271,14 +271,39 @@ def test_a_server_row_bot_started_in_this_chat_opens_without_asking(browser):
 
 
 @pytest.mark.parametrize("mode", ["block", "approve", "auto", "full"])
-@pytest.mark.parametrize("url", ["http://192.168.1.1/", "http://10.0.0.20:8080/",
-                                 "http://169.254.169.254/latest/meta-data/", "http://[fd00::1]:3000/",
-                                 "http://printer.local/"])
-def test_the_local_network_never_opens_at_any_level(browser, mode, url):
+@pytest.mark.parametrize("url", ["http://169.254.169.254/latest/meta-data/", "http://metadata.google.internal/",
+                                 "http://[fe80::1]/"])
+def test_a_cloud_metadata_address_never_opens_at_any_level(browser, mode, url):
     browser.mode = mode
     result = _tool("browser_navigate", url=url)
-    assert result.startswith("BLOCKED: Row-Bot's browser can't open addresses on your local network")
+    assert result.startswith("BLOCKED: Row-Bot's browser never opens a cloud metadata address")
     assert browser.asked == [] and browser.reviewed == [] and browser.acts == []
+
+
+@pytest.mark.parametrize(("url", "address"), [
+    ("http://192.168.1.1/", "192.168.1.1"), ("http://10.0.0.20:8080/", "10.0.0.20:8080"),
+    ("http://[fd00::1]:3000/", "[fd00::1]:3000"), ("http://printer.local/", "printer.local"),
+    ("http://100.101.102.103:3000/", "100.101.102.103:3000"), ("http://jira/", "jira"),
+])
+def test_an_address_on_the_persons_network_asks_once_like_localhost(browser, url, address):
+    """5.3.1 B3: a router, a NAS, another computer, Tailscale or an intranet name; asked once per chat."""
+    _tool("browser_navigate", url=url)
+    assert browser.asked[-1]["label"] == "Open an address on your network"
+    assert browser.asked[-1]["question"] == f"Allow Row-Bot's browser to open {address} in this chat?"
+    assert len(browser.acts) == 1
+    _tool("browser_navigate", url=url)
+    assert len(browser.asked) == 1
+    granted = browser.engine._granted
+    assert guard.allowed(url, "conversation-a", granted)
+    assert not guard.allowed(url, "conversation-b", granted)
+
+
+def test_block_refuses_an_address_on_the_network_and_hands_off_opens_it(browser):
+    browser.mode = "block"
+    assert _tool("browser_navigate", url="http://192.168.1.1/").startswith("BLOCKED: Opening 192.168.1.1")
+    browser.mode = "full"
+    _tool("browser_navigate", url="http://192.168.1.1/")
+    assert browser.asked == [] and len(browser.acts) == 1
 
 
 @pytest.mark.parametrize("mode", ["approve", "full"])

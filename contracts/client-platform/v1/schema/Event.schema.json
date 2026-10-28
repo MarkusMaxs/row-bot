@@ -2794,9 +2794,17 @@
             "sandbox_unprepared",
             "question_answered",
             "page",
-            "request_corrected"
+            "request_corrected",
+            "linked_conversation"
           ],
           "title": "Kind",
+          "type": "string"
+        },
+        "link_id": {
+          "default": "",
+          "maxLength": 32,
+          "pattern": "^([0-9a-f]{32})?$",
+          "title": "Link Id",
           "type": "string"
         },
         "media": {

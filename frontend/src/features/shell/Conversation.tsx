@@ -135,6 +135,11 @@ import {
 } from './incognito';
 import ErrorFix from './ErrorFix';
 import { TranscriptMessage } from './TranscriptMessage';
+import {
+  TeachContext,
+  useChatTeach,
+  useLearningChatMenu,
+} from '../learning/chat-learning';
 import { publicBlockText } from './TranscriptBlocks';
 import {
   answerStreaming,
@@ -160,6 +165,11 @@ const CONTEXT_HIDDEN_KEY = 'row-bot.context-hidden.v1';
 
 /** Below 740px Context floats; a floating chat docks it again from 780px. */
 /** Too narrow for the details rail beside a comfortable reading column (U3). */
+/** Room for the details as a card beside a full reading column (U21): a wide window. */
+export function isRoomyChat(width: number, roomy: boolean): boolean {
+  return roomy ? width >= 1060 : width >= 1100;
+}
+
 export function isNarrowChat(width: number, narrow: boolean): boolean {
   return narrow ? width < 980 : width < 940;
 }
@@ -294,6 +304,9 @@ export default function Conversation({
   const overlay = useOverlay();
   const navigate = useNavigate();
   const id = state.selectedConversationId;
+  // Learning (preview): Teach on replies and failed steps, the chat menu's item.
+  const learningChat = useChatTeach(id);
+  const learningMenuItem = useLearningChatMenu();
   const historyReady =
     Boolean(id) && !state.loadingConversation && state.conversation?.id === id;
   // Incognito (N11): its mark in the header, its words in the composer, its switch in the ⋯ menu.
@@ -520,6 +533,7 @@ export default function Conversation({
   const chatContentRef = useRef<HTMLDivElement>(null);
   const chatWorkspaceRef = useRef<HTMLDivElement>(null);
   const [narrowChat, setNarrowChat] = useState(false);
+  const [roomyChat, setRoomyChat] = useState(false);
   const contextHost = useContextHost();
   const compactPlacement = contextPlacement === 'compact';
   // Without a host (isolated renders) Context renders in place, as before.
@@ -586,7 +600,10 @@ export default function Conversation({
     if (!element) return;
     // A hidden section (Home, a route) measures 0: keep the last mode.
     const measure = (width: number) => {
-      if (width > 0) setNarrowChat((narrow) => isNarrowChat(width, narrow));
+      if (width > 0) {
+        setNarrowChat((narrow) => isNarrowChat(width, narrow));
+        setRoomyChat((roomy) => isRoomyChat(width, roomy));
+      }
     };
     measure(element.getBoundingClientRect().width);
     if (typeof ResizeObserver === 'undefined') return;
@@ -3144,7 +3161,7 @@ export default function Conversation({
       deliveries={deliveries}
     >
       <div
-        className={`chat-workspace${compactContext ? ' compact-context' : ''}${pinnedContext ? ' details-wide' : ''}${pinnedContext && cardActive ? ' details-open' : ''}`}
+        className={`chat-workspace${compactContext ? ' compact-context' : ''}${pinnedContext ? ` details-wide ${roomyChat ? 'details-float' : 'details-rail'}` : ''}${pinnedContext && cardActive ? ' details-open' : ''}`}
         ref={chatWorkspaceRef}
       >
         <div
@@ -3186,6 +3203,12 @@ export default function Conversation({
                   ]
                 : headerMenu
             }
+            trailingMenuActions={(() => {
+              const item = id
+                ? learningMenuItem({ id, title, incognito })
+                : null;
+              return item ? [item] : [];
+            })()}
             breadcrumb={breadcrumb}
           >
             {missingReceipt &&
@@ -3272,7 +3295,7 @@ export default function Conversation({
               {state.loadingConversation ? (
                 <Skeleton label="Opening conversation" />
               ) : items.length || pending?.conversation === id ? (
-                <>
+                <TeachContext.Provider value={learningChat.teach}>
                   {earlierIds.size > 0 && (
                     // Loaded history is not announced as new conversation.
                     <div className="transcript-earlier" aria-live="off">
@@ -3342,7 +3365,7 @@ export default function Conversation({
                       />
                     ),
                   )}
-                </>
+                </TeachContext.Provider>
               ) : (
                 <ChatEmpty
                   conversationId={id}
@@ -3601,6 +3624,7 @@ export default function Conversation({
               )}
             </div>
           </div>
+          {learningChat.sheet}
           {(state.history || showLatest) && (
             <button
               type="button"

@@ -840,6 +840,7 @@ export class ClientController {
         client_session_id: result.client_session_id,
         client_group_id: result.client_group_id,
         authentication_kind: result.authentication_kind,
+        may_act: result.may_act ?? true,
         client_compatibility: result.client_compatibility ?? 'unknown',
         application_capabilities: result.application_capabilities ?? [],
         presentation_capabilities: result.presentation_capabilities ?? [],
@@ -2724,6 +2725,11 @@ export class ClientController {
     this.query(() => this.transport.pages?.(conversationId, signal));
   page = (pageId: string, signal?: AbortSignal) =>
     this.query(() => this.transport.page?.(pageId, signal));
+  /** The conversations one started or proposed, with their state (5.3.1 C). */
+  conversationLinks = (conversationId: string, signal?: AbortSignal) =>
+    this.query(() =>
+      this.transport.conversationLinks?.(conversationId, signal),
+    );
   /** One frame address for a page, served once to its sandboxed frame. */
   pageFrame = (pageId: string, theme: PageTheme, signal?: AbortSignal) =>
     this.authenticatedResult((current) => {
@@ -2781,6 +2787,11 @@ export class ClientController {
   /** Every approval waiting for the person, wherever it was raised (B255). */
   pendingApprovals = (signal?: AbortSignal) =>
     this.query(() => this.transport.pendingApprovals?.(signal));
+  /** Posts approved for a time slot, waiting for it (G3). */
+  scheduledPosts = (signal?: AbortSignal) =>
+    this.query(() => this.transport.scheduledPosts?.(signal));
+  cancelScheduledPost = (id: string) =>
+    this.query(() => this.transport.cancelScheduledPost?.(id));
   monitorLogs = (limit = 200, signal?: AbortSignal) =>
     this.query(() => this.transport.monitorLogs?.(limit, signal));
   systemDiagnosis = (signal?: AbortSignal) =>
@@ -4336,8 +4347,6 @@ export class ClientController {
     this.query(() => this.transport.taskDeliveryDefaults?.(signal));
   taskEditor = (task: string, signal?: AbortSignal) =>
     this.query(() => this.transport.taskEditor?.(task, signal));
-  taskGraph = (task: string, signal?: AbortSignal) =>
-    this.query(() => this.transport.taskGraph?.(task, signal));
   taskSettings = (task: string, signal?: AbortSignal) =>
     this.query(() => this.transport.taskSettings?.(task, signal));
   workspaceProcesses = (
@@ -4531,6 +4540,43 @@ export class ClientController {
       if (!this.transport.executeInsight)
         throw clientError({ code: 'unsupported_command' });
       return this.transport.executeInsight(command, signal);
+    });
+    if (result.command_id !== original.command_id)
+      throw clientError({ code: 'protocol_incompatible' });
+    return result;
+  };
+  /** Learning (preview): only when the handshake offers `learning:preview`. */
+  learning = (signal?: AbortSignal) =>
+    this.query(() => this.transport.learning?.(signal));
+  learningTraining = (signal?: AbortSignal) =>
+    this.query(() => this.transport.learningTraining?.(signal));
+  learningDownload = (signal?: AbortSignal) =>
+    this.query(() => this.transport.learningDownload?.(signal));
+  learningHardware = (refresh = false, signal?: AbortSignal) =>
+    this.query(() => this.transport.learningHardware?.(refresh, signal));
+  learningConversation = (conversation: string, signal?: AbortSignal) =>
+    this.query(() =>
+      this.transport.learningConversation?.(conversation, signal),
+    );
+  learningLessons = (signal?: AbortSignal) =>
+    this.query(() => this.transport.learningLessons?.(signal));
+  learningVersion = (version: number, signal?: AbortSignal) =>
+    this.query(() => this.transport.learningVersion?.(version, signal));
+  learningReceipt = (command: string, signal?: AbortSignal) =>
+    this.query(() => this.transport.learningReceipt?.(command, signal));
+  executeLearning = async (
+    original: Omit<import('./types').LearningCommand, 'client_session_id'>,
+  ) => {
+    const handshake = this.state.handshake;
+    if (!handshake) throw clientError({ code: 'authentication_required' });
+    const command = validateWire<import('./types').LearningCommand>(
+      'LearningCommand',
+      { ...original, client_session_id: handshake.client_session_id },
+    );
+    const result = await this.authenticatedResult((signal) => {
+      if (!this.transport.executeLearning)
+        throw clientError({ code: 'unsupported_command' });
+      return this.transport.executeLearning(command, signal);
     });
     if (result.command_id !== original.command_id)
       throw clientError({ code: 'protocol_incompatible' });
@@ -4837,13 +4883,6 @@ export class ClientController {
     this.query(() => this.transport.taskRuns?.(task, cursor, signal));
   taskRun = (task: string, run: string, signal?: AbortSignal) =>
     this.query(() => this.transport.taskRun?.(task, run, signal));
-  taskApprovals = (
-    task: string,
-    run: string,
-    cursor?: string,
-    signal?: AbortSignal,
-  ) =>
-    this.query(() => this.transport.taskApprovals?.(task, run, cursor, signal));
   artifactExport = (
     conversation: string,
     binding: string,

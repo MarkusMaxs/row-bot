@@ -34,8 +34,7 @@ from row_bot.mcp_client.requirements import apply_managed_runtime_env, missing_c
 from row_bot.mcp_client.results import normalize_call_result
 from row_bot.integrations.presets import locked as recorded_locked
 from row_bot.mcp_client.safety import (asks_first, classify_tool_effect, hints, is_destructive_tool, prefixed_tool_name,
-                                       sanitize_name_component, saved_schema_digest, schema_digest,
-                                       tool_enabled_by_default)
+                                       sanitize_name_component, saved_schema_digest, schema_digest)
 
 logger = logging.getLogger(__name__)
 
@@ -537,7 +536,7 @@ def _normalize_tools(server_name: str, server_cfg: dict[str, Any], tools: list[A
         schema = _tool_attr(tool, "inputSchema", "input_schema", default={}) or {}
         destructive = is_destructive_tool(tool_name, description, tool)
         effect = classify_tool_effect(tool_name, description, tool)
-        enabled = bool(saved_enabled.get(tool_name, tool_enabled_by_default(destructive or effect in {"unknown", "mutation"})))
+        enabled = bool(saved_enabled.get(tool_name, True))
         recorded = (tool_cfg.get("catalog") or {}).get(tool_name)
         locked = destructive or effect == "unknown" or (isinstance(recorded, dict) and recorded_locked(recorded))
         requires = asks_first(tool_name, destructive, effect, approval_overrides, allowed) or locked  # Locked asks in Ask too.
@@ -575,8 +574,7 @@ def _sync_catalog_from_config(config: dict[str, Any] | None = None) -> None:
             allowed = set(tools_cfg.get("run_without_asking") or [])
             for info in tools.values():
                 effect = info.effect or classify_tool_effect(info.name, info.description)
-                info.enabled = bool(enabled_map.get(info.name, tool_enabled_by_default(
-                    info.destructive or effect in {"unknown", "mutation"}))) and _accepted_tool_matches(server_cfg, info)
+                info.enabled = bool(enabled_map.get(info.name, True)) and _accepted_tool_matches(server_cfg, info)
                 recorded = (tools_cfg.get("catalog") or {}).get(info.name)
                 info.locked = info.destructive or effect == "unknown" or (isinstance(recorded, dict)
                                                                           and recorded_locked(recorded))
@@ -1458,7 +1456,7 @@ def _validate_bound_runtime(server_name: str, expected: Any, *, tool_name: str =
             options = server_cfg.get("tools", {})
             if (info is None or not _accepted_tool_matches(server_cfg, info) or tool_name in options.get("exclude", [])
                     or (options.get("include") and tool_name not in options["include"])
-                    or not options.get("enabled", {}).get(tool_name, tool_enabled_by_default(info.destructive or info.effect == "unknown"))):
+                    or not options.get("enabled", {}).get(tool_name, True)):
                 raise RuntimeError("MCP capability was revoked")
         if feature and not server_cfg.get("tools", {}).get(feature):
             raise RuntimeError("MCP capability was revoked")
@@ -1908,7 +1906,7 @@ def get_passive_tool_records() -> list[dict[str, Any]]:
             if server is None or config["enabled"] is False or server["enabled"] is False:
                 enabled = False
             elif config["enabled"] is True and server["enabled"] is True and type(destructive) is bool:
-                enabled = server["tools"].get(name, tool_enabled_by_default(destructive or effect in {"unknown", "mutation"}))
+                enabled = server["tools"].get(name, True)
             if server is not None and type(destructive) is bool:
                 requires = asks_first(name, destructive, effect, server["require_approval"], server["run_without_asking"])
         if runtime_enabled is False:

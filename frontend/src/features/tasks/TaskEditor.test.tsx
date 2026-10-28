@@ -46,7 +46,6 @@ function snapshot(
     id: 'task-a',
     revision: 'a'.repeat(64),
     fields: { ...fields, prompts: [...fields.prompts] },
-    advanced: false,
     agent_profile_id: 'workflow-default',
     approval_mode: 'block',
     conversation_id: 'conversation-a',
@@ -72,7 +71,7 @@ function fillNew() {
   fireEvent.change(screen.getByLabelText('Name'), {
     target: { value: 'New workflow' },
   });
-  fireEvent.change(screen.getByLabelText('Prompt 1'), {
+  fireEvent.change(screen.getByLabelText('Message 1'), {
     target: { value: 'Summarize fake data' },
   });
 }
@@ -85,10 +84,10 @@ function facts() {
   ]);
 }
 
-it('exposes workflow prompts as a named accessible group', async () => {
+it('exposes workflow messages as a named accessible group', async () => {
   render(<TaskEditor {...props()} />);
   expect(
-    await screen.findByRole('group', { name: 'Workflow prompts' }),
+    await screen.findByRole('group', { name: 'Workflow messages' }),
   ).toBeVisible();
 });
 
@@ -97,7 +96,6 @@ it('shows schedule, delivery and policy in the rail of a new workflow with manua
     <TaskEditor
       {...props({
         onTaskSettings: vi.fn(),
-        onAdvancedSteps: vi.fn(),
       })}
     />,
   );
@@ -146,9 +144,6 @@ it('shows schedule, delivery and policy in the rail of a new workflow with manua
   expect(
     screen.queryByRole('button', { name: 'Change model and approvals' }),
   ).not.toBeInTheDocument();
-  expect(
-    screen.queryByRole('button', { name: /Open step graph/ }),
-  ).not.toBeInTheDocument();
 });
 
 const channels = [
@@ -189,7 +184,7 @@ it('retains a new draft and settles create after an actual unmount without creat
   first.unmount();
   const second = render(<TaskEditor {...callbacks} />);
   expect(screen.getByLabelText('Name')).toHaveValue('New workflow');
-  expect(screen.getByLabelText('Prompt 1')).toHaveValue('Summarize fake data');
+  expect(screen.getByLabelText('Message 1')).toHaveValue('Summarize fake data');
   fireEvent.click(screen.getByRole('button', { name: 'Save workflow' }));
   second.unmount();
   const third = render(<TaskEditor {...callbacks} />);
@@ -374,7 +369,7 @@ it('preserves prompt order and exact full-row revision on update', async () => {
   });
   render(<TaskEditor {...callbacks} />);
   await screen.findByDisplayValue('Saved workflow');
-  fireEvent.click(screen.getByRole('button', { name: 'Move prompt 2 up' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Move message 2 up' }));
   await act(async () =>
     fireEvent.click(screen.getByRole('button', { name: 'Save workflow' })),
   );
@@ -513,32 +508,18 @@ it('does not reveal arbitrary errors and preserves the draft for recovery', asyn
   expect(screen.getByLabelText('Name')).toHaveValue('New workflow');
 });
 
-it('preserves advanced graph and legacy destination settings as readonly', async () => {
+it('preserves a legacy destination as readonly', async () => {
   const callbacks = props({
     taskId: 'task-a',
-    load: vi
-      .fn()
-      .mockResolvedValue(snapshot({ advanced: true, legacy_delivery: true })),
+    load: vi.fn().mockResolvedValue(snapshot({ legacy_delivery: true })),
   });
   render(<TaskEditor {...callbacks} />);
   await screen.findByDisplayValue('Saved workflow');
-  expect(screen.getByLabelText('Prompt 1')).toHaveAttribute('readonly');
-  expect(screen.getByLabelText('Task type')).toBeDisabled();
-  expect(
-    screen.getByText(/open the step graph to see or change them/),
-  ).toBeVisible();
   const delivery = screen.getByRole('group', { name: 'Send results to' });
   expect(within(delivery).queryAllByRole('checkbox')).toHaveLength(0);
   expect(
     within(delivery).getByText(/keeps a destination from the earlier app/),
   ).toHaveTextContent('It is preserved when you save.');
-  for (const name of [
-    'Add step',
-    'Reorder step 1',
-    'Move prompt 1 up',
-    'Remove prompt 1',
-  ])
-    expect(screen.queryByRole('button', { name })).not.toBeInTheDocument();
   expect(facts()).toEqual([
     ['Agent profile', 'Workflow default'],
     ['Approvals', 'Block actions'],
@@ -551,29 +532,6 @@ it('preserves advanced graph and legacy destination settings as readonly', async
     'a'.repeat(64),
     snapshot().fields,
   );
-});
-
-it('shows no empty Steps heading for a branching workflow kept in its step graph (U15)', async () => {
-  render(
-    <TaskEditor
-      {...props({
-        taskId: 'task-a',
-        onAdvancedSteps: vi.fn(),
-        load: vi
-          .fn()
-          .mockResolvedValue(
-            snapshot({ advanced: true, fields: { ...fields, prompts: [] } }),
-          ),
-      })}
-    />,
-  );
-  await screen.findByDisplayValue('Saved workflow');
-  expect(
-    screen.getByText(/open the step graph to see or change them/),
-  ).toBeVisible();
-  expect(screen.getByRole('button', { name: /Open step graph/ })).toBeVisible();
-  expect(screen.queryByRole('heading', { name: 'Steps' })).toBeNull();
-  expect(screen.queryByText(/each sees the previous output/)).toBeNull();
 });
 
 it('saves a local one-shot date with no recurring schedule', async () => {
@@ -756,25 +714,25 @@ it('previews the next run only once the workflow is enabled', () => {
   expect(preview).not.toHaveTextContent('once enabled');
 });
 
-it('adds, fills and removes prompt steps', async () => {
+it('adds, fills and removes messages', async () => {
   const callbacks = props();
   render(<TaskEditor {...callbacks} />);
   fillNew();
   expect(
-    screen.getByRole('button', { name: 'Remove prompt 1' }),
+    screen.getByRole('button', { name: 'Remove message 1' }),
   ).toBeDisabled();
   expect(
-    screen.getByRole('button', { name: 'Move prompt 1 up' }),
+    screen.getByRole('button', { name: 'Move message 1 up' }),
   ).toBeDisabled();
-  fireEvent.click(screen.getByRole('button', { name: 'Add step' }));
-  const second = screen.getByLabelText('Prompt 2');
+  fireEvent.click(screen.getByRole('button', { name: 'Add message' }));
+  const second = screen.getByLabelText('Message 2');
   expect(second).toHaveValue('');
   expect(second).toBeRequired();
   fireEvent.change(second, { target: { value: 'Then draft a reply' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Add step' }));
-  expect(screen.getByLabelText('Prompt 3')).toHaveValue('');
-  fireEvent.click(screen.getByRole('button', { name: 'Remove prompt 3' }));
-  expect(screen.queryByLabelText('Prompt 3')).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Add message' }));
+  expect(screen.getByLabelText('Message 3')).toHaveValue('');
+  fireEvent.click(screen.getByRole('button', { name: 'Remove message 3' }));
+  expect(screen.queryByLabelText('Message 3')).not.toBeInTheDocument();
   await act(async () =>
     fireEvent.click(screen.getByRole('button', { name: 'Save workflow' })),
   );
@@ -785,7 +743,7 @@ it('adds, fills and removes prompt steps', async () => {
   );
 });
 
-it('bounds a workflow at 100 prompt steps', async () => {
+it('bounds a workflow at 100 messages', async () => {
   render(
     <TaskEditor
       {...props({
@@ -802,10 +760,10 @@ it('bounds a workflow at 100 prompt steps', async () => {
     />,
   );
   await screen.findByDisplayValue('Saved workflow');
-  expect(screen.getByRole('button', { name: 'Add step' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Add message' })).toBeDisabled();
 });
 
-it('reorders steps from the drag handle with the arrow keys and keeps focus on the moved step', async () => {
+it('reorders messages from the drag handle with the arrow keys and keeps focus on the moved one', async () => {
   const callbacks = props({
     taskId: 'task-a',
     load: vi.fn().mockResolvedValue(
@@ -819,15 +777,18 @@ it('reorders steps from the drag handle with the arrow keys and keeps focus on t
   const values = () =>
     [1, 2, 3].map(
       (index) =>
-        (screen.getByLabelText(`Prompt ${index}`) as HTMLTextAreaElement).value,
+        (screen.getByLabelText(`Message ${index}`) as HTMLTextAreaElement)
+          .value,
     );
   const handle = (index: number) =>
-    screen.getByRole('button', { name: `Reorder step ${index}` });
+    screen.getByRole('button', { name: `Reorder message ${index}` });
   handle(1).focus();
   fireEvent.keyDown(handle(1), { key: 'ArrowDown' });
   expect(values()).toEqual(['Second', 'First', 'Third']);
   await waitFor(() => expect(handle(2)).toHaveFocus());
-  expect(screen.getByText('Step 1 moved to position 2.')).toBeInTheDocument();
+  expect(
+    screen.getByText('Message 1 moved to position 2.'),
+  ).toBeInTheDocument();
   fireEvent.keyDown(handle(3), { key: 'ArrowUp' });
   expect(values()).toEqual(['Second', 'Third', 'First']);
   await waitFor(() => expect(handle(2)).toHaveFocus());
@@ -845,34 +806,35 @@ it('reorders steps from the drag handle with the arrow keys and keeps focus on t
   );
 });
 
-it('reorders steps by dragging a handle onto another step', () => {
+it('reorders messages by dragging a handle onto another one', () => {
   render(<TaskEditor {...props()} />);
   fillNew();
-  fireEvent.click(screen.getByRole('button', { name: 'Add step' }));
-  fireEvent.change(screen.getByLabelText('Prompt 2'), {
+  fireEvent.click(screen.getByRole('button', { name: 'Add message' }));
+  fireEvent.change(screen.getByLabelText('Message 2'), {
     target: { value: 'Second' },
   });
   const dataTransfer = { setData: vi.fn(), effectAllowed: 'none' };
-  fireEvent.dragStart(screen.getByRole('button', { name: 'Reorder step 2' }), {
-    dataTransfer,
-  });
+  fireEvent.dragStart(
+    screen.getByRole('button', { name: 'Reorder message 2' }),
+    {
+      dataTransfer,
+    },
+  );
   expect(dataTransfer.effectAllowed).toBe('move');
-  const first = screen.getByLabelText('Prompt 1').closest('li')!;
+  const first = screen.getByLabelText('Message 1').closest('li')!;
   fireEvent.dragOver(first, { dataTransfer });
   fireEvent.drop(first, { dataTransfer });
-  expect(screen.getByLabelText('Prompt 1')).toHaveValue('Second');
-  expect(screen.getByLabelText('Prompt 2')).toHaveValue('Summarize fake data');
+  expect(screen.getByLabelText('Message 1')).toHaveValue('Second');
+  expect(screen.getByLabelText('Message 2')).toHaveValue('Summarize fake data');
 });
 
 it('shows the saved model and approval policy in words and opens their settings', async () => {
   const onTaskSettings = vi.fn();
-  const onAdvancedSteps = vi.fn();
   render(
     <TaskEditor
       {...props({
         taskId: 'task-a',
         onTaskSettings,
-        onAdvancedSteps,
         load: vi.fn().mockResolvedValue(
           snapshot({
             agent_profile_id: 'builtin:row_bot_researcher',
@@ -894,8 +856,6 @@ it('shows the saved model and approval policy in words and opens their settings'
     screen.getByRole('button', { name: 'Change model and approvals' }),
   );
   expect(onTaskSettings).toHaveBeenCalledOnce();
-  fireEvent.click(screen.getByRole('button', { name: /Open step graph/ }));
-  expect(onAdvancedSteps).toHaveBeenCalledOnce();
 });
 
 it.each([

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 from pathlib import Path
+from row_bot.application.attachments import MAX_ATTACHMENT_BYTES
 
 
 def save_output(conversation_id: str, media_ref: str) -> str:
@@ -19,7 +20,7 @@ def save_output(conversation_id: str, media_ref: str) -> str:
         metadata["mime_type"]
     )
     if (extension is None or not str(metadata.get("name") or "").startswith("generated-")
-            or not data or len(data) > 25 * 1024 * 1024):
+            or not data or len(data) > MAX_ATTACHMENT_BYTES):
         raise ValueError("media_type_conflict")
     root = configured_workspace_root()
     folder = root / "Saved outputs"

@@ -177,17 +177,28 @@ def test_paths_outside_the_workspace_are_refused(studio, source):
     assert studio.started == [] and studio.edits.list_edits() == []
 
 
-def test_absolute_paths_outside_the_workspace_and_row_bot_s_data_are_refused(studio):
-    outside = studio.workspace.parent / "outside.mp4"
+def test_a_video_outside_the_workspace_is_read_in_place_once_allowed(studio):
+    """5.3.1 A1: a full path elsewhere asks by the approval level; Row-Bot's data never opens."""
+    outside = studio.workspace.parent / "trip.mp4"
     outside.write_bytes(MP4)
     private = studio.data / "media" / "secret.mp4"
     private.write_bytes(MP4)
 
-    for path in (outside, private):
-        assert studio.edit(inputs=[str(path)]) == f"{path} is outside the workspace; only files in it can be used."
+    studio.answer = False
+    assert "nothing outside the workspace was read" in studio.edit(inputs=[str(outside)])
+    assert studio.started == []
+
+    studio.answer = True
+    assert "Joined 2 videos" in studio.edit(inputs=[str(outside), "clips/intro.mp4"])
+    assert f"file:{outside.resolve()}" in studio.started[0]["argv"]
+    assert [asked["description"] for asked in studio.asked] == [f"Outside the workspace: {outside.resolve()}"] * 2
+
+    asked = len(studio.asked)
+    assert studio.edit(inputs=[str(private)]) == (
+        "That path is inside Row-Bot's private data folder, which tools can't read.")
+    assert len(studio.asked) == asked
     assert studio.edit(inputs=["missing.mp4"]).startswith("Couldn't find missing.mp4 in this chat's files or the "
                                                           "workspace.")
-    assert studio.started == []
 
 
 def test_a_link_out_of_the_workspace_is_refused(studio):
@@ -262,7 +273,8 @@ def test_saving_into_the_workspace_writes_a_new_file_and_replacing_one_asks(stud
         "../escape.mp4 isn't a path Row-Bot can write in the workspace (paths can't leave it).")
     outside = studio.workspace.parent / "escape.mp4"
     assert studio.edit(action="save", edit_id=edit_id, path=str(outside)) == (
-        f"{outside} is outside the workspace; only files in it can be used.")
+        f"{outside} is outside the workspace; this uses files in it. Copy the file with workspace_copy_file, "
+        "which asks first.")
     assert not outside.exists()
 
 

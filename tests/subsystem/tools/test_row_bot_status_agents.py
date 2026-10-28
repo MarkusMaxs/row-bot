@@ -107,7 +107,6 @@ def test_row_bot_status_reports_agents_profiles_and_goals(tmp_path, reload_for_d
     assert "Status child" in agents
     assert "subagent/running" in agents
     assert "thread:status" in agents
-    assert "90 model rounds" in agents
     assert "3 active per parent" in agents
     assert "Dispatcher: 0 active, 0 queued" in agents
 
@@ -118,17 +117,9 @@ def test_row_bot_status_reports_agents_profiles_and_goals(tmp_path, reload_for_d
     assert "user_created 1" in agent_profiles
     assert "enabled /" in agent_profiles
     assert "total" in agent_profiles
-    assert "Tool modes:" in agent_profiles
-    assert "inherited enabled tools" in agent_profiles
-    assert "selected tools" in agent_profiles
-    assert "Selected tool sources:" in agent_profiles
-    assert "core=" in agent_profiles
-    assert "Active profile tool mode: selected tools" in agent_profiles
-    assert "Active profile selected tools:" in agent_profiles
-    assert "(filesystem)" in agent_profiles
-    assert "(row_bot_status)" in agent_profiles
-    assert "runtime-bound" in agent_profiles
-    assert "other global tools are not bound" in agent_profiles
+    assert "Profiles list no tools" in agent_profiles
+    assert "Active thread profile: Review (review, enabled, read_only)" in agent_profiles
+    assert "selected tools" not in agent_profiles
 
     goal_status = status_tool._row_bot_status("goals")
     assert "**Goals**" in goal_status
@@ -195,7 +186,6 @@ def test_row_bot_status_agents_goals_empty_state_and_overview(tmp_path, reload_f
 
     agents = status_tool._row_bot_status("agents")
     assert "No durable Agent Runs recorded." in agents
-    assert "90 model rounds" in agents
     assert "3 active per parent" in agents
 
     goals = status_tool._row_bot_status("goals")
@@ -208,7 +198,7 @@ def test_row_bot_status_agents_goals_empty_state_and_overview(tmp_path, reload_f
     assert "**Goals**" in overview
 
 
-def test_row_bot_status_tools_distinguishes_global_and_effective_profile_scope(tmp_path, reload_for_data_dir):
+def test_row_bot_status_tools_names_the_profile_and_the_turns_runtime_list(tmp_path, reload_for_data_dir):
     threads, _profiles, _agent_runs, _goals, agent, status_tool = _fresh_status_modules(
         tmp_path,
         reload_for_data_dir,
@@ -228,9 +218,8 @@ def test_row_bot_status_tools_distinguishes_global_and_effective_profile_scope(t
     assert "Global catalog:" in tools
     assert "**Effective Thread Tool Scope**" in tools
     assert "Active profile: UI Check" in tools
-    assert "selected tools are runtime-bound" in tools
-    assert "other global tools are not bound" in tools
-    assert "Profile-selected tool groups:" in tools
+    assert "Profiles list no tools" in tools
+    assert "Runtime allow-list for this turn:" in tools
     assert "skill_search and skill_load" not in tools
     for tool_id in ("browser", "filesystem", "row_bot_status", "system_info", "vision"):
         assert f"({tool_id})" in tools
@@ -258,9 +247,9 @@ def test_row_bot_status_tools_explains_separate_bounded_child_skill_bridges(
 
     tools = status_tool._row_bot_status("tools")
 
-    assert "Profile-selected tool groups:" in tools
+    assert "Runtime allow-list for this turn:" in tools
     assert "skill_search and skill_load" in tools
-    assert "separate from the tool-group allowlist" in tools
+    assert "separate from the tools" in tools
     assert "cannot add tools" in tools
     assert "profile, approval, or workspace boundaries" in tools
 
@@ -273,7 +262,6 @@ def test_row_bot_status_tools_keeps_global_catalog_without_profile_allowlist(tmp
     assert "**Tools**" in tools
     assert "Global catalog:" in tools
     assert "**Effective Thread Tool Scope**" not in tools
-    assert "runtime-bound" not in tools
 
 
 @pytest.mark.slow
@@ -295,9 +283,9 @@ def test_row_bot_status_tools_reports_inherited_profile_scope(tmp_path, reload_f
 
     assert "**Effective Thread Tool Scope**" in tools
     assert "Active profile: Worker" in tools
-    assert "inherits all globally enabled tools" in tools
-    assert "selected tools are runtime-bound" not in tools
-    assert "Active profile tool mode: inherited enabled tools" in agent_profiles
+    assert "Profiles list no tools" in tools
+    assert "Runtime allow-list" not in tools
+    assert "Active thread profile: Worker" in agent_profiles
 
 
 def test_row_bot_status_model_setting_uses_strict_canonical_refs(tmp_path, monkeypatch, reload_for_data_dir):

@@ -65,7 +65,11 @@ APP_LANES = ("tests", "--ignore=tests/docs", "--ignore=tests/marketing")
 # a workflow's own code folder, schedule zone, missed runs and "Always ask me" cards,
 # Outlook through your own Microsoft app (its guide, a code from another device, its states and
 # cards) with Microsoft 365's tenant step and a failed step in words,
-# and pages (a plan approved and sent, a dashboard, a checklist, Library › Pages, the sandbox).
+# pages (a plan approved and sent, a dashboard, a checklist, Library › Pages, the sandbox),
+# and Learning (preview): turning it on, its tab, Teach and Undo, a chat switched off, the personal
+# model's download, training, its versions, comparing, trying and using it, the night's look
+# for things to improve with the changes it drafted, testing and using those changes, and how Row-Bot
+# learns (its learning methods, their comparisons and Undo).
 BROWSER_SMOKE_SPECS = (
     "bootstrap",
     "setup-first-run",
@@ -88,7 +92,6 @@ BROWSER_SMOKE_SPECS = (
     "workspace-folders",
     "sandbox-prepare",
     "helpers",
-    "workflow-flowchart",
     "apps-sign-in-elsewhere",
     "model-visibility",
     "question-cards",
@@ -98,6 +101,15 @@ BROWSER_SMOKE_SPECS = (
     "outlook",
     "incognito",
     "live-updates",
+    "learning",
+    "learning-training",
+    "learning-download",
+    "learning-version",
+    "learning-use",
+    "learning-diagnosis",
+    "learning-starting-model",
+    "learning-changes",
+    "learning-method",
 )
 # Nightly at desktop width, in four fixture runs (each run starts a fresh backend).
 BROWSER_NIGHTLY_SPECS = (
@@ -123,7 +135,9 @@ BROWSER_PHONE_SPECS = (
     "polish-foundation", "polish-visual", "settings-models", "settings-providers",
     "settings-routes", "settings", "shell", "sidebar", "terminal", "theme",
     "unified-panels", "unified-quality", "visual-alignment", "apps-sign-in-elsewhere",
-    "model-visibility", "settings-claude-plan", "install-count",
+    "model-visibility", "learning", "learning-training", "learning-download", "learning-version", "learning-use", "learning-starting-model",
+    "learning-method",
+    "settings-claude-plan", "install-count",
 )
 # Performance budgets and pixel baselines (recorded on Windows): a quiet local machine only.
 BROWSER_BUDGET_SPECS = ("unified-startup", "unified-memory", "unified-performance", "polish-snapshots")

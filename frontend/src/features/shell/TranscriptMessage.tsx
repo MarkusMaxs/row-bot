@@ -1,6 +1,11 @@
 import { memo, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Link } from 'react-router-dom';
 import {
+  MessageSquareShare,
+  BookOpen,
   CornerDownRight,
+  Cpu,
+  GraduationCap,
   Pencil,
   Repeat2,
   RotateCcw,
@@ -30,6 +35,7 @@ import { TranscriptCards, type TranscriptCard } from './TranscriptCards';
 import type { TracedAgent } from './transcript-model';
 import { TurnMarker } from './TurnMarker';
 import { RECOVERY_LABELS, turnError, type RecoveryAction } from './turn-errors';
+import { useTeach } from '../learning/chat-learning';
 
 const NO_BLOCKS: TranscriptRow['blocks'] = [];
 const NO_MEDIA: GeneratedMedia[] = [];
@@ -130,6 +136,8 @@ export const TranscriptMessage = memo(function TranscriptMessage({
   children?: ReactNode;
 }) {
   const { controller, platform } = useRuntime();
+  // Teach Row-Bot, while Learning (preview) is on and uses this chat.
+  const teach = useTeach();
   const [expanded, setExpanded] = useState('');
   const [cursor, setCursor] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
@@ -233,6 +241,46 @@ export const TranscriptMessage = memo(function TranscriptMessage({
       >
         <Repeat2 aria-hidden />
         <span>{visibleText(shown)}</span>
+      </div>
+    );
+  if (row.note === 'personal_model_fallback')
+    // Learning (preview): the person's personal model got stuck on this turn
+    // and their main model finished it (a quiet line, like a continuation).
+    return (
+      <div
+        className="transcript-note"
+        role="note"
+        data-note={row.note}
+        data-message-id={row.message_id ?? row.id}
+        data-row-id={row.id}
+      >
+        <Cpu aria-hidden />
+        <span>{visibleText(shown)}</span>
+      </div>
+    );
+  if (row.note === 'linked' && row.linked_from)
+    // A message from another conversation (5.3.1 C): who sent it, linked,
+    // and what it said. Never the person's bubble: it isn't theirs.
+    return (
+      <div
+        className="transcript-note"
+        role="note"
+        data-note={row.note}
+        data-message-id={row.message_id ?? row.id}
+        data-row-id={row.id}
+      >
+        <MessageSquareShare aria-hidden />
+        <span>
+          <strong>
+            {row.linked_from.kind === 'reply' ? 'Reply from ' : 'From '}
+            <Link
+              to={`/conversations/${encodeURIComponent(row.linked_from.id)}`}
+            >
+              {row.linked_from.title}
+            </Link>
+          </strong>
+          <span className="transcript-note-body">{visibleText(shown)}</span>
+        </span>
       </div>
     );
   if (row.note === 'agent_task' || row.note === 'agent_guidance')
@@ -363,6 +411,24 @@ export const TranscriptMessage = memo(function TranscriptMessage({
             {stop.label}
           </span>
         )}
+        {row.answered_by === 'personal_model' && hasText && !failure && (
+          // Learning (preview): a quiet line, never a badge on the reply.
+          <span
+            className="turn-chip"
+            data-tone="neutral"
+            data-kind="personal-model"
+          >
+            <Cpu aria-hidden />
+            Answered by your personal model
+          </span>
+        )}
+        {row.used_lesson && hasText && !failure && (
+          // Learning (preview): its turn recalled a lesson in use; quiet, never a badge.
+          <span className="turn-chip" data-tone="neutral" data-kind="lesson">
+            <BookOpen aria-hidden />
+            Used a lesson
+          </span>
+        )}
         {row.cut_short && (
           // The provider stopped this reply at its output token limit.
           <span
@@ -444,6 +510,15 @@ export const TranscriptMessage = memo(function TranscriptMessage({
                 onClick={onRetry}
               >
                 <RotateCcw size={15} aria-hidden />
+              </IconButton>
+            )}
+            {row.role === 'assistant' && teach && row.message_id && (
+              <IconButton
+                size="sm"
+                label="Teach Row-Bot"
+                onClick={() => teach({ messageId: row.message_id ?? '' })}
+              >
+                <GraduationCap size={15} aria-hidden />
               </IconButton>
             )}
             {row.role === 'user' && onEdit && (

@@ -13,6 +13,7 @@ from tests.subsystem.client_protocol.test_protocol_application import _client, s
 from tests.subsystem.client_protocol.test_protocol_security import bootstrap
 from tests.subsystem.knowledge_graph.test_knowledge_commands import client as knowledge_env, fields  # noqa: F401
 from tests.subsystem.knowledge_graph.test_knowledge_projection_recovery import projection_stack  # noqa: F401
+from tests.helpers.access import person_window
 
 pytestmark = pytest.mark.subsystem
 RELATIONS = '/api/v1/knowledge/relations'
@@ -33,7 +34,7 @@ def test_reviewed_add_remove_and_paired_supersession_with_original_recovery(serv
     _, kg, _ = knowledge_env
     now = [100.0]
     security = ClientSecurity(instance_id=service.instance_id, clock=lambda: now[0])
-    app = create_client_platform_app(service, security=security, choices=lambda: {'models': [], 'capabilities': []})
+    app = create_client_platform_app(service, security=security, choices=lambda: {'models': [], 'capabilities': []}, session_authenticator=person_window)
     with TestClient(app, base_url='http://localhost', client=('127.0.0.1', 12345)) as client:
         _, headers = bootstrap(client)
         entities = []

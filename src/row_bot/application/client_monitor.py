@@ -598,6 +598,7 @@ def read_pending_approvals() -> dict[str, Any]:
             source, title = "workflow", str(row.get("task_name") or "") or "Workflow"
             conversation_id, task_id = None, str(row.get("task_id") or "") or None
         from row_bot.questions import stored_question
+        goes_out = _goes_out(row.get("approval_payload_json"))
         items.append({
             "id": str(row["id"]),
             "source": source,
@@ -610,8 +611,28 @@ def read_pending_approvals() -> dict[str, Any]:
             "conversation_id": conversation_id,
             "parent_conversation_id": parent_id if parent_id and parent_id != conversation_id else None,
             "task_id": task_id,
+            **({"goes_out": goes_out} if goes_out else {}),
         })
     return {"schema_version": 1, "items": items, "total": len(rows)}
+
+
+_EMAIL_TOOLS = frozenset({"send_gmail_message", "outlook_send_mail", "outlook_reply_mail", "outlook_forward_mail"})
+
+
+def _goes_out(raw: Any) -> str:
+    """"post" or "email" when the approval sends one (Home's Review shows it in full, G3); else ""."""
+    try:
+        context = json.loads(str(raw or "{}"))
+    except (TypeError, ValueError):
+        return ""
+    interrupt = context.get("interrupt") if isinstance(context, dict) else None
+    items = interrupt if isinstance(interrupt, list) else [interrupt]
+    if len(items) != 1 or not isinstance(items[0], dict):
+        return ""
+    tool = str(items[0].get("tool") or "")
+    if tool == "x_post" and isinstance(items[0].get("x_post"), dict) and items[0]["x_post"].get("action") != "delete":
+        return "post"
+    return "email" if tool in _EMAIL_TOOLS else ""
 
 
 def _digest(value: Any) -> str:

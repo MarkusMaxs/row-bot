@@ -129,6 +129,7 @@ _DIGITS = re.compile(r"^[0-9]{1,20}$")
 _HANDLE = re.compile(r"^[A-Za-z0-9_]{1,50}$")
 _TARGET_URL = re.compile(r"^https://x\.com/[A-Za-z0-9_]+/status/[0-9]+$")
 _THUMBNAIL = re.compile(r"^data:image/jpeg;base64,[A-Za-z0-9+/=]+$")
+_SLOT = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d)?$")
 
 
 def _x_post_card(post: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -155,9 +156,12 @@ def _x_post_card(post: Mapping[str, Any]) -> dict[str, Any] | None:
         media.append({"name": _text(entry.get("name"), 256), "size": size, "sha256": entry["sha256"],
                       "kind": entry["kind"],
                       "thumbnail": thumbnail if len(thumbnail) <= 32768 and _THUMBNAIL.fullmatch(thumbnail) else ""})
+    limit = post.get("limit")
     return {"account_id": account_id, "username": username, "name": _text(post.get("name"), 80), "action": action,
             "text": post["text"], "target_id": target_id, "target_url": target_url,
-            "target_text": str(post.get("target_text") or "")[:25000], "media": media}
+            "target_text": str(post.get("target_text") or "")[:25000], "media": media,
+            "limit": limit if isinstance(limit, int) and not isinstance(limit, bool) and 0 <= limit <= 25000 else 0,
+            "post_at": str(post.get("post_at") or "") if _SLOT.fullmatch(str(post.get("post_at") or "")) else ""}
 
 
 def _setup_card(setup: Mapping[str, Any]) -> dict[str, Any] | None:

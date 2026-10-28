@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { bindPageLifecycle } from './page-lifecycle';
 
-function setup() {
+function setup(hostname = 'rowbot.example') {
   const page = Object.assign(new EventTarget(), {
     navigator: { onLine: true },
+    location: { hostname },
   });
   const client = { setOnline: vi.fn(), dispose: vi.fn() };
   const release = bindPageLifecycle(client, page);
@@ -42,6 +43,17 @@ describe('page observation lifecycle', () => {
     transition('pagehide', false);
     expect(client.dispose).toHaveBeenCalledOnce();
   });
+  it.each(['127.0.0.1', 'localhost', '[::1]'])(
+    'stays connected on this computer (%s) when the network drops (#568)',
+    (hostname) => {
+      const { page, client, transition } = setup(hostname);
+      page.navigator.onLine = false;
+      page.dispatchEvent(new Event('offline'));
+      expect(client.setOnline).toHaveBeenLastCalledWith(true);
+      transition('pagehide', true);
+      expect(client.setOnline).toHaveBeenLastCalledWith(false);
+    },
+  );
   it('keeps an offline cached page suspended when restored', () => {
     const { page, client, transition } = setup();
     transition('pagehide', true);

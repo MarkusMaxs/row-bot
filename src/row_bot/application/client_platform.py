@@ -180,6 +180,25 @@ def _question_answer(asked: dict | None, payload: dict) -> dict | None:
         raise ClientPlatformError("question_answer_invalid") from None
 
 
+def _x_post_edit(interrupt: Any, payload: dict) -> tuple[str, dict]:
+    """(the card's interrupt id, its resume value) for the person's edit of an X post on its card (G2).
+
+    Only a post, reply or quote asked by itself is edited, and only files its card showed are kept; the tool
+    asks again with what was edited, so an edit never approves anything.
+    """
+    items = interrupt if isinstance(interrupt, list) else [interrupt]
+    edit = payload.get("edit")
+    post = items[0].get("x_post") if len(items) == 1 and isinstance(items[0], dict) else None
+    if (not isinstance(edit, dict) or not isinstance(post, dict) or post.get("action") not in {"post", "reply", "quote"}
+            or not items[0].get("__interrupt_id")):
+        raise ClientPlatformError("approval_edit_invalid")
+    shown = {str(item.get("sha256")) for item in post.get("media") or [] if isinstance(item, dict)}
+    kept = [str(item) for item in edit.get("media") or []]
+    if not set(kept) <= shown:
+        raise ClientPlatformError("approval_edit_invalid")
+    return str(items[0]["__interrupt_id"]), {"x_post_edit": {"text": str(edit.get("text") or ""), "media": kept}}
+
+
 def _settled_denial(events: Iterable[tuple], *, conversation_id: str, identity: str,
                     expected_results: int, computer: bool, memory: bool = False) -> Iterator[tuple]:
     """A denied approval ends the turn once the denied calls have their results.
@@ -320,7 +339,8 @@ class ClientPlatformService:
                         cancel_scope: Any = None, queued_pass_id: str = "", queue_context: dict | None = None,
                         resume_pending: bool = False,
                         attachments: list[dict[str, Any]] | None = None,
-                        note: str = "", retry: bool = False, shown: dict[str, str] | None = None) -> Any:
+                        note: str = "", retry: bool = False, shown: dict[str, str] | None = None,
+                        linked: dict[str, Any] | None = None) -> Any:
         """Single admission path for every conversation turn.
 
         ``retry`` runs the person's last message again in place: the turn it replaces goes in the same write that
@@ -363,7 +383,14 @@ class ClientPlatformService:
                 if attachments
                 else {}
             )
-            if note:
+            if linked:
+                # A message from another conversation (5.3.1 C): the chat shows it with where it came from, the
+                # model reads it fenced. Its note keeps it from ever counting as the person's request.
+                public_metadata = {"platform_public_content": linked["text"], "platform_note": "linked",
+                                   "row_bot_ui": {"linked_from": {
+                                       "id": linked["id"], "title": linked["title"],
+                                       "kind": "reply" if linked.get("reply") else "message"}}}
+            elif note:
                 # A server-started follow-up: the transcript shows the note,
                 # the model reads the prompt.
                 public_metadata = {"platform_public_content": note, "platform_note": "continuation"}
@@ -599,6 +626,7 @@ class ClientPlatformService:
         orchestration_activity: dict | None = None,
         awaiting_approval: bool | None = None,
         goal_waiting: bool | None = None,
+        started_from: str | None = None,
     ) -> dict:
         row = self._metadata(conversation_id)
         from row_bot import threads
@@ -608,6 +636,9 @@ class ClientPlatformService:
             from row_bot import agent_runs
             own_run = agent_runs.get_agent_run_for_thread(conversation_id)
             parent_conversation_id = str(own_run.get("parent_thread_id") or "") if own_run else ""
+        if started_from is None:
+            from row_bot.linked_conversations import started_from as linked_sources
+            started_from = linked_sources([conversation_id]).get(conversation_id, "")
         if orchestration_activity is None:
             from row_bot.agent_orchestrator import get_thread_orchestration_activity
             orchestration_activity = get_thread_orchestration_activity([conversation_id]).get(conversation_id, {})
@@ -626,6 +657,7 @@ class ClientPlatformService:
                 "incognito": bool(row.get("incognito")),
                 "updated_at": str(row.get("updated_at") or ""),
                 "parent_conversation_id": parent_conversation_id or None,
+                "started_from": started_from or None,
                 "activity_state": orchestration_activity.get("state"),
                 "activity_phase": str(orchestration_activity.get("phase") or "")[:64],
                 "category": threads.classify_thread(
@@ -708,11 +740,22 @@ class ClientPlatformService:
         activity = get_thread_orchestration_activity([row[0] for row in selected]) if selected else {}
         awaiting = self._awaiting_approval([row[0] for row in selected])
         goals_waiting = self._goals_waiting([row[0] for row in selected])
-        return {"items": [self.get_conversation(row[0], workflow_thread_ids=workflow_thread_ids,
-                parent_conversation_id=parent_ids.get(row[0], ""),
-                orchestration_activity=activity.get(row[0], {}),
-                awaiting_approval=row[0] in awaiting, goal_waiting=row[0] in goals_waiting)
-                for row in selected], "has_more": more,
+        from row_bot.linked_conversations import started_from as linked_sources
+        sources = linked_sources([row[0] for row in selected])
+        items = []
+        for row in selected:
+            try:
+                items.append(self.get_conversation(row[0], workflow_thread_ids=workflow_thread_ids,
+                             parent_conversation_id=parent_ids.get(row[0], ""),
+                             orchestration_activity=activity.get(row[0], {}),
+                             awaiting_approval=row[0] in awaiting, goal_waiting=row[0] in goals_waiting,
+                             started_from=sources.get(row[0], "")))
+            except ClientPlatformError as error:
+                if error.code != "not_found":
+                    raise
+                # Deleted while the page was read (a workflow's conversation goes with its workflow):
+                # it is left out, never the whole list.
+        return {"items": items, "has_more": more,
                 "next_cursor": base64.urlsafe_b64encode(json.dumps([revision, [selected[-1][1], selected[-1][2], selected[-1][0]]]).encode()).decode() if more else None}
 
     def _refresh_checkpoint(self, conversation_id: str, *, settle: tuple[str, bool] | None = None) -> None:
@@ -913,12 +956,12 @@ class ClientPlatformService:
             from row_bot.application.artifact_design_commands import execute_artifact_design_command
             return execute_artifact_design_command(self, command, target, owner_id=owner_id, key=idempotency_key,
                 validate=validate or (lambda: None), resolve_upload=resolve_upload, validate_confirmation=validate_approval)
-        if command["type"] in {"task.run", "task.stop", "task.approval"}:
+        if command["type"] in {"task.run", "task.stop"}:
             if target != "tasks":
                 raise ClientPlatformError("invalid_command")
             from row_bot.application.task_run_commands import execute_task_run_command
             return execute_task_run_command(owner_id=owner_id, key=idempotency_key, command=command,
-                                            validate=validate or (lambda: None), validate_approval=validate_approval)
+                                            validate=validate or (lambda: None))
         if command["type"] == "artifact.export":
             from row_bot.application.artifact_exports import execute_export
             return execute_export(self, command, target, owner_id=owner_id, key=idempotency_key,
@@ -936,7 +979,7 @@ class ClientPlatformService:
                 from row_bot.application.workspace_edit_commands import execute_workspace_edit
                 return execute_workspace_edit(self, command, target, owner_id=owner_id, key=idempotency_key,
                                               validate=validate or (lambda: None))
-            if command["type"] in {"task.create", "task.update", "task.delete", "task.duplicate", "task.delivery.update", "task.graph.update", "task.settings.update", "task.webhook.rotate"}:
+            if command["type"] in {"task.create", "task.update", "task.delete", "task.duplicate", "task.delivery.update", "task.settings.update", "task.webhook.rotate"}:
                 if target != "tasks":
                     raise ClientPlatformError("invalid_command")
                 from row_bot.application.task_commands import execute_task_command
@@ -1074,6 +1117,16 @@ class ClientPlatformService:
             else:
                 delegated_activity.start_run(self, target, str(payload["text"]))
             return {"conversation_id": target, "revision": str(row["client_revision"]), "status": "completed"}
+        if kind in {"conversation.link.start", "conversation.link.dismiss"}:
+            # The person's Start or Not now on a proposed conversation (5.3.1 C).
+            from row_bot import linked_conversations as linked
+            act = linked.start_proposal if kind.endswith("start") else linked.dismiss_proposal
+            try:
+                card = act(str(payload["link_id"]), source_id=target)
+            except linked.LinkError as exc:
+                raise ClientPlatformError("not_found") from exc
+            return {"conversation_id": target, "revision": str(row["client_revision"]), "status": "completed",
+                    "linked_conversation_id": card["conversation_id"]}
         if kind == "media.save":
             from row_bot.application.conversation_media_copy import save_output
             try:
@@ -1229,6 +1282,9 @@ class ClientPlatformService:
                 hold_thread_deletion(target)
                 return {"conversation_id": target, "status": "DeleteCompleted"}
             result = delete_thread(target)
+            if result.deleted:
+                from row_bot.application import approval_grants
+                approval_grants.end_chat(target)
             return {
                 "conversation_id": target,
                 "status": "DeleteCompleted" if result.deleted else "DeleteBlocked",
@@ -1418,6 +1474,11 @@ class ClientPlatformService:
         if followup is not None:
             # Continues the conversation's own work; never routed as steering.
             config["configurable"]["internal_goal_continuation"] = True
+        from row_bot.workflow_turns import person_rules
+        # A workflow's "Always ask me" apps and tools wait for the person in every turn of its
+        # conversation, under every approval level (N9).
+        if rules := person_rules(conversation_id):
+            config["configurable"]["person_rules"] = rules
         from copy import deepcopy
         from row_bot.application.profile_controls import freeze_profile
         if frozen_context is not None:
@@ -1456,6 +1517,21 @@ class ClientPlatformService:
             restore_resume_reasoning(config["configurable"], conversation_id,
                                      pass_id=str((approval_context or {}).get("pass_id") or ""))
         freeze_reasoning(config["configurable"], conversation_id, revalidate=frozen_context is not None)
+        # Learning (preview, L2c2): a new message of a kind of work the person gave their personal model
+        # runs on it, with the main model finishing a stuck turn. Nothing in use: one path check.
+        learning_route = None
+        if not resume and frozen_context is None and followup is None:
+            from row_bot import learning
+            learning_route = learning.route_turn(
+                conversation_id=conversation_id, text=text, model_ref=model_ref, surface=effective_surface,
+                attachments=[str(view.get("name") or "") for view in attachment_views],
+                apps=[str(app) for app in (narrowed.get("focus") or ())] if isinstance(narrowed, dict) else [],
+                code_folder=any(binding.kind == "workspace" for binding in captured_bindings))
+            if learning_route is not None:
+                routed = {**deepcopy(config["configurable"]), "model_override": learning_route.personal_ref}
+                routed.pop("reasoning_snapshot", None)
+                freeze_reasoning(routed, conversation_id)
+                learning_route = learning_route.with_configurable(routed)
         queue_context = frozen_context or client_queue.freeze_context(config, captured_bindings, targets)
         if frozen_context is not None:  # Remembered for a resume: this turn's own apps, not those it was queued behind.
             kept = {key: value for key, value in queue_context["configurable"].items() if key != "app_scope"}
@@ -1476,7 +1552,9 @@ class ClientPlatformService:
                 resume_pending=resume, attachments=None if resume else attachment_views,
                 note=followup.note if followup is not None else "",
                 retry=not resume and queue_record is None and followup is None and payload.get("retry") is True,
-                shown=shown)
+                shown=shown,
+                linked=({"text": followup.shown or followup.prompt, **(followup.linked_from or {})}
+                        if followup is not None and followup.kind == "linked" else None))
         except BaseException:
             if page_id:
                 from row_bot import pages
@@ -1565,14 +1643,20 @@ class ClientPlatformService:
                             descriptor = describe(binding)
                             if not descriptor.available or descriptor.resource_revision != target["resource_revision"]:
                                 raise ClientPlatformError("resource_revision_conflict")
-                    # A question's answer resumes its own interrupt only (N4).
-                    answered = ({"resume_values": approval_context["resume_values"]}
-                                if (approval_context or {}).get("resume_values") else {})
-                    events = ((self.resume_factory or resume_stream_agent)(enabled, config,
-                              bool((approval_context or {}).get("approved")),
-                              interrupt_ids=(approval_context or {}).get("interrupt_ids"), stop_event=handle.cancel_scope.stop_event,
-                              **answered)
-                              if resume else (self.stream_factory or stream_agent)(prepared_text, enabled, config, stop_event=handle.cancel_scope.stop_event))
+                    if learning_route is not None:
+                        from row_bot.learning import routing as learning_routing
+                        events = learning_routing.stream(
+                            learning_route, self.stream_factory or stream_agent, prepared_text, enabled, config,
+                            stop_event=handle.cancel_scope.stop_event)
+                    else:
+                        # A question's answer resumes its own interrupt only (N4).
+                        answered = ({"resume_values": approval_context["resume_values"]}
+                                    if (approval_context or {}).get("resume_values") else {})
+                        events = ((self.resume_factory or resume_stream_agent)(enabled, config,
+                                  bool((approval_context or {}).get("approved")),
+                                  interrupt_ids=(approval_context or {}).get("interrupt_ids"), stop_event=handle.cancel_scope.stop_event,
+                                  **answered)
+                                  if resume else (self.stream_factory or stream_agent)(prepared_text, enabled, config, stop_event=handle.cancel_scope.stop_event))
                     # A denial ends the turn, but a "no" to one card asked by itself (resume_values) leaves what
                     # waited beside it to ask again for itself (B412).
                     if (approval_context is not None and not approval_context.get("approved")
@@ -1631,7 +1715,16 @@ class ClientPlatformService:
                                         assistant_text=final_text, model_ref=model_ref,
                                         goal_id=str((started_goal or {}).get("id") or ""),
                                         error_text=error_text)
+                with _turn_end_step(conversation_id, "the workflow's run"):
+                    # A workflow's run moves on when its turn ends: its next message, or its outcome (F31).
+                    from row_bot.workflow_turns import after_turn as after_workflow_turn
+                    after_workflow_turn(conversation_id, status=status, reply=final_text, error_text=error_text)
                 self.finish_execution(handle, status)
+                with _turn_end_step(conversation_id, "linked conversations"):
+                    # The reply to a message from another conversation goes back to it, and the next waiting
+                    # message starts here (5.3.1 C).
+                    from row_bot.linked_conversations import after_turn as after_linked_turn
+                    after_linked_turn(conversation_id, generation_id=generation_id, status=status, reply=final_text)
                 from row_bot.application.conversation_naming import after_turn
                 after_turn(self, conversation_id, status=status, reply=final_text, model_ref=model_ref)
         def start_failed(_exc: BaseException) -> None:
@@ -1925,6 +2018,10 @@ class ClientPlatformService:
             raise ClientPlatformError("approval_already_resolved")
         from row_bot import questions
         asked = questions.stored_question(row["approval_payload_json"])
+        editing = payload.get("decision") == "edit"
+        if editing != (payload.get("edit") is not None) or (editing and (asked is not None
+                                                                         or row["resume_kind"] != "conversation")):
+            raise ClientPlatformError("approval_edit_invalid")
         answer = _question_answer(asked, payload)
         if row["resume_kind"] == "conversation" and asked is not None:
             return self._answer_question_locked(approval_id, row, asked, answer, runtime_surface=runtime_surface)
@@ -1933,6 +2030,7 @@ class ClientPlatformService:
             approved = payload.get("decision") == "approve"
             from row_bot.application import client_computer_controls as computer
             stored = computer.approval_context(row["approval_payload_json"])
+            edited = _x_post_edit(stored.get("interrupt"), payload) if editing else None
             # A computer the turn was using keeps its session when the turn goes on.
             lease_generation = computer.prepare_approval_resume(
                 self, conversation_id, stored, approved=approved, runtime_surface=runtime_surface)
@@ -1945,17 +2043,18 @@ class ClientPlatformService:
             alone_id = str((alone or {}).get("__interrupt_id") or "")
             asks_again = len(context["interrupt_ids"]) > 1 and alone_id in context["interrupt_ids"]
             from row_bot.application.conversation_followups import after_approval
-            after_approval(conversation_id, approved=approved or asks_again)
+            after_approval(conversation_id, approved=approved or asks_again or edited is not None)
             # Answered, by the person or by what they approved for this turn:
             # Buddy stops saying "Needs approval" now, not when the turn ends (B333).
             _buddy(conversation_id, "approval.approved" if approved else "approval.denied",
-                   "Approved" if approved else "Denied", approval_id=approval_id)
-            if approved and payload.get("scope") == "turn" and alone is None:
+                   "Approved" if approved else "Edited" if edited else "Denied", approval_id=approval_id)
+            if approved and payload.get("scope") in {"turn", "chat"} and alone is None:
                 from row_bot.application import approval_grants
                 kinds = approval_grants.approval_kinds(interrupt)
                 if kinds:
-                    approval_grants.grant(conversation_id, kinds)
-            answered = ({"interrupt_ids": [alone_id], "resume_values": {alone_id: approved}} if asks_again
+                    approval_grants.grant(conversation_id, kinds, payload["scope"])
+            answered = ({"interrupt_ids": [edited[0]], "resume_values": {edited[0]: edited[1]}} if edited
+                        else {"interrupt_ids": [alone_id], "resume_values": {alone_id: approved}} if asks_again
                         else {"interrupt_ids": context["interrupt_ids"]})
             result = self._start(conversation_id, {"model_selection": context["model_selection"]}, resume=True,
                                  approval_context={"approved": approved, **answered,

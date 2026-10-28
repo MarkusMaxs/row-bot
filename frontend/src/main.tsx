@@ -5,8 +5,10 @@ import {
   publishBuddyTarget,
 } from './features/buddy/BuddyFollow';
 import { bindDraftSync } from './draft-sync';
+import { reloadAfterUpdate } from './api/stale-build';
 import { keepNativeLease } from './native-lease';
 import { keepAccessSessionRenewed } from './api/access-renewal';
+import { claimLauncherSignIn } from './api/sign-in';
 import { createKnowledgeSessions } from './features/knowledge/knowledge-sessions';
 import { Component, lazy, Suspense, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -142,6 +144,8 @@ class RenderBoundary extends Component<
 }
 async function start() {
   installInputModality();
+  // The window or browser the launcher opened signs in before the first handshake (A0).
+  await claimLauncherSignIn();
   const query = new URLSearchParams(location.search).get('fixture');
   const fixture = [
     'normal',
@@ -390,6 +394,7 @@ async function start() {
       </RenderBoundary>
     </ThemeProvider>,
   );
+  reloadAfterUpdate();
   bindPageLifecycle({
     setOnline: (value) => controller.setOnline(value),
     hasUnsavedDraft: () =>

@@ -29,6 +29,8 @@ import {
   THREAD_SETTINGS,
 } from './model';
 import Preferences from './Preferences';
+import LearningSettings from '../learning/LearningSettings';
+import { useLearning, useLearningPreview } from '../learning/learning-state';
 import AppearanceSettings from './Appearance';
 import ProviderStatus from './ProviderStatus';
 import ToolCatalog from './ToolCatalog';
@@ -136,6 +138,8 @@ export default function SettingRoute() {
     knowledgeOwner,
   } = useRuntime();
   const state = useClientState();
+  const learningPreview = useLearningPreview();
+  const learningIo = useLearning();
   const session = state.handshake?.client_session_id ?? '';
   const settingsDrafts = useRef({
     session,
@@ -311,6 +315,9 @@ export default function SettingRoute() {
     // Accounts and channels are apps now: their old links open the app.
     return <Navigate to={connectionHref(setting, location.hash)} replace />;
   if (!leaf) return <Navigate to="/settings/providers" replace />;
+  if (leaf.id === 'learning' && !learningPreview)
+    // Learning (preview) exists only in a build with its flag (O34).
+    return <Navigate to="/settings/preferences" replace />;
   if (leaf.id !== setting.toLowerCase()) {
     // Legacy ids and moved pages land on their new home (and row).
     if (['integrations', 'plugins', 'mcp'].includes(setting.toLowerCase()))
@@ -474,7 +481,7 @@ export default function SettingRoute() {
     return <p>These settings are unavailable. Reconnect to continue.</p>;
   };
   return (
-    <SettingsShell key={session} leaf={leaf}>
+    <SettingsShell key={session} leaf={leaf} learning={learningPreview}>
       <section
         className="route-surface stack capability-page"
         aria-label={leaf.label}
@@ -492,6 +499,22 @@ export default function SettingRoute() {
               Buddy uses that conversation’s current profile and approvals.
             </EmptyState>
           )
+        ) : leaf.id === 'learning' ? (
+          learningIo && settingsSnapshot ? (
+            <LearningSettings
+              io={learningIo}
+              preferences={settingsSnapshot.preferences}
+              preferencesMutation={mutationFor('preferences')!}
+              learning={settingsSnapshot.learning}
+              learningMutation={mutationFor('learning')!}
+              onSettingsChanged={() =>
+                setSettingsSnapshotReload((value) => value + 1)
+              }
+              onOpenLearning={() => navigate('/?tab=learning')}
+            />
+          ) : (
+            snapshotState
+          )
         ) : leaf.id === 'appearance' ? (
           <AppearanceSettings />
         ) : leaf.id === 'preferences' ||
@@ -504,6 +527,7 @@ export default function SettingRoute() {
               snapshotState={snapshotState}
               showUpdateControls
               part={leaf.id}
+              skillsMoved={learningPreview}
             />
             {leaf.id === 'data' && settingsSnapshot && (
               <DataDangerZone

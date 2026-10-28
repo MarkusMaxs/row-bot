@@ -1,6 +1,66 @@
 {
+  "$defs": {
+    "TaskRunAction": {
+      "additionalProperties": false,
+      "properties": {
+        "link": {
+          "anyOf": [
+            {
+              "maxLength": 2048,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Link"
+        },
+        "result": {
+          "maxLength": 512,
+          "title": "Result",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "result"
+      ],
+      "title": "TaskRunAction",
+      "type": "object"
+    }
+  },
   "additionalProperties": false,
   "properties": {
+    "actions": {
+      "items": {
+        "$ref": "#/$defs/TaskRunAction"
+      },
+      "maxItems": 16,
+      "title": "Actions",
+      "type": "array"
+    },
+    "approval_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9:_-]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Approval Id"
+    },
     "conversation_id": {
       "maxLength": 128,
       "title": "Conversation Id",

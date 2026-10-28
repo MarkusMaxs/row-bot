@@ -17,6 +17,10 @@ from row_bot.data_paths import get_row_bot_data_dir
 logger = logging.getLogger(__name__)
 _SETTINGS_LOCK = threading.RLock()
 _SCHEMA_VERSION = 1
+# Model-and-tool rounds one turn may take: a safety ceiling against a loop, not a setting (F31). A turn
+# goes on while it makes progress; the repeat check stops one that is stuck. At the ceiling the turn
+# ends asking "Keep going?". A saved "max_iterations" from before is ignored.
+MAX_ROUNDS = 1000
 
 
 @dataclass(frozen=True)
@@ -24,13 +28,16 @@ class AgentRuntimeSettings:
     """Application-wide capacity for new logical agent turns and child runs."""
 
     schema_version: int = _SCHEMA_VERSION
-    max_iterations: int = 90
     max_spawn_depth: int = 1
     max_concurrent_children: int = 3
     max_active_children_global: int = 8
     child_timeout_seconds: int = 0
     # Turns a new goal may take unless its start says otherwise; 0 = no limit.
     goal_max_turns: int = 0
+
+    @property
+    def max_iterations(self) -> int:
+        return MAX_ROUNDS
 
     def to_dict(self) -> dict[str, int]:
         return asdict(self)
@@ -61,7 +68,6 @@ def validate_agent_runtime_settings(
         raise ValueError("Unsupported agent settings schema version.")
     return AgentRuntimeSettings(
         schema_version=_SCHEMA_VERSION,
-        max_iterations=_strict_int(raw.get("max_iterations"), "Maximum work rounds"),
         max_spawn_depth=_strict_int(raw.get("max_spawn_depth"), "Delegation depth"),
         max_concurrent_children=_strict_int(
             raw.get("max_concurrent_children"),

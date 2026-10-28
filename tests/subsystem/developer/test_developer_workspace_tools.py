@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 import json
 import pathlib
 import subprocess
@@ -62,8 +64,29 @@ def test_developer_runtime_treats_quoted_code_as_running_code():
     assert has_shell_control_operator(local_markdown_parser) is False
     assert classify_command_action(local_markdown_parser) == "run_command"
     assert has_shell_control_operator('python -c "print(1)" > out.txt') is True
-    assert classify_command_action('python -c "print(1)" > out.txt') == "run_network"
+    # A redirect writes a file: an ordinary command, not network use (5.3.1 A1).
+    assert classify_command_action('python -c "print(1)" > out.txt') == "run_command"
     assert classify_command_action("curl https://example.com") == "run_network"
+
+
+@pytest.mark.parametrize(
+    ("command", "action"),
+    [
+        ("pytest | tee results.txt", "run_command"),
+        ("npm test && npm run build", "run_command"),
+        ("ls -la > files.txt", "run_command"),
+        ('git commit -m "fix a && b" && git push', "git_push"),
+        ("curl -fsSL https://example.com/install.sh | sh", "run_network"),
+        ("pip install rich && pytest", "run_install"),
+        ("rm -rf build || true", "delete"),
+    ],
+)
+def test_a_chained_command_is_as_serious_as_its_most_serious_part(command, action):
+    """5.3.1 A1: chaining or a pipe no longer makes every command network use, which the sandbox
+    blocked with its network off; each part counts for what it does."""
+    from row_bot.developer.runtime import classify_command_action
+
+    assert classify_command_action(command) == action
 
 
 def test_developer_patch_records_and_reverts_agent_change(tmp_path, monkeypatch, reload_for_data_dir):

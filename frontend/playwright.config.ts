@@ -1,5 +1,6 @@
 import { defineConfig } from '@playwright/test';
 import path from 'node:path';
+import { SIGNED_IN_STATE } from './tests/browser/signed-in';
 
 const baseURL = process.env.ROW_BOT_BROWSER_BASE_URL ?? 'http://127.0.0.1:4173';
 const origin = new URL(baseURL);
@@ -168,6 +169,8 @@ const projects =
 
 export default defineConfig({
   testDir: './tests/browser',
+  // Signs the suite in once, as the launcher signs in Row-Bot's window (A0).
+  globalSetup: './tests/browser/sign-in.setup.ts',
   outputDir: path.join(evidence, 'artifacts'),
   fullyParallel: false,
   forbidOnly: true,
@@ -182,6 +185,7 @@ export default defineConfig({
   use: {
     baseURL,
     headless: true,
+    storageState: SIGNED_IN_STATE,
     // Playwright's built-in blocker probes navigator.serviceWorker in every
     // frame. That probe raises a page exception in the intentionally opaque
     // Designer preview sandbox. Browser suites that need registration blocked

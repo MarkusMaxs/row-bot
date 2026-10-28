@@ -1,4 +1,4 @@
-"""Approving the rest of a turn's actions of one kind (F21).
+"""Approving the rest of a turn's, or a chat's, actions of one kind (F21, 5.3.1 B2).
 
 The real graph streams and resumes with a fake model; the tools interrupt as
 the Developer tools do. Approving for the turn answers later approvals of the
@@ -166,3 +166,56 @@ def test_buddy_stops_saying_needs_approval_once_the_approval_is_answered(platfor
     answered = events.index("approval.approved", asked)
     assert "generation.started" not in events[asked:answered]
     assert events.count("approval.approved") == 2
+
+
+def test_allow_in_this_chat_answers_that_kind_in_later_turns_too(platform, tools):
+    """5.3.1 B2: "Allow in this chat" lasts the conversation, not just the reply."""
+    done, tool_list = tools
+    model = ProviderShapedModel(responses=[
+        _call("developer_commit_changes", "c1", message="one"),
+        AIMessage(content="Committed.", id="ai-one"),
+        _call("developer_commit_changes", "c2", message="two"),
+        AIMessage(content="Committed again.", id="ai-two"),
+    ])
+    turns = RealGraphTurns(model, tool_list)
+
+    first = _submit(platform, turns, "commit-one", "Commit")
+    _approve(platform, first.approval_id, "commit-chat", scope="chat")
+    _submit(platform, turns, "commit-two", "Commit again")
+    _settle(platform)
+
+    assert done == ["one", "two"]
+    assert len(_cards(platform)) == 1
+
+
+@pytest.mark.parametrize(("item", "repeatable"), [
+    ({"tool": "workspace_write_file", "label": "Write file"}, True),
+    ({"tool": "browser_click", "label": "Click Continue"}, True),
+    ({"tool": "mcp_linear_update_issue", "label": "Update an issue in Linear"}, True),
+    ({"tool": "run_command", "label": "Run a command", "args": {"command": "npm test"}}, True),
+    ({"tool": "run_command", "label": "Run a command", "args": {"command": "rm -rf build"}}, False),
+    ({"tool": "developer_run_command", "label": "Run", "args": {"command": "git push origin main"}}, False),
+    ({"tool": "outlook_send_mail", "label": "Send an email"}, False),
+    ({"tool": "x_post", "label": "Post to X", "x_post": {"text": "hi"}}, False),
+    ({"tool": "workspace_file_delete", "label": "Delete file"}, False),
+    ({"tool": "browser_click", "label": "Pay £12.00"}, False),
+    ({"tool": "memory_save", "label": "Save to memory?", "person_only": True}, False),
+    ({"tool": "mcp_github_create_release", "label": "Create a release", "risk_class": "high"}, False),
+])
+def test_what_can_be_allowed_in_a_chat(item, repeatable):
+    """Any tool may be allowed for the chat, except what reaches other people, costs money, deletes,
+    publishes code, carries a high risk, or only the person may approve."""
+    from row_bot.application import approval_grants
+
+    assert (approval_grants.approval_kinds(item) is not None) is repeatable
+
+
+def test_deleting_a_chat_forgets_what_it_allowed():
+    from row_bot.application import approval_grants
+
+    item = {"tool": "workspace_write_file", "label": "Write file"}
+    approval_grants.grant("chat-gone", approval_grants.approval_kinds(item), "chat")
+    approval_grants.end_turn("chat-gone")
+    assert approval_grants.granted("chat-gone", item)
+    approval_grants.end_chat("chat-gone")
+    assert not approval_grants.granted("chat-gone", item)

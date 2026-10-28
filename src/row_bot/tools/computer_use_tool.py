@@ -49,7 +49,13 @@ class ComputerRecordInput(BaseModel):
 
 
 def _context() -> tuple[str, str]:
-    """This chat and turn; a ``ComputerError`` outside an interactive chat on this computer."""
+    """This conversation and turn; a ``ComputerError`` from a channel chat.
+
+    A chat, a workflow, a goal or a helper agent may use the computer (5.3.1 B4): each app still asks
+    the first time by the approval level, the Stop bar still shows and Esc still ends it, and one
+    conversation uses the computer at a time. A channel chat (Telegram, Slack...) can't: the person
+    is usually away from this computer's screen.
+    """
 
     try:
         from row_bot.agent import get_active_runtime_context
@@ -57,11 +63,9 @@ def _context() -> tuple[str, str]:
         context = get_active_runtime_context()
     except Exception:
         context = {}
-    surface = str(context.get("runtime_surface") or "")
-    if (context.get("background_workflow") or context.get("channel_streaming")
-            or (surface and surface != "normal_chat")):
-        raise ComputerError("Computer use works only in a chat in Row-Bot on this computer, not from a channel, "
-                            "a workflow or a helper agent.", code="surface")
+    if context.get("channel_streaming") or str(context.get("runtime_surface") or "") == "channel":
+        raise ComputerError("Computer use works in Row-Bot on this computer, not from a channel chat.",
+                            code="surface")
     thread_id = str(context.get("thread_id") or "")
     if not thread_id:
         raise ComputerError("Computer use works only in a chat.", code="surface")
@@ -216,8 +220,7 @@ def computer_record(action: str, minutes: int = 0) -> str:
     try:
         conversation, _generation = _context()
     except ComputerError:
-        return ("Recording the screen works only in a chat in Row-Bot on this computer, not from a channel, "
-                "a workflow or a helper agent.")
+        return "Recording the screen works in Row-Bot on this computer, not from a channel chat."
     if action == "stop":
         record = recordings.active_for(conversation, "screen")
         if record is None:

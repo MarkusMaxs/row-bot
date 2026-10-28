@@ -17,9 +17,11 @@ from dataclasses import dataclass, field
 from typing import BinaryIO
 from uuid import UUID, uuid4
 
-MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
+# A file in a chat, at most: a phone video or a screen recording fits (5.3.1 A4). Files are held in
+# memory while they are copied, so this stays well below the computer's memory.
+MAX_ATTACHMENT_BYTES = 200 * 1024 * 1024
 UPLOAD_CHUNK_BYTES = 1024 * 1024
-UPLOAD_BATCH_BYTES = 100 * 1024 * 1024
+UPLOAD_BATCH_BYTES = 1024 * 1024 * 1024
 UPLOAD_TTL_SECONDS = 1800
 _LOCK = threading.RLock()
 _ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")

@@ -379,10 +379,10 @@ it('re-reads the waiting approvals at once after an answer (B302)', async () => 
   expect(pendingApprovals).toHaveBeenCalledTimes(2);
 });
 
-it('offers approving the rest of the reply only for a repeatable action (F21)', async () => {
+it('offers allowing an action in this chat only when it is repeatable (F21, 5.3.1 B2)', async () => {
   await renderCard();
   expect(
-    screen.queryByRole('button', { name: 'Approve the rest' }),
+    screen.queryByRole('button', { name: 'Allow in this chat' }),
   ).not.toBeInTheDocument();
   approval.mockResolvedValue({
     ...view,
@@ -393,14 +393,14 @@ it('offers approving the rest of the reply only for a repeatable action (F21)', 
   const second = render(<ApprovalCard id="approval-b" />);
   fireEvent.click(
     await within(second.container).findByRole('button', {
-      name: 'Approve the rest',
+      name: 'Allow in this chat',
     }),
   );
   await waitFor(() =>
     expect(intent).toHaveBeenCalledWith(
       'approval-b',
       'approval.resolve',
-      { decision: 'approve', nonce: 'nonce-a', scope: 'turn' },
+      { decision: 'approve', nonce: 'nonce-a', scope: 'chat' },
       '3',
     ),
   );
@@ -563,6 +563,63 @@ it('asks to post on X as the named account with the full text, the reply link an
   expect(within(card).queryByText(/^Reply as @rowbot_ai to/)).toBeNull();
 });
 
+it('edits a post on its card: its text against the account’s limit and the files it keeps, then asks again (G2)', async () => {
+  approval.mockResolvedValue({
+    ...view,
+    action_label: 'x_post',
+    question: 'Post to X as @rowbot_ai?',
+    x_post: {
+      account_id: '111',
+      username: 'rowbot_ai',
+      name: 'Row-Bot',
+      action: 'post',
+      text: 'Draft launch post',
+      limit: 280,
+      media: [
+        { name: 'a.png', size: 2048, sha256: '0123456789ab', kind: 'image' },
+        { name: 'b.png', size: 2048, sha256: 'ba9876543210', kind: 'image' },
+      ],
+    },
+  });
+  await renderCard();
+  fireEvent.click(screen.getByRole('button', { name: 'Edit the post' }));
+  // Nothing is approved while it's edited.
+  expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+  const text = screen.getByRole('textbox', {
+    name: 'Edit the post as @rowbot_ai',
+  });
+  expect(text).toHaveValue('Draft launch post');
+  expect(screen.getByText('17 of 280')).toBeVisible();
+  // A link counts 23, whatever its length.
+  fireEvent.change(text, {
+    target: { value: `Row-Bot 5.3.1: https://row-bot.ai/${'x'.repeat(80)}` },
+  });
+  expect(screen.getByText('38 of 280')).toBeVisible();
+  fireEvent.change(text, { target: { value: 'Long. '.repeat(50) } });
+  expect(screen.getByText('20 over the 280 @rowbot_ai can post')).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Save edits' })).toBeDisabled();
+  fireEvent.change(text, { target: { value: 'Row-Bot 5.3.1 is out.' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Remove a.png' }));
+  expect(screen.getByRole('list', { name: 'Attached file' })).toBeVisible();
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Save edits' }));
+  });
+  expect(intent).toHaveBeenCalledOnce();
+  expect(intent).toHaveBeenCalledWith(
+    'approval-a',
+    'approval.resolve',
+    {
+      decision: 'edit',
+      nonce: 'nonce-a',
+      edit: { text: 'Row-Bot 5.3.1 is out.', media: ['ba9876543210'] },
+    },
+    '3',
+  );
+  expect(
+    screen.getByText('Edited. Row-Bot asks again with your version.'),
+  ).toBeVisible();
+});
+
 it('an approval for a browser action shows the page and opens the Browser pane (N12-A)', async () => {
   const { onBrowserPaneRequest } = await import('../browser/open-pane');
   const opened: string[] = [];
@@ -611,7 +668,7 @@ it('asks to save to memory from an incognito chat with the exact text, Save or D
     within(card).queryByRole('button', { name: 'Use Auto in this chat' }),
   ).toBeNull();
   expect(
-    within(card).queryByRole('button', { name: 'Approve the rest' }),
+    within(card).queryByRole('button', { name: 'Allow in this chat' }),
   ).toBeNull();
 
   await act(async () => fireEvent.click(save));

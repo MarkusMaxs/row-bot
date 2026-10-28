@@ -155,6 +155,13 @@ const RUN_STATUS: Record<string, RunStatusView> = {
   paused: { label: 'Waiting for approval', tone: 'warning' },
   waiting_approval: { label: 'Waiting for approval', tone: 'warning' },
   approval_pending: { label: 'Waiting for approval', tone: 'warning' },
+  // How a workflow run ended (F31): its card waits, you said no, a newer run replaced it,
+  // a tool couldn't confirm its action, or it was skipped while the run before was going.
+  waiting: { label: 'Waiting for you', tone: 'warning' },
+  denied: { label: 'You said no', tone: 'neutral' },
+  expired: { label: 'Expired', tone: 'neutral' },
+  unsure: { label: 'Not sure it went through', tone: 'warning' },
+  skipped: { label: 'Skipped', tone: 'neutral' },
 };
 
 /** A saved run status in words with its tone. */

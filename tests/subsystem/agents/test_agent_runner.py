@@ -511,7 +511,7 @@ def test_builtin_profile_skills_flow_to_child_agent(tmp_path, monkeypatch, reloa
     assert "agents" not in captured["tools"]
     assert "shell" in captured["tools"]
     assert "browser" in captured["tools"]
-    assert captured["config"]["configurable"]["tool_allowlist"] == run["tools_override"]
+    assert "tool_allowlist" not in captured["config"]["configurable"]
     event_types = {event["type"] for event in agent_runs.get_agent_events(run["id"])}
     assert {"run.created", "run.started", "turn.completed", "run.completed"} <= event_types
 
@@ -664,7 +664,8 @@ def test_concurrent_child_contexts_keep_profile_provider_and_cache_metadata_isol
     agent.clear_agent_cache()
 
 
-def test_profile_tool_and_skill_policy_filters_child_context(tmp_path, monkeypatch, reload_for_data_dir):
+def test_profile_skill_policy_reaches_the_child_and_a_saved_tool_list_is_dropped(
+        tmp_path, monkeypatch, reload_for_data_dir):
     agent_runner, _agent_runs, profiles, _context, threads = _fresh_agent_runner_modules(
         tmp_path,
         monkeypatch,
@@ -703,54 +704,11 @@ def test_profile_tool_and_skill_policy_filters_child_context(tmp_path, monkeypat
         wait=True,
     )
 
-    assert captured["tools"] == ["filesystem", "row_bot_status"]
-    assert captured["config"]["configurable"]["tool_allowlist"] == ["filesystem", "row_bot_status"]
-    assert run["tools_override"] == ["filesystem", "row_bot_status"]
+    assert captured["tools"] == ["shell", "filesystem", "row_bot_status", "gmail"]
+    assert "tool_allowlist" not in captured["config"]["configurable"]
+    assert "allow_tools" not in custom["tool_policy_json"]
     assert run["skills_override"] == ["release_notes", "openapi"]
     assert threads.get_thread_skills_override(run["thread_id"]) == ["release_notes", "openapi"]
-
-
-def test_profile_external_tool_allowlist_passes_through_child_config(tmp_path, monkeypatch, reload_for_data_dir):
-    agent_runner, _agent_runs, profiles, _context, threads = _fresh_agent_runner_modules(
-        tmp_path,
-        monkeypatch,
-        reload_for_data_dir,
-    )
-    parent_thread_id = threads.create_thread("Parent")
-    custom = profiles.save_agent_profile(
-        slug="external_worker",
-        display_name="External Worker",
-        instructions="Use selected external tools.",
-        tool_policy_json={
-            "capability": "read_only",
-            "allow_tools": ["filesystem", "plugin_lookup", "mcp_local_echo"],
-        },
-        context_policy_json={"default_context_mode": "focused"},
-    )
-    captured = {}
-
-    def fake_invoke(prompt, enabled_tool_names, config, *, stop_event):
-        captured["tools"] = enabled_tool_names
-        captured["config"] = config
-        return "done"
-
-    monkeypatch.setattr(agent_runner, "_invoke_agent", fake_invoke)
-
-    run = agent_runner.spawn_agent_run(
-        "Use external tools.",
-        parent_thread_id=parent_thread_id,
-        profile=custom["id"],
-        enabled_tool_names=["filesystem", "mcp", "row_bot_status", "agents"],
-        wait=True,
-    )
-
-    assert captured["tools"] == ["filesystem", "mcp"]
-    assert captured["config"]["configurable"]["tool_allowlist"] == [
-        "filesystem",
-        "plugin_lookup",
-        "mcp_local_echo",
-    ]
-    assert run["tools_override"] == ["filesystem", "plugin_lookup", "mcp_local_echo"]
 
 
 def test_profile_without_allowlist_preserves_default_child_tools(tmp_path, monkeypatch, reload_for_data_dir):
@@ -782,7 +740,8 @@ def test_profile_without_allowlist_preserves_default_child_tools(tmp_path, monke
     assert run["tools_override"] == ["filesystem", "mcp"]
 
 
-def test_builtin_read_only_profile_does_not_inherit_write_heavy_tools(tmp_path, monkeypatch, reload_for_data_dir):
+def test_builtin_read_only_profile_sees_the_chats_tools_and_is_refused_their_actions(
+        tmp_path, monkeypatch, reload_for_data_dir):
     agent_runner, _agent_runs, _profiles, _context, threads = _fresh_agent_runner_modules(
         tmp_path,
         monkeypatch,
@@ -807,7 +766,11 @@ def test_builtin_read_only_profile_does_not_inherit_write_heavy_tools(tmp_path, 
     )
 
     assert run["skills_override"] == []
-    assert captured["tools"] == ["filesystem", "row_bot_status"]
+    assert captured["tools"] == ["filesystem", "row_bot_status", "gmail", "outlook_mail", "outlook_calendar",
+                                 "image_gen"]
+    from row_bot.tools.profile_policy import dispatch_refusal
+    assert run["profile_snapshot_json"]["tool_policy_json"]["capability"] == "read_only"
+    assert dispatch_refusal(run["profile_snapshot_json"], "send_email", {}, source="core", parent="gmail")
 
 
 def test_spawn_agent_run_records_interrupt_resume_state(tmp_path, monkeypatch, reload_for_data_dir):
@@ -842,7 +805,7 @@ def test_spawn_agent_run_records_interrupt_resume_state(tmp_path, monkeypatch, r
     assert "approval.requested" in event_types
 
 
-def test_approval_resume_state_preserves_profile_tool_allowlist(tmp_path, monkeypatch, reload_for_data_dir):
+def test_approval_resume_state_keeps_the_childs_tools(tmp_path, monkeypatch, reload_for_data_dir):
     agent_runner, _agent_runs, profiles, _context, threads = _fresh_agent_runner_modules(
         tmp_path,
         monkeypatch,
@@ -876,12 +839,7 @@ def test_approval_resume_state_preserves_profile_tool_allowlist(tmp_path, monkey
     )
 
     assert run["status"] == "waiting_approval"
-    assert run["resume_state_json"]["enabled_tool_names"] == ["shell"]
-    assert run["resume_state_json"]["tool_allowlist"] == ["shell", "plugin_lookup"]
-    assert run["resume_state_json"]["config"]["configurable"]["tool_allowlist"] == [
-        "shell",
-        "plugin_lookup",
-    ]
+    assert run["resume_state_json"]["enabled_tool_names"] == ["shell", "filesystem"]
 
 
 def test_stop_agent_run_sets_live_stop_event_and_durable_status(tmp_path, monkeypatch, reload_for_data_dir):

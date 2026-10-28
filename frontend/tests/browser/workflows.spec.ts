@@ -73,7 +73,7 @@ test('Phase 4 workflow create and edit retain saved fields without starting a ru
   const name = `Phase 4 browser workflow ${info.project.name}`;
   await editor.getByRole('textbox', { name: 'Name', exact: true }).fill(name);
   await editor
-    .getByRole('textbox', { name: 'Prompt 1', exact: true })
+    .getByRole('textbox', { name: 'Message 1', exact: true })
     .fill('Summarize synthetic sample only');
   for (const appearance of ['light', 'dark'] as const) {
     await page.emulateMedia({ colorScheme: appearance });
@@ -99,7 +99,7 @@ test('Phase 4 workflow create and edit retain saved fields without starting a ru
     edit.getByRole('textbox', { name: 'Name', exact: true }),
   ).toHaveValue(name);
   await expect(
-    edit.getByRole('textbox', { name: 'Prompt 1', exact: true }),
+    edit.getByRole('textbox', { name: 'Message 1', exact: true }),
   ).toHaveValue('Summarize synthetic sample only');
   await edit
     .getByRole('textbox', { name: 'Description', exact: true })
@@ -154,67 +154,6 @@ test('Phase 4 workflow create and edit retain saved fields without starting a ru
   await screenshot(page, info, 'workflow-saved');
 });
 
-test('Phase 4 workflow graph saves stable steps without starting a run', async ({
-  page,
-}, info) => {
-  await seed(page, 'tasks');
-  await page.goto('/app-v2/?tab=workflows');
-  await searchWorkflows(page, 'Phase 4 saved task 103');
-  await expect(workflowCards(page)).toHaveCount(1);
-  await chooseWorkflowAction(
-    page,
-    'Phase 4 saved task 103',
-    'Edit workflow steps',
-  );
-  const order = page.getByRole('list', { name: 'Workflow step order' });
-  await expect(order.getByRole('button')).toHaveCount(0);
-  await page.getByRole('button', { name: 'Add step', exact: true }).click();
-  // The flowchart is the default view once there are steps; this test
-  // reorders rows in the list, which is remembered for the rest of it.
-  await page
-    .getByRole('radiogroup', { name: 'Show steps as' })
-    .getByRole('radio', { name: 'List', exact: true })
-    .click();
-  const original = await order.getByRole('button').first().innerText();
-  await page
-    .getByRole('textbox', { name: 'Prompt', exact: true })
-    .fill('Synthetic graph edit');
-  await page.getByRole('button', { name: 'Add step', exact: true }).click();
-  await page
-    .getByRole('textbox', { name: 'Prompt', exact: true })
-    .fill('Second synthetic step');
-  await page.getByRole('button', { name: 'Move step up', exact: true }).click();
-  await expect(order.getByRole('button').last()).toContainText(
-    original.replace(/^1\./, '2.'),
-  );
-  for (const appearance of ['light', 'dark'] as const) {
-    await page.emulateMedia({ colorScheme: appearance });
-    await assertNoOverflow(page);
-    await screenshot(page, info, `workflow-graph-${appearance}`);
-    await accessibility(page, info, `workflow-graph-${appearance}`);
-  }
-  await page.getByRole('button', { name: 'Save graph', exact: true }).click();
-  await expect(
-    page.getByRole('heading', { name: 'Workflows', exact: true }),
-  ).toBeVisible();
-  await searchWorkflows(page, 'Phase 4 saved task 103');
-  await expect(workflowCards(page)).toHaveCount(1);
-  await expect(page.getByText('Never run', { exact: true })).toBeVisible();
-  await chooseWorkflowAction(
-    page,
-    'Phase 4 saved task 103',
-    'Edit workflow steps',
-  );
-  await expect(order.getByRole('button')).toHaveCount(2);
-  await expect(
-    page.getByRole('textbox', { name: 'Prompt', exact: true }),
-  ).toHaveValue('Second synthetic step');
-  await order.getByRole('button').last().click();
-  await expect(
-    page.getByRole('textbox', { name: 'Prompt', exact: true }),
-  ).toHaveValue('Synthetic graph edit');
-});
-
 test('Phase 4 workflow settings save in one reviewed step and preserve saved configuration', async ({
   page,
 }, info) => {
@@ -231,9 +170,22 @@ test('Phase 4 workflow settings save in one reviewed step and preserve saved con
     name: 'Workflow settings editor',
     exact: true,
   });
+  // A run missed while Row-Bot was closed runs once when it starts.
   await editor
-    .getByRole('textbox', { name: 'Queue name', exact: true })
-    .fill('synthetic-browser-group');
+    .getByRole('combobox', {
+      name: 'If Row-Bot is closed at a scheduled time',
+      exact: true,
+    })
+    .selectOption('run_once');
+  // Results go once a day, each run a line saying what it did (G8).
+  await editor
+    .getByRole('combobox', { name: 'Send results', exact: true })
+    .selectOption('digest');
+  await expect(
+    editor.getByText(
+      'One message from 6 PM with a line for each run that day.',
+    ),
+  ).toBeVisible();
   await editor
     .getByRole('combobox', { name: 'Trigger', exact: true })
     .selectOption('webhook');
@@ -244,8 +196,11 @@ test('Phase 4 workflow settings save in one reviewed step and preserve saved con
     page.getByRole('tab', { name: 'Workflows', exact: true }),
   ).toHaveAttribute('aria-selected', 'true');
   await expect(
-    editor.getByRole('textbox', { name: 'Queue name', exact: true }),
-  ).toHaveValue('synthetic-browser-group');
+    editor.getByRole('combobox', {
+      name: 'If Row-Bot is closed at a scheduled time',
+      exact: true,
+    }),
+  ).toHaveValue('run_once');
   await expect(
     editor.getByRole('combobox', { name: 'Trigger', exact: true }),
   ).toHaveValue('webhook');
@@ -258,6 +213,18 @@ test('Phase 4 workflow settings save in one reviewed step and preserve saved con
     await screenshot(page, info, `workflow-settings-${appearance}`);
     await accessibility(page, info, `workflow-settings-${appearance}`);
   }
+  const size = page.viewportSize();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await editor
+    .getByRole('combobox', { name: 'Send results', exact: true })
+    .scrollIntoViewIfNeeded();
+  for (const appearance of ['light', 'dark'] as const) {
+    await page.emulateMedia({ colorScheme: appearance });
+    await assertNoOverflow(page);
+    await screenshot(page, info, `workflow-settings-phone-${appearance}`);
+  }
+  await page.emulateMedia({ colorScheme: 'light' });
+  if (size) await page.setViewportSize(size);
   await editor
     .getByRole('button', { name: 'Save settings', exact: true })
     .click();
@@ -273,8 +240,14 @@ test('Phase 4 workflow settings save in one reviewed step and preserve saved con
     'Workflow settings',
   );
   await expect(
-    editor.getByRole('textbox', { name: 'Queue name', exact: true }),
-  ).toHaveValue('synthetic-browser-group');
+    editor.getByRole('combobox', {
+      name: 'If Row-Bot is closed at a scheduled time',
+      exact: true,
+    }),
+  ).toHaveValue('run_once');
+  await expect(
+    editor.getByRole('combobox', { name: 'Send results', exact: true }),
+  ).toHaveValue('digest');
   await expect(
     editor.getByRole('combobox', { name: 'Trigger', exact: true }),
   ).toHaveValue('webhook');
@@ -579,7 +552,7 @@ test('workflow rows and the new-workflow editor fit, retain drafts, and restore 
     .getByRole('textbox', { name: 'Name', exact: true })
     .fill(`Slice 5 workflow ${info.project.name}`);
   await editor
-    .getByRole('textbox', { name: 'Prompt 1', exact: true })
+    .getByRole('textbox', { name: 'Message 1', exact: true })
     .fill('Summarize synthetic sample only');
   await screenshot(page, info, 'slice5-create-editor');
   await assertNoOverflow(page);
@@ -604,7 +577,7 @@ test('workflow rows and the new-workflow editor fit, retain drafts, and restore 
     .getByRole('button', { name: 'Search workflows', exact: true })
     .click();
   await expect(page.locator('.workflow-grid > li')).toHaveCount(1);
-  await expect(page.locator('.workflow-metadata')).toContainText('1 step');
+  await expect(page.locator('.workflow-metadata')).toContainText('1 message');
   await assertNoOverflow(page);
 });
 
@@ -620,12 +593,11 @@ async function seedApps(page: Page, path: string) {
   expect(response.ok(), await response.text()).toBe(true);
 }
 
-test('app templates start switched off and offer Connect, and a step names the apps it uses', async ({
+test('app templates start switched off and offer Connect', async ({
   page,
 }, info) => {
   test.slow();
   await seedApps(page, '/__p6_fixture/views');
-  await seedApps(page, '/__p6_fixture/app-workflow');
   try {
     await appTemplatesJourney(page, info);
   } finally {
@@ -657,16 +629,4 @@ async function appTemplatesJourney(page: Page, info: TestInfo) {
   await templates.scrollIntoViewIfNeeded();
   await assertNoOverflow(page);
   await screenshot(page, info, 'workflow-templates');
-
-  await searchWorkflows(page, 'Counter morning digest');
-  await chooseWorkflowAction(
-    page,
-    'Counter morning digest',
-    'Edit workflow steps',
-  );
-  await expect(
-    page.getByRole('switch', { name: 'Use Counter in this step' }),
-  ).toBeChecked();
-  await assertNoOverflow(page);
-  await screenshot(page, info, 'workflow-step-apps');
 }

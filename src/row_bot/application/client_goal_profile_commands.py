@@ -219,11 +219,6 @@ def _profile_public(
         "editable": str(profile.get("source") or "") != "builtin",
         "revision": str(max(1, int(profile.get("revision") or 1))),
         "capability": str(tools.get("capability") or "read_only"),
-        "allow_tools": [
-            _public_text(item, 256)
-            for item in tools.get("allow_tools", [])[:100]
-            if isinstance(item, str)
-        ],
         "skills": [
             _public_text(item, 256)
             for item in skills.get("skills_override", [])[:100]
@@ -516,7 +511,6 @@ def _profile_fields(value: object, *, create: bool) -> dict[str, Any]:
         "when_to_use",
         "instructions",
         "capability",
-        "allow_tools",
         "skills",
         "context_mode",
         "workspace_mode",
@@ -548,7 +542,6 @@ def _profile_fields(value: object, *, create: bool) -> dict[str, Any]:
         "when_to_use": _text(value["when_to_use"], 2048),
         "instructions": instructions,
         "capability": value["capability"],
-        "allow_tools": _string_list(value["allow_tools"], count=100, length=256),
         "skills": _string_list(value["skills"], count=100, length=256),
         "context_mode": value["context_mode"],
         "workspace_mode": value["workspace_mode"],
@@ -676,10 +669,9 @@ def _profile_payload(
 ) -> dict[str, Any]:
     payload = deepcopy(dict(existing or {}))
     tool_policy = _policy(payload, "tool_policy_json")
-    tool_policy.update(
-        capability=fields["capability"],
-        allow_tools=list(fields["allow_tools"]),
-    )
+    # A profile lists no tools (F31): its capability and the approval level decide what it may do.
+    tool_policy.pop("allow_tools", None)
+    tool_policy["capability"] = fields["capability"]
     skill_policy = _policy(payload, "skill_policy_json")
     skill_policy["skills_override"] = list(fields["skills"])
     context_policy = _policy(payload, "context_policy_json")

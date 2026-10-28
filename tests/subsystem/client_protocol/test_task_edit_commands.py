@@ -19,10 +19,9 @@ pytestmark = pytest.mark.subsystem
 @pytest.fixture
 def task_api(service, monkeypatch):
     from row_bot import tasks
-    from row_bot.application import task_graph_controls, task_settings_controls
+    from row_bot.application import task_settings_controls
 
     monkeypatch.setattr(task_controls, "tasks", tasks)
-    monkeypatch.setattr(task_graph_controls, "tasks", tasks)
     monkeypatch.setattr(task_settings_controls, "tasks", tasks)
     tasks._init_db()
     monkeypatch.setattr(tasks, "_scheduler", None)

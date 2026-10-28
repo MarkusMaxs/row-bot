@@ -1634,6 +1634,21 @@
       "default": null,
       "title": "Generation Id"
     },
+    "linked_conversation_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9:_-]+$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Linked Conversation Id"
+    },
     "mcp_configuration": {
       "anyOf": [
         {
@@ -1886,27 +1901,6 @@
       ],
       "default": null,
       "title": "Submission Id"
-    },
-    "task_approval_decision": {
-      "anyOf": [
-        {
-          "enum": [
-            "approved",
-            "denied"
-          ],
-          "type": "string"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "title": "Task Approval Decision"
-    },
-    "task_approval_recorded": {
-      "default": false,
-      "title": "Task Approval Recorded",
-      "type": "boolean"
     },
     "task_created": {
       "default": false,

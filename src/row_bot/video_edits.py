@@ -95,6 +95,8 @@ class Request:
     count: int = 0
     times: list[float] = field(default_factory=list)
     download: bool = False
+    # Voice and music files a sound step names (5.3.1 B): name -> (path, or the chat file's bytes and suffix).
+    sounds: dict[str, tuple[Any, bytes, str]] = field(default_factory=dict)
 
 
 _LOCK = threading.RLock()
@@ -455,7 +457,15 @@ def _run(edit: VideoEdit, request: Request) -> None:
         inputs = _inputs(edit, request, ffmpeg, folder)
         _check(edit)
         if request.kind == "video":
-            plan = build_plan(inputs, list(request.steps), "output.mp4",
+            sounds: dict[str, str] = {}
+            for number, (name, (path, data, suffix)) in enumerate(request.sounds.items(), start=1):
+                if path is None:  # A chat file: copied in, so ffmpeg reads only the edit's own folder.
+                    copied = f"sound-{number}{suffix or '.bin'}"
+                    (folder / copied).write_bytes(data)
+                    sounds[name] = copied
+                else:
+                    sounds[name] = str(path)
+            plan = build_plan(inputs, list(request.steps), "output.mp4", sounds=sounds,
                               graph_option=graph_option_for(ffmpeg.version),
                               encoder=ffmpeg_runtime.h264_encoder(ffmpeg))
             (folder / "graph.txt").write_text(plan.graph, encoding="utf-8", newline="\n")

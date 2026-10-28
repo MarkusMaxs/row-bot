@@ -72,7 +72,7 @@ def test_every_process_is_listed_read_paged_and_stopped(service, processes):  # 
         page = client.get("/api/v1/processes", headers=headers)
         assert page.status_code == 200, page.text
         body = page.json()
-        assert body["running"] == 1 and body["limit_per_conversation"] == 5 and body["limit_total"] == 12
+        assert body["running"] == 1 and body["limit_per_conversation"] == 20 and body["limit_total"] == 50
         items = {item["process_id"]: item for item in body["items"]}
         assert [item["process_id"] for item in body["items"]] == [server.process_id, tests.process_id]
         assert {key: items[server.process_id][key] for key in (

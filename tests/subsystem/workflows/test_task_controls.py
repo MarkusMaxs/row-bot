@@ -5,7 +5,7 @@ import threading
 import pytest
 
 from row_bot.application import task_controls as control
-from tests.fixtures.tasks import fresh_tasks_module, sample_workflow_steps
+from tests.fixtures.tasks import fresh_tasks_module
 
 pytestmark = pytest.mark.subsystem
 
@@ -211,21 +211,17 @@ def test_invalid_local_date_never_saves(owner, fields, at):
     assert not owner.list_tasks()
 
 
-def test_advanced_graph_approval_and_origin_survive_basic_edit(owner, fields):
-    task_id = owner.create_task(name=fields.name, steps=sample_workflow_steps(),
+def test_an_edit_keeps_the_approval_level_profile_and_conversation(owner, fields):
+    task_id = owner.create_task(name=fields.name, prompts=["Check the news"], safety_mode="approve",
                                persistent_thread_id="conversation-synthetic", enabled=False)
     before = owner.get_task(task_id)
     snapshot = control.get_task_editor(task_id)
-    assert snapshot.advanced
     result = control.update_saved_task(task_id, replace(snapshot.fields, name="Renamed", channels=()),
                                       expected_revision=snapshot.revision, validate=lambda: None)
     after = owner.get_task(task_id)
-    for key in ("steps", "safety_mode", "agent_profile_id", "persistent_thread_id", "trigger"):
+    for key in ("prompts", "safety_mode", "agent_profile_id", "persistent_thread_id", "trigger"):
         assert after[key] == before[key]
     assert result.task.conversation_id == "conversation-synthetic"
-    with pytest.raises(control.TaskControlError, match="task_advanced_edit_required"):
-        control.update_saved_task(task_id, replace(result.task.fields, prompts=("Replace graph",)),
-                                  expected_revision=result.task.revision, validate=lambda: None)
 
 
 def test_legacy_destination_is_private_and_preserved(owner, fields):

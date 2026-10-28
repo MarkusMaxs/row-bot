@@ -56,6 +56,7 @@ MODELS = {name: getattr(schemas, name) for name in (
     "McpPolicyPage", "McpPolicyRequest", "McpPolicyReview",
     "McpChatState", "McpChatReviewRequest", "McpChatReview", "McpChatOutcome",
     "AttentionProblem", "AttentionUpdate", "AttentionSnapshot", "PendingApproval", "PendingApprovalPage",
+    "ScheduledPost", "ScheduledPostPage", "ScheduledPostCancelled",
     "RuntimeInstallationSnapshot", "RuntimeInstallationReviewRequest", "RuntimeInstallationReview", "RuntimeInstallationReceipt",
     "DocumentQueuePage", "DocumentControlReviewRequest", "DocumentControlReview", "DocumentControlReceipt",
     "DocumentUploadReviewRequest", "DocumentUploadReview", "DocumentUploadReceipt",
@@ -72,6 +73,7 @@ MODELS = {name: getattr(schemas, name) for name in (
     "DataBackupState", "DataBackupCommand", "DataBackupReceipt", "DataRestoreReview",
     "DataBackupUploadRequest", "DataBackupUploadView",
     "InsightsSnapshot", "InsightCommand", "InsightReceipt",
+    "LearningSnapshot", "LearningTraining", "LearningDownload", "LearningHardware", "LearningConversation", "LearningLessonPage", "LearningCommand", "LearningReceipt", "LearningVersionDetails",
     "KnowledgeEditorState", "KnowledgeReviewRequest", "KnowledgeReview", "KnowledgeReceipt",
     "KnowledgeGraphSnapshot", "BackgroundProcessView", "BackgroundProcessPage", "BackgroundProcessOutput", "RecordingView", "RecordingPage", "VideoEditView", "VideoEditPage", "DeliveryView", "DeliveryPage", "PageDecisionView", "PageView", "PagePage", "PageTheme", "PageFrameRequest", "PageFrame", "PageStateWrite", "PageDecisionWrite", "PageDownload", "WorkspaceFolderPage", "SandboxJobView", "SandboxJobPage", "SandboxStatusView", "SandboxStartPayload", "LocalAddressGrantView", "LocalAddressPage", "MonitorSnapshot", "MonitorLogs", "SystemDiagnosis", "SystemDiagnosisSettings", "InstallCountSnapshot", "InstallCountChoice", "InstallCountDeletion", "UpdateRelease", "UpdateEngineView", "UpdateHostRequest", "UpdateHostView", "UpdateHeldBack", "UpdateSnapshot", "UpdateCommand", "UpdateReceipt", "MigrationScanRequest", "MigrationSource", "MigrationSources", "MigrationPreviewSummary", "MigrationPreviewItem", "MigrationPreview", "MigrationApplyReviewRequest", "MigrationApplyReview", "MigrationApplyCommand", "MigrationFailedItem", "MigrationApplyReceipt", "OnboardingSnapshot", "OnboardingCommand", "OnboardingReceipt", "LocalRuntimeSnapshot", "ModelTestResult", "ProviderKeyCheckRequest", "ProviderKeyCheck", "DreamRunRequest", "DreamRunReview", "DreamRunCommand", "DreamRunReceipt",
     "KnowledgeMaintenanceRequest", "KnowledgeMaintenanceReview", "KnowledgeMaintenanceCommand", "KnowledgeMaintenanceReceipt",
@@ -91,19 +93,18 @@ MODELS = {name: getattr(schemas, name) for name in (
     "ArtifactDesignOutcome", "ArtifactPresetReviewRequest", "ArtifactPresetReview", "ArtifactReviewDraftRequest", "ArtifactReviewDraft",
     "ArtifactShareOptions", "ArtifactShareReview", "ArtifactShareOutcome",
     "ArtifactShareChannels", "ArtifactPublication",
-    "TaskRunReview", "TaskRunSummary", "TaskRunPage", "TaskRunResult", "TaskApprovalReview",
-    "TaskApprovalPage", "TaskApprovalResult", "TaskStopResult", "ArtifactExport",
+    "TaskRunReview", "TaskRunAction", "TaskRunSummary", "TaskRunPage", "TaskRunResult", "TaskStopResult",
+    "ArtifactExport",
     "ArtifactSavedExport", "ArtifactExportReveal", "ArtifactExportRevealResult",
     "ExportSaved", "ExportRevealRequest",
     "ArtifactBrandSuggestionRequest", "ArtifactBrandSuggestion", "WorkspaceEditableFile", "WorkspaceEditResult",
     "WorkspaceImportPage", "WorkspaceImportPatch", "WorkspaceImportReviewRequest", "WorkspaceImportReview", "WorkspaceImportResult",
     "WorkspaceUndoReviewRequest", "WorkspaceUndoReview", "WorkspaceUndoResult",
-    "TaskGraphFields", "TaskGraphStepEdit", "TaskGraphSnapshot",
     "DictationCapability", "DictationStart", "DictationIdentity", "DictationHandle", "DictationSnapshot", "DictationResult",
     "TalkStart", "TalkSnapshot", "TalkResult", "TalkOutputRequest", "RealtimeSnapshot", "RealtimeStart", "RealtimeEvent", "RealtimeEventRequest", "RealtimeEventResult", "DefaultModelSnapshot", "VoiceRunView",
     "FolderGrantClaim", "FolderGrantView", "DeckSetupOptions", "ArtifactSetupOptions", "ArtifactPreview", "ArtifactEditingState", "ArtifactLifecycleState", "WorkspaceInspector", "WorkspaceChanges",
     "WorkspaceDirectory", "WorkspaceFile", "WorkspaceDiff", "WorkspaceChangeSetPage", "WorkspaceChangeSetFiles", "DraftView", "DraftSave", "ParentSteeringView", "ClientQueueView",
-    "Notice", "NoticePage", "NoticeFrame", "LiveFrame")}
+    "ConversationLinkPage", "Notice", "NoticePage", "NoticeFrame", "LiveFrame")}
 
 # Method, path, request DTO (binary uses bytes), response DTO. This table also
 # drives OpenAPI and is checked against the actual router in the contract tests.
@@ -234,6 +235,8 @@ OPERATIONS = (
     ("post", "/pages/{page_id}/save", "PageFrameRequest", "ExportSaved"),
     ("get", "/monitor/attention", None, "AttentionSnapshot"),
     ("get", "/monitor/approvals", None, "PendingApprovalPage"),
+    ("get", "/monitor/scheduled-posts", None, "ScheduledPostPage"),
+    ("delete", "/monitor/scheduled-posts/{post_id}", None, "ScheduledPostCancelled"),
     ("get", "/monitor/logs", None, "MonitorLogs"),
     ("post", "/monitor/diagnosis", None, "SystemDiagnosis"),
     ("get", "/monitor/diagnosis", None, "SystemDiagnosis"),
@@ -341,6 +344,15 @@ OPERATIONS = (
     ("get", "/insights", None, "InsightsSnapshot"),
     ("get", "/insights/commands/{command_id}", None, "InsightReceipt"),
     ("post", "/insights/commands", "InsightCommand", "InsightReceipt"),
+    ("get", "/learning", None, "LearningSnapshot"),
+    ("get", "/learning/training", None, "LearningTraining"),
+    ("get", "/learning/download", None, "LearningDownload"),
+    ("get", "/learning/hardware", None, "LearningHardware"),
+    ("get", "/learning/conversations/{conversation_id}", None, "LearningConversation"),
+    ("get", "/learning/lessons", None, "LearningLessonPage"),
+    ("get", "/learning/versions/{version}", None, "LearningVersionDetails"),
+    ("get", "/learning/commands/{command_id}", None, "LearningReceipt"),
+    ("post", "/learning/commands", "LearningCommand", "LearningReceipt"),
     ("post", "/settings/mcp/policy/review", "McpPolicyRequest", "McpPolicyReview"),
     ("get", "/settings/mcp/chat", None, "McpChatState"),
     ("post", "/settings/mcp/chat/review", "McpChatReviewRequest", "McpChatReview"),
@@ -412,7 +424,6 @@ OPERATIONS = (
     ("get", "/tasks", None, "TaskSummaryPage"),
     ("get", "/tasks/delivery-defaults", None, "TaskDeliverySnapshot"),
     ("get", "/tasks/{task_id}/editing", None, "TaskEditorSnapshot"),
-    ("get", "/tasks/{task_id}/graph", None, "TaskGraphSnapshot"),
     ("get", "/tasks/{task_id}/settings", None, "TaskSettingsSnapshot"),
     ("get", "/tasks/{task_id}/webhook-configuration", None, "bytes"),
     ("post", "/tasks/{task_id}/settings-review", "TaskSettingsFields", "TaskSettingsSnapshot"),
@@ -422,7 +433,6 @@ OPERATIONS = (
     ("get", "/tasks/{task_id}/run-review", None, "TaskRunReview"),
     ("get", "/tasks/{task_id}/runs", None, "TaskRunPage"),
     ("get", "/tasks/{task_id}/runs/{run_id}", None, "TaskRunSummary"),
-    ("get", "/tasks/{task_id}/runs/{run_id}/approvals", None, "TaskApprovalPage"),
     ("get", "/conversations/{conversation_id}/artifacts/{binding_id}/exports/{export_id}", None, "ArtifactExport"),
     ("post", "/conversations/{conversation_id}/artifacts/{binding_id}/exports/{export_id}/save", None, "ArtifactSavedExport"),
     ("post", "/conversations/{conversation_id}/artifacts/{binding_id}/brand-suggestion", "ArtifactBrandSuggestionRequest", "ArtifactBrandSuggestion"),
@@ -487,6 +497,7 @@ OPERATIONS = (
     ("get", "/conversations/{conversation_id}/draft", None, "DraftView"),
     ("get", "/conversations/{conversation_id}/steering", None, "ParentSteeringView"),
     ("get", "/conversations/{conversation_id}/queue", None, "ClientQueueView"),
+    ("get", "/conversations/{conversation_id}/links", None, "ConversationLinkPage"),
     ("put", "/conversations/{conversation_id}/draft", "DraftSave", "DraftView"),
     ("post", "/resources/commands", "Command", "CommandReceipt"),
     ("post", "/resources/folder-selection", None, "FolderGrantView"),
@@ -706,6 +717,9 @@ export const getDelegatedRun = (base: string, proof: SessionProof, conversation:
   jsonRequest(base, `/conversations/${id(conversation)}/delegated/${id(run)}`, 'DelegatedRun', proof, 'GET', undefined, undefined, signal);
 export const getQueue = (base: string, proof: SessionProof, conversation: string, generation_id?: string, cursor?: string, signal?: AbortSignal): Promise<ClientQueueView> =>
   jsonRequest(base, `/conversations/${id(conversation)}/queue` + query({generation_id,cursor}), 'ClientQueueView', proof, 'GET', undefined, undefined, signal);
+/** The conversations this one started or proposed, with their state (5.3.1 C). */
+export const getConversationLinks = (base: string, proof: SessionProof, conversation: string, signal?: AbortSignal): Promise<ConversationLinkPage> =>
+  jsonRequest(base, `/conversations/${id(conversation)}/links`, 'ConversationLinkPage', proof, 'GET', undefined, undefined, signal);
 /** Messages that have not been sent or discarded yet, oldest first, in one page. */
 export const getWaitingMessages = (base: string, proof: SessionProof, conversation: string, signal?: AbortSignal): Promise<ClientQueueView> =>
   jsonRequest(base, `/conversations/${id(conversation)}/queue` + query({waiting:'true',limit:256}), 'ClientQueueView', proof, 'GET', undefined, undefined, signal);
@@ -827,6 +841,10 @@ export const getAttention = (base: string, proof: SessionProof, signal?: AbortSi
   jsonRequest(base, '/monitor/attention', 'AttentionSnapshot', proof, 'GET', undefined, undefined, signal);
 export const getPendingApprovals = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<PendingApprovalPage> =>
   jsonRequest(base, '/monitor/approvals', 'PendingApprovalPage', proof, 'GET', undefined, undefined, signal);
+export const getScheduledPosts = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<ScheduledPostPage> =>
+  jsonRequest(base, '/monitor/scheduled-posts', 'ScheduledPostPage', proof, 'GET', undefined, undefined, signal);
+export const cancelScheduledPost = (base: string, proof: SessionProof, post: string, signal?: AbortSignal): Promise<ScheduledPostCancelled> =>
+  jsonRequest(base, `/monitor/scheduled-posts/${id(post)}`, 'ScheduledPostCancelled', proof, 'DELETE', undefined, undefined, signal);
 export const getMonitorLogs = (base: string, proof: SessionProof, limit = 200, signal?: AbortSignal): Promise<MonitorLogs> =>
   jsonRequest(base, '/monitor/logs' + query({limit}), 'MonitorLogs', proof, 'GET', undefined, undefined, signal);
 export const runSystemDiagnosis = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<SystemDiagnosis> =>
@@ -911,8 +929,6 @@ export const getTaskDeliveryDefaults = (base: string, proof: SessionProof, signa
   jsonRequest(base, '/tasks/delivery-defaults', 'TaskDeliverySnapshot', proof, 'GET', undefined, undefined, signal);
 export const getTaskEditor = (base: string, proof: SessionProof, task: string, signal?: AbortSignal): Promise<TaskEditorSnapshot> =>
   jsonRequest(base, `/tasks/${id(task)}/editing`, 'TaskEditorSnapshot', proof, 'GET', undefined, undefined, signal);
-export const getTaskGraph = (base: string, proof: SessionProof, task: string, signal?: AbortSignal): Promise<TaskGraphSnapshot> =>
-  jsonRequest(base, `/tasks/${id(task)}/graph`, 'TaskGraphSnapshot', proof, 'GET', undefined, undefined, signal);
 export const getTaskSettings = (base: string, proof: SessionProof, task: string, signal?: AbortSignal): Promise<TaskSettingsSnapshot> =>
   jsonRequest(base, `/tasks/${id(task)}/settings`, 'TaskSettingsSnapshot', proof, 'GET', undefined, undefined, signal);
 export const reviewTaskSettings = (base: string, proof: SessionProof, task: string, fields: TaskSettingsFields, signal?: AbortSignal): Promise<TaskSettingsSnapshot> =>
@@ -988,8 +1004,6 @@ export const getTaskRuns = (base: string, proof: SessionProof, task: string, cur
   jsonRequest(base, `/tasks/${id(task)}/runs` + query({cursor}), 'TaskRunPage', proof, 'GET', undefined, undefined, signal);
 export const getTaskRun = (base: string, proof: SessionProof, task: string, run: string, signal?: AbortSignal): Promise<TaskRunSummary> =>
   jsonRequest(base, `/tasks/${id(task)}/runs/${id(run)}`, 'TaskRunSummary', proof, 'GET', undefined, undefined, signal);
-export const getTaskApprovals = (base: string, proof: SessionProof, task: string, run: string, cursor?: string, signal?: AbortSignal): Promise<TaskApprovalPage> =>
-  jsonRequest(base, `/tasks/${id(task)}/runs/${id(run)}/approvals` + query({cursor}), 'TaskApprovalPage', proof, 'GET', undefined, undefined, signal);
 export const getCachedModels = (base: string, proof: SessionProof, provider_id?: string, search = '', cursor?: string, signal?: AbortSignal): Promise<CachedModelPage> =>
   jsonRequest(base, '/settings/models' + query({provider_id, query:search, cursor}), 'CachedModelPage', proof, 'GET', undefined, undefined, signal);
 export const getModelsSettings = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<ModelsSettingsState> =>
@@ -1143,6 +1157,24 @@ export const getInsightReceipt = (base: string, proof: SessionProof, command: st
   jsonRequest(base, `/insights/commands/${id(command)}`, 'InsightReceipt', proof, 'GET', undefined, undefined, signal);
 export const sendInsightCommand = (base: string, proof: SessionProof, command: InsightCommand, signal?: AbortSignal): Promise<InsightReceipt> =>
   jsonRequest(base, '/insights/commands', 'InsightReceipt', proof, 'POST', validateWire('InsightCommand', command), command.command_id, signal);
+export const getLearning = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<LearningSnapshot> =>
+  jsonRequest(base, '/learning', 'LearningSnapshot', proof, 'GET', undefined, undefined, signal);
+export const getLearningTraining = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<LearningTraining> =>
+  jsonRequest(base, '/learning/training', 'LearningTraining', proof, 'GET', undefined, undefined, signal);
+export const getLearningDownload = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<LearningDownload> =>
+  jsonRequest(base, '/learning/download', 'LearningDownload', proof, 'GET', undefined, undefined, signal);
+export const getLearningHardware = (base: string, proof: SessionProof, refresh = false, signal?: AbortSignal): Promise<LearningHardware> =>
+  jsonRequest(base, '/learning/hardware' + query({refresh: refresh ? 'true' : undefined}), 'LearningHardware', proof, 'GET', undefined, undefined, signal);
+export const getLearningConversation = (base: string, proof: SessionProof, conversation: string, signal?: AbortSignal): Promise<LearningConversation> =>
+  jsonRequest(base, `/learning/conversations/${id(conversation)}`, 'LearningConversation', proof, 'GET', undefined, undefined, signal);
+export const getLearningLessons = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<LearningLessonPage> =>
+  jsonRequest(base, '/learning/lessons', 'LearningLessonPage', proof, 'GET', undefined, undefined, signal);
+export const getLearningVersion = (base: string, proof: SessionProof, version: number, signal?: AbortSignal): Promise<LearningVersionDetails> =>
+  jsonRequest(base, `/learning/versions/${Math.trunc(version)}`, 'LearningVersionDetails', proof, 'GET', undefined, undefined, signal);
+export const getLearningReceipt = (base: string, proof: SessionProof, command: string, signal?: AbortSignal): Promise<LearningReceipt> =>
+  jsonRequest(base, `/learning/commands/${id(command)}`, 'LearningReceipt', proof, 'GET', undefined, undefined, signal);
+export const sendLearningCommand = (base: string, proof: SessionProof, command: LearningCommand, signal?: AbortSignal): Promise<LearningReceipt> =>
+  jsonRequest(base, '/learning/commands', 'LearningReceipt', proof, 'POST', validateWire('LearningCommand', command), command.command_id, signal);
 export const getConversationActions = (base: string, proof: SessionProof, conversation: string, signal?: AbortSignal): Promise<ConversationActionSnapshot> =>
   jsonRequest(base, `/conversations/${id(conversation)}/actions`, 'ConversationActionSnapshot', proof, 'GET', undefined, undefined, signal);
 export const reviewConversationAction = (base: string, proof: SessionProof, conversation: string, body: ConversationActionReviewRequest, signal?: AbortSignal): Promise<ConversationActionReview> =>

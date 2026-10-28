@@ -30,6 +30,7 @@ import urllib.request
 import uuid
 import webbrowser
 from pathlib import Path
+from urllib.parse import quote
 from typing import TYPE_CHECKING, Callable
 
 from row_bot.app_port import (
@@ -1077,6 +1078,40 @@ def _client_url_for_port(port: int) -> str:
     return _url_for_port(port) + "/app-v2/"
 
 
+# The launch secret of each server this launcher started, by port. Only these servers
+# give the launcher a sign-in for the windows and browsers it opens.
+_LAUNCH_SECRETS: dict[int, str] = {}
+
+
+def _signed_in_client_url(port: int) -> str:
+    """The client's address with a one-time sign-in, for a window or browser the launcher opens.
+
+    On this computer only a signed-in window or browser may change anything, so a program
+    Row-Bot starts can't act as the person. Without a sign-in (another launcher's server,
+    or the server not answering) the page opens view-only and says how to sign in.
+    """
+    url = _client_url_for_port(port)
+    secret = _LAUNCH_SECRETS.get(int(port), "")
+    if not secret:
+        return url
+    request = urllib.request.Request(
+        f"{_url_for_port(port)}/api/launcher/sign-in",
+        data=b"",
+        method="POST",
+        headers={"Authorization": f"Bearer {secret}"},
+    )
+    # Loopback with the launch secret: never through a configured proxy.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(request, timeout=5) as response:
+            answer = json.loads(response.read(4096).decode("utf-8"))
+    except (OSError, ValueError, urllib.error.URLError):
+        logger.warning("Could not get a sign-in for the window; it opens view-only")
+        return url
+    token = str(answer.get("invitation") or "") if isinstance(answer, dict) else ""
+    return url + "#sign-in=" + quote(token, safe="") if token else url
+
+
 def _warn_deprecated_client_flags(args: object) -> None:
     """``--legacy-ui`` and ``--client-v2`` only keep old scripts working."""
     for flag, name in (("--legacy-ui", "legacy_ui"), ("--client-v2", "client_v2")):
@@ -1362,6 +1397,9 @@ class _RowBotProcess:
                 if str(key) and str(value)
             }
         )
+        secret = self._launch_environment.get(LAUNCH_SECRET_ENV, "")
+        if secret:
+            _LAUNCH_SECRETS[int(self.port)] = secret
 
     def start(self, port: int | None = None, host: str | None = None) -> None:
         """Launch ``python app.py`` as a headless server.
@@ -1376,6 +1414,9 @@ class _RowBotProcess:
             self.port = port
         if host is not None:
             self.host = _resolve_launch_host(host)
+        secret = self._launch_environment.get(LAUNCH_SECRET_ENV, "")
+        if secret:
+            _LAUNCH_SECRETS[int(self.port)] = secret
 
         # The same Python that's running this launcher, as Row-Bot Server.exe where an install has it (B355).
         from row_bot.runtime_paths import server_python
@@ -2756,7 +2797,7 @@ def _ask_window_mode() -> str:
 
 def _open_in_browser(port: int = _PORT) -> None:
     """Open the Row-Bot UI in the default system browser."""
-    webbrowser.open(_client_url_for_port(port))
+    webbrowser.open(_signed_in_client_url(port))
     logger.info("Opened %s in system browser on port %s", APP_DISPLAY_NAME, port)
 
 
@@ -2774,14 +2815,14 @@ def _open_window(
         logger.warning(
             "No display server detected; opening browser instead of native window"
         )
-        webbrowser.open(_client_url_for_port(port))
+        webbrowser.open(_signed_in_client_url(port))
         return None
     proc = None
     try:
         args = [
             *_gui_python(),
             "-",
-            _client_url_for_port(port),
+            _signed_in_client_url(port),
             APP_DISPLAY_NAME,
             "1280",
             "900",
@@ -2816,7 +2857,7 @@ def _open_window(
             logger.warning(
                 "Native window exited during startup; falling back to browser"
             )
-            webbrowser.open(_client_url_for_port(port))
+            webbrowser.open(_signed_in_client_url(port))
             return None
         logger.info("Native window opened (PID %s, port %s)", proc.pid, port)
         return proc
@@ -2829,7 +2870,7 @@ def _open_window(
         logger.warning(
             "Could not open native window: %s — falling back to browser", exc
         )
-        webbrowser.open(_client_url_for_port(port))
+        webbrowser.open(_signed_in_client_url(port))
         return None
 
 
@@ -3061,7 +3102,7 @@ class RowBotTray:
             # External server died — just open browser and hope
             _launch_event("server_ready_timeout", port=self._port, duration_ms=0.0)
             webbrowser.open(
-                _client_url_for_port(self._port)
+                _signed_in_client_url(self._port)
             )
             return
 
@@ -3349,7 +3390,7 @@ class RowBotTray:
         else:
             logger.warning("Server did not start in time — opening browser as fallback")
             webbrowser.open(
-                _client_url_for_port(self._port)
+                _signed_in_client_url(self._port)
             )
 
         logger.info("%s tray startup complete", APP_DISPLAY_NAME)

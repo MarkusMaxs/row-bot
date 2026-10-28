@@ -71,6 +71,12 @@ _LOCAL_APPLICATION_CAPABILITIES = (
     "computer:interactive",
 )
 _PRESENTATION_FEATURES = frozenset({"panels", "responsive", "pwa", "compact"})
+
+
+def _learning_preview() -> bool:
+    from row_bot import learning
+
+    return learning.preview_enabled()
 # Settings actions that act on this computer's screen (Computer Use's test
 # opens Calculator; the others open macOS System Settings): desktop app only.
 _SCREEN_SETTINGS_ACTIONS = frozenset({
@@ -367,6 +373,31 @@ _STATUS.update(
         "insight_proposal_finished": 409,
         "insight_proposal_draft_only": 409,
         "insight_receipt_unavailable": 404,
+        "learning_unavailable": 404,
+        "invalid_learning_command": 422,
+        "learning_revision_conflict": 409,
+        "learning_off": 409,
+        "learning_paused": 409,
+        "learning_chat_not_used": 409,
+        "learning_data_missing": 409,
+        "learning_data_busy": 409,
+        "learning_settings_unavailable": 409,
+        "learning_save_unconfirmed": 503,
+        "learning_receipt_unavailable": 404,
+        "learning_nothing_to_train": 409,
+        "learning_training_changed": 409,
+        "learning_download_unavailable": 409,
+        "learning_not_enough_disk": 409,
+        "learning_download_busy": 409,
+        "learning_download_changed": 409,
+        "learning_version_changed": 409,
+        "learning_version_busy": 409,
+        "learning_compare_unavailable": 409,
+        "learning_export_unavailable": 409,
+        "learning_change_changed": 409,
+        "learning_change_refused": 409,
+        "learning_change_busy": 409,
+        "learning_method_changed": 409,
         "invalid_plugin_lifecycle_command": 422,
         "plugin_marketplace_unavailable": 409,
         "plugin_marketplace_entry_unavailable": 404,
@@ -487,13 +518,6 @@ _STATUS.update(
 )
 _STATUS.update(
     {
-        "invalid_task_graph": 422,
-        "task_graph_invalid_reference": 422,
-        "task_graph_cycle": 422,
-        "task_graph_missing_subtask": 422,
-        "task_graph_too_large": 413,
-        "task_graph_unavailable": 409,
-        "task_graph_read_unconfirmed": 503,
     }
 )
 _STATUS.update(
@@ -531,9 +555,7 @@ _STATUS.update(
         "task_run_metadata_unavailable": 503,
         "task_policy_unavailable": 409,
         "task_policy_revision_conflict": 409,
-        "task_approval_unconfirmed": 409,
         "task_run_unconfirmed": 409,
-        "invalid_task_approval": 422,
     }
 )
 _STATUS["invalid_catalog_query"] = 422
@@ -1063,6 +1085,8 @@ _STATUS.update(dict.fromkeys(('integration_link_unsupported', 'invalid_upload', 
 _STATUS['upload_too_large'] = 413
 # An answer that doesn't fit Row-Bot's question, or answers sent for an approval (N4).
 _STATUS['question_answer_invalid'] = 422
+_STATUS['approval_edit_invalid'] = 422
+_STATUS['scheduled_post_unavailable'] = 404
 _STATUS['app_not_connected'] = 409  # A workflow template whose app is not connected yet.
 # Pages (N5): gone, not valid, too big, written to too often, or nothing to send.
 _STATUS.update({"chat_page_unavailable": 404, "chat_page_invalid": 422, "chat_page_too_large": 413,
@@ -1225,7 +1249,7 @@ def cached_choices() -> dict:
     """Read existing caches/catalogues; opening a client never refreshes a provider."""
     from row_bot.providers.model_catalog_cache import read_model_catalog_cache
     from row_bot.providers.client_status import picker_choices
-    from row_bot.providers.model_visibility import annotate
+    from row_bot.providers.model_visibility import annotate, withheld
     from row_bot.tools import registry as tool_registry
     from row_bot.plugins import registry as plugin_registry, state as plugin_state
     from row_bot.mcp_client.runtime import get_catalog_snapshot
@@ -1242,6 +1266,8 @@ def cached_choices() -> dict:
                 "available": option["available"],
                 "unavailable_reason": option["unavailable_reason"],
                 "billing": option["billing"],
+                # Learning (preview, D11): a personal-model version, tagged Personal in the picker.
+                "personal": withheld(option["provider_id"], option["selection_ref"]),
             }
             for option in picker_choices("chat")
         ),
@@ -1505,8 +1531,10 @@ def create_router(
                     for item in discovery["capabilities"]
                 ],
             }
+        # The native bridge is a person's window: only a signed-in one gets its token.
+        native_window = local_owner and context.may_act
         native_attestation = (
-            security.issue_native_attestation(current) if local_owner else None
+            security.issue_native_attestation(current) if native_window else None
         )
         return await respond(
             request,
@@ -1520,10 +1548,13 @@ def create_router(
                 "client_group_id": current.group_id,
                 "csrf_token": current.csrf,
                 "authentication_kind": context.authentication_kind,
+                "may_act": context.may_act,
                 "client_compatibility": compatibility,
                 "application_capabilities": [
                     *_APPLICATION_CAPABILITIES,
                     *(_LOCAL_APPLICATION_CAPABILITIES if local_owner else ()),
+                    # Learning (preview) surfaces exist only in a build with its flag (O34).
+                    *(("learning:preview",) if _learning_preview() else ()),
                 ],
                 "presentation_capabilities": sorted(
                     set(body.presentation_features) & _PRESENTATION_FEATURES
@@ -1538,9 +1569,9 @@ def create_router(
                 # A new schedule keeps its times in this zone unless another is chosen (N9).
                 "server_timezone": _schedule_zone_name(),
                 "native_adapter": {
-                    "available": local_owner,
+                    "available": native_window,
                     "proof_required": True,
-                    "instance_id": security.instance_id if local_owner else None,
+                    "instance_id": security.instance_id if native_window else None,
                     "attestation": native_attestation,
                 },
                 "limits": dto.Limits().model_dump(),
@@ -2177,6 +2208,8 @@ def create_router(
     async def transcribe_dictation(
         conversation_id: str, lease_id: str, request: Request
     ) -> JSONResponse:
+        from row_bot.voice.browser_local import MAX_INPUT_BYTES
+
         current = await session(request, lane="mutation")
         handle = dictation_handle(conversation_id, lease_id, dictation_headers(request))
         utterance = voice_header(request, "x-dictation-utterance", 36)
@@ -2223,7 +2256,7 @@ def create_router(
                         break
                     transport.check_receive(operation)
                     security.session(await _context(request), current.id, current.csrf)
-                    if len(data) + len(chunk) > 8388608:
+                    if len(data) + len(chunk) > MAX_INPUT_BYTES:
                         raise ProtocolError("payload_too_large", 413)
                     data.extend(chunk)
             await dictation_owner(request, current, conversation_id)
@@ -3088,6 +3121,17 @@ def create_router(
         await call(service._metadata, conversation_id)
         return await respond(request, dto.ClientQueueView, asdict(result))
 
+    @router.get("/conversations/{conversation_id}/links")
+    async def conversation_links(conversation_id: str, request: Request) -> JSONResponse:
+        """The conversations this one started or proposed, with their state (5.3.1 C)."""
+        await session(request)
+        await call(service._metadata, conversation_id)
+        from row_bot.linked_conversations import links
+
+        cards = await call(links, conversation_id)
+        items = [{key: value for key, value in card.items() if key != "kind"} for card in cards]
+        return await respond(request, dto.ConversationLinkPage, {"schema_version": 1, "items": items})
+
     @router.get("/conversations/{conversation_id}/steering")
     async def steering_view(
         conversation_id: str,
@@ -3161,7 +3205,6 @@ def create_router(
                 "conversation.stop",
                 "agent.stop",
                 "task.stop",
-                "task.approval",
                 "approval.resolve",
                 "workspace.process.stop",
                 "workspace.process.recover",
@@ -3185,12 +3228,10 @@ def create_router(
                 "task.delete",
                 "task.duplicate",
                 "task.delivery.update",
-                "task.graph.update",
                 "task.settings.update",
                 "task.webhook.rotate",
                 "task.run",
                 "task.stop",
-                "task.approval",
             }
         ):
             raise ProtocolError("invalid_command", 422)
@@ -3211,25 +3252,6 @@ def create_router(
         except ValueError:
             raise ProtocolError("invalid_command", 422) from None
         wire = body.model_dump(mode="json")
-        if body.type == "task.approval":
-            # The presentation nonce binds this session to the exact reviewed
-            # approval; command storage keeps only the semantic decision.
-            from row_bot.application.task_run_commands import approval_digest
-
-            security.consume_nonce(
-                current,
-                body.payload["approval_id"],
-                body.payload["approval_revision"],
-                approval_digest(
-                    body.payload["task_id"],
-                    body.payload["run_id"],
-                    body.payload["approval_id"],
-                    body.payload["approval_revision"],
-                ),
-                body.payload["nonce"],
-                str(body.command_id),
-            )
-            wire["payload"] = {k: v for k, v in wire["payload"].items() if k != "nonce"}
         if body.type == "artifact.share":
             security.consume_nonce(
                 current,
@@ -3372,22 +3394,6 @@ def create_router(
                     body.payload["nonce"],
                     str(body.command_id),
                 )
-
-        def validate_task_approval() -> None:
-            validate_access()
-            security.consume_nonce(
-                current,
-                body.payload["approval_id"],
-                body.payload["approval_revision"],
-                approval_digest(
-                    body.payload["task_id"],
-                    body.payload["run_id"],
-                    body.payload["approval_id"],
-                    body.payload["approval_revision"],
-                ),
-                body.payload["nonce"],
-                str(body.command_id),
-            )
 
         def validate_process_approval(review: dict) -> None:
             validate_access()
@@ -3888,11 +3894,6 @@ def create_router(
                 else "remote_client"
             ),
             **(
-                {"validate_approval": validate_task_approval}
-                if body.type == "task.approval"
-                else {}
-            ),
-            **(
                 {"validate_approval": validate_process_approval}
                 if body.type == "workspace.process.start"
                 else {}
@@ -3955,20 +3956,6 @@ def create_router(
         except TaskControlError as exc:
             raise ProtocolError(exc.code, _STATUS.get(exc.code, 422)) from exc
         return await respond(request, dto.TaskEditorSnapshot, asdict(result))
-
-    @router.get("/tasks/{task_id}/graph")
-    async def task_graph(task_id: str, request: Request) -> JSONResponse:
-        await session(request)
-        from row_bot.application.task_graph_controls import (
-            TaskGraphError,
-            get_task_graph,
-        )
-
-        try:
-            result = await call(get_task_graph, task_id)
-        except TaskGraphError as exc:
-            raise ProtocolError(exc.code, _STATUS.get(exc.code, 422)) from exc
-        return await respond(request, dto.TaskGraphSnapshot, asdict(result))
 
     async def settings_query(
         request: Request, task_id: str, *, review: bool = False
@@ -4084,39 +4071,6 @@ def create_router(
         return await task_query(
             request, dto.TaskRunSummary, get_task_run, task_id, run_id
         )
-
-    @router.get("/tasks/{task_id}/runs/{run_id}/approvals")
-    async def task_approvals(
-        task_id: str,
-        run_id: str,
-        request: Request,
-        cursor: str | None = None,
-        limit: int = 8,
-    ) -> JSONResponse:
-        current = await session(request)
-        from row_bot.application.task_execution import (
-            TaskExecutionError,
-            list_task_approvals,
-        )
-        from row_bot.application.task_run_commands import approval_digest
-
-        try:
-            result = asdict(
-                await call(
-                    list_task_approvals, task_id, run_id, cursor=cursor, limit=limit
-                )
-            )
-        except TaskExecutionError as exc:
-            raise ProtocolError(exc.code, _STATUS.get(exc.code, 409)) from exc
-        for item in result["items"]:
-            if item["response_available"]:
-                item["nonce"] = security.approval_nonce(
-                    current,
-                    item["id"],
-                    item["revision"],
-                    approval_digest(task_id, run_id, item["id"], item["revision"]),
-                )
-        return await respond(request, dto.TaskApprovalPage, result)
 
     @router.post("/resources/folder-selection")
     async def select_folder(request: Request) -> JSONResponse:
@@ -5280,6 +5234,24 @@ def create_router(
 
         result = await call(read_pending_approvals)
         return await respond(request, dto.PendingApprovalPage, result)
+
+    @router.get("/monitor/scheduled-posts")
+    async def monitor_scheduled_posts(request: Request) -> JSONResponse:
+        # Posts approved for a time slot, waiting for it (G3): Home's Review lists them with Cancel.
+        await session(request)
+        from row_bot.tools import x_posting
+
+        result = await call(x_posting.scheduled_posts)
+        return await respond(request, dto.ScheduledPostPage, {"schema_version": 1, "items": result})
+
+    @router.delete("/monitor/scheduled-posts/{post_id}")
+    async def monitor_cancel_scheduled_post(post_id: str, request: Request) -> JSONResponse:
+        await session(request, lane="control")
+        from row_bot.tools import x_posting
+
+        if not await call(x_posting.cancel_scheduled, post_id):
+            raise ProtocolError("scheduled_post_unavailable", 404)
+        return await respond(request, dto.ScheduledPostCancelled, {"cancelled": True})
 
     @router.get("/monitor/logs")
     async def monitor_logs(request: Request, limit: int = 200) -> JSONResponse:
@@ -9604,6 +9576,125 @@ def create_router(
         )
         return await respond(request, dto.InsightReceipt, result)
 
+    # Learning (preview): every route answers learning_unavailable without the flag (O34).
+    @router.get("/learning")
+    async def learning_snapshot(request: Request) -> JSONResponse:
+        current = await session(request)
+        from row_bot.application.client_learning import read_learning
+
+        return await respond(
+            request,
+            dto.LearningSnapshot,
+            await call(read_learning, validate=dispatch_validation(request, current)),
+        )
+
+    @router.get("/learning/training")
+    async def learning_training(request: Request) -> JSONResponse:
+        # Polled by Monitor's row and the Personal model view while a run is live.
+        current = await session(request)
+        from row_bot.application.client_learning import read_learning_training
+
+        return await respond(
+            request,
+            dto.LearningTraining,
+            await call(read_learning_training, validate=dispatch_validation(request, current)),
+        )
+
+    @router.get("/learning/download")
+    async def learning_download(request: Request) -> JSONResponse:
+        # Polled by Monitor's row and the Personal model view while the download runs.
+        current = await session(request)
+        from row_bot.application.client_learning import read_learning_download
+
+        return await respond(
+            request,
+            dto.LearningDownload,
+            await call(read_learning_download, validate=dispatch_validation(request, current)),
+        )
+
+    @router.get("/learning/hardware")
+    async def learning_hardware(request: Request, refresh: bool = False) -> JSONResponse:
+        current = await session(request)
+        from row_bot.application.client_learning import read_learning_hardware
+
+        return await respond(
+            request,
+            dto.LearningHardware,
+            await call(
+                read_learning_hardware,
+                validate=dispatch_validation(request, current),
+                refresh=refresh,
+            ),
+        )
+
+    @router.get("/learning/conversations/{conversation_id}")
+    async def learning_conversation(conversation_id: str, request: Request) -> JSONResponse:
+        current = await session(request)
+        from row_bot.application.client_learning import read_learning_conversation
+
+        return await respond(
+            request,
+            dto.LearningConversation,
+            await call(
+                read_learning_conversation,
+                conversation_id,
+                validate=dispatch_validation(request, current),
+            ),
+        )
+
+    @router.get("/learning/lessons")
+    async def learning_lessons(request: Request) -> JSONResponse:
+        current = await session(request)
+        from row_bot.application.client_learning import read_learning_lessons
+
+        return await respond(
+            request,
+            dto.LearningLessonPage,
+            await call(read_learning_lessons, validate=dispatch_validation(request, current)),
+        )
+
+    @router.get("/learning/versions/{version}")
+    async def learning_version(version: int, request: Request) -> JSONResponse:
+        current = await session(request)
+        from row_bot.application.client_learning import read_learning_version
+
+        return await respond(
+            request,
+            dto.LearningVersionDetails,
+            await call(read_learning_version, version, validate=dispatch_validation(request, current)),
+        )
+
+    @router.get("/learning/commands/{command_id}")
+    async def learning_receipt(command_id: UUID, request: Request) -> JSONResponse:
+        current = await session(request)
+        from row_bot.application.client_learning import read_learning_receipt
+
+        result = await call(
+            read_learning_receipt,
+            str(command_id),
+            owner_id=current.id,
+            validate=dispatch_validation(request, current),
+        )
+        return await respond(request, dto.LearningReceipt, result)
+
+    @router.post("/learning/commands")
+    async def learning_command(request: Request) -> JSONResponse:
+        current = await session(request, lane="mutation")
+        body = await _body(request, dto.LearningCommand, 8192)
+        if str(body.client_session_id) != current.id:
+            raise ProtocolError("invalid_command", 422)
+        if request.headers.get("idempotency-key", "") != str(body.command_id):
+            raise ProtocolError("idempotency_mismatch", 409)
+        from row_bot.application.client_learning import execute_learning
+
+        result = await call(
+            execute_learning,
+            body.model_dump(mode="json"),
+            owner_id=current.id,
+            validate=dispatch_validation(request, current),
+        )
+        return await respond(request, dto.LearningReceipt, result)
+
     # Settings › Data (decision 21), from any signed-in device.
     _DATA_RECEIPTS: dict[str, dict] = {}
 
@@ -10614,7 +10705,10 @@ def create_router(
                 if notices_epoch is not None
                 else None
             )
-            heartbeat = security.clock()
+            heartbeat = started = security.clock()
+            # How it ended, for the log (#568): a dropped window left no trace before.
+            ended = "the window went away, or Row-Bot is stopping"
+            logger.debug("Event stream opened (session %s)", current.id[:8])
             try:
                 # Flush the accepted stream even when replay is empty; an idle
                 # connection need not wait for the periodic heartbeat.
@@ -10633,6 +10727,7 @@ def create_router(
                             + dto.StreamReset().model_dump_json()
                             + "\n\n"
                         )
+                        ended = "the window needs a fresh snapshot"
                         return
                     else:
                         for item in result["events"]:
@@ -10659,10 +10754,15 @@ def create_router(
                         yield ": heartbeat\n\n"
                         heartbeat = security.clock()
                     await asyncio.sleep(0.25)
-            except ProtocolError:
+                if not sub.streaming:
+                    ended = "the window unsubscribed"
+            except ProtocolError as error:
+                ended = f"refused ({error.code})"
                 return
             finally:
                 security.leave_stream(sub)
+                logger.debug("Event stream ended after %.0f s: %s (session %s)",
+                             security.clock() - started, ended, current.id[:8])
 
         return StreamingResponse(
             stream(), media_type="text/event-stream", headers=HEADERS
@@ -10680,7 +10780,9 @@ def create_router(
 
         async def stream() -> Any:
             sent: tuple[str, int] | None = None
-            heartbeat = security.clock()
+            heartbeat = started = security.clock()
+            ended = "the window went away, or Row-Bot is stopping"
+            logger.debug("Live stream opened (session %s)", current.id[:8])
             try:
                 yield ": connected\n\n"
                 while not await request.is_disconnected():
@@ -10694,10 +10796,13 @@ def create_router(
                         yield ": heartbeat\n\n"
                         heartbeat = security.clock()
                     await asyncio.sleep(0.25)
-            except ProtocolError:
+            except ProtocolError as error:
+                ended = f"refused ({error.code})"
                 return
             finally:
                 security.leave_live(current)
+                logger.debug("Live stream ended after %.0f s: %s (session %s)",
+                             security.clock() - started, ended, current.id[:8])
 
         return StreamingResponse(
             stream(), media_type="text/event-stream", headers=HEADERS

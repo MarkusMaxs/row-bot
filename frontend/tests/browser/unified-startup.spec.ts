@@ -24,6 +24,7 @@ import {
   stableConversationMarker,
   type FixtureWindow,
 } from './fixture';
+import { SIGNED_IN_STATE } from './signed-in';
 
 // Playwright routing globally disables the HTTP cache, even for a URL predicate.
 test.use({ nativeNetwork: true });
@@ -44,6 +45,7 @@ test('actual HTTP startup has five cold and ten warm usable conversation samples
   let conversation = 'p1-browser-a';
   for (let index = 0; index < 5; index++) {
     const isolated = await browser.newContext({
+      storageState: SIGNED_IN_STATE,
       baseURL,
       viewport: { width: 1440, height: 900 },
       serviceWorkers: 'block',
@@ -398,6 +400,7 @@ test('twenty real reconnects per latency condition restore confirmed snapshots a
     try {
       for (let index = 0; index < 20; index++) {
         const observerContext = await browser.newContext({
+          storageState: SIGNED_IN_STATE,
           baseURL: origin,
           viewport: page.viewportSize(),
           serviceWorkers: 'block',
@@ -691,6 +694,7 @@ test('cold and warm usable shell samples', async ({
   const cold: number[] = [];
   for (let sample = 0; sample < 5; sample += 1) {
     const context = await browser.newContext({
+      storageState: SIGNED_IN_STATE,
       baseURL,
       viewport: { width: 1440, height: 900 },
       locale: 'en-GB',
