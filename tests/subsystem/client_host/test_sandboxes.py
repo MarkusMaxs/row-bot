@@ -209,6 +209,24 @@ def test_a_real_sandbox_starts_signs_a_browser_in_and_stops(home):
     assert sandboxes.get(sandbox.sandbox_id).status == "stopped"
 
 
+def test_a_sandbox_a_crash_left_running_is_ended_before_it_starts_again(fake_process, home, monkeypatch):
+    """Never two Row-Bots on one sandbox's data folder: one a crash of this Row-Bot left running is ended."""
+    from row_bot import background_processes
+
+    sandbox = sandboxes.create("Demo shop", "shop")
+    started = sandboxes.start(sandbox.sandbox_id)
+    assert (started.pid, started.pid_birth) != (0, 0.0), "its process is recorded"
+    sandboxes._PROCESSES.clear()  # This Row-Bot crashed: it no longer holds the process.
+    ended: list[object] = []
+    monkeypatch.setattr("row_bot.process_cancellation.kill_process_tree", lambda process: ended.append(process))
+    monkeypatch.setattr(background_processes, "_same_process",
+                        lambda pid, birth: f"pid {pid}" if (pid, birth) == (started.pid, started.pid_birth) else None)
+
+    assert sandboxes.end_left_overs() == 1 and ended == [f"pid {started.pid}"]
+    assert sandboxes.get(sandbox.sandbox_id).pid == 0
+    assert sandboxes.end_left_overs() == 0, "nothing left"
+
+
 def test_a_sandbox_says_when_it_has_no_model_yet(home):
     import json
 

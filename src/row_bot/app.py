@@ -1065,6 +1065,12 @@ async def _run_startup_sequence():
     except Exception as exc:
         logger.warning("Could not schedule Monitor's checks: %s", exc)
     try:
+        from row_bot import sandboxes
+        with _startup_phase("sandbox_left_overs"):
+            sandboxes.end_left_overs()
+    except Exception as exc:
+        logger.warning("Could not check for sandboxes left running: %s", exc)
+    try:
         from row_bot import waits
         from row_bot.tasks import _get_scheduler
         with _startup_phase("waits_scheduler"):
