@@ -33,6 +33,8 @@ import {
 } from '../../ui/primitives';
 import { shortTime } from '../shell/conversation-groups';
 import { editLive } from '../shell/video-edits';
+import { LivePreview } from './LivePreview';
+import { acquire, release } from './media-urls';
 import { VideoBrandEditor } from './VideoBrandEditor';
 import { VideoTimeline } from './VideoTimeline';
 import {
@@ -191,18 +193,15 @@ export default function VideoPanel({
       setUrl('');
       return;
     }
-    const abort = new AbortController();
-    let owned = '';
-    controller.download(reference, abort.signal).then(
-      (blob) => {
-        owned = URL.createObjectURL(blob);
-        setUrl(owned);
-      },
-      () => setUrl(''),
-    );
+    let live = true;
+    void acquire(reference, (signal) =>
+      controller.download(reference, signal),
+    ).then((next) => {
+      if (live) setUrl(next);
+    });
     return () => {
-      abort.abort();
-      if (owned) URL.revokeObjectURL(owned);
+      live = false;
+      release(reference);
     };
   }, [controller, reference]);
 
@@ -415,7 +414,13 @@ export default function VideoPanel({
       </header>
 
       <div className="video-player" data-status={view.status}>
-        {url ? (
+        {dirty ? (
+          <LivePreview
+            scenes={edited.scenes}
+            shown={scenes}
+            captions={edited.captions}
+          />
+        ) : url ? (
           <video
             ref={player}
             src={url}
@@ -445,7 +450,7 @@ export default function VideoPanel({
             )}
           </div>
         )}
-        {url && (
+        {url && !dirty && (
           <div
             className="video-player-tools"
             role="toolbar"

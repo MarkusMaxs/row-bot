@@ -78,6 +78,11 @@ test('a video Row-Bot made opens beside the chat as scenes, and an edit there is
   await panel.getByRole('button', { name: 'Move scene 2 up' }).click();
   const save = panel.getByRole('group', { name: 'Unsaved changes' });
   await expect(save).toBeVisible();
+  // The player previews the edits live, before anything is made.
+  const preview = panel.getByLabel('Preview of your edits');
+  await expect(preview).toContainText('Scene 1 of 2');
+  await expect(preview.getByLabel('Scene 1')).toHaveAttribute('src', /^blob:/);
+  await views(page, info, 'video-panel-preview', preview);
   await views(page, info, 'video-panel-edited', save);
 
   await page.setViewportSize(PHONE);

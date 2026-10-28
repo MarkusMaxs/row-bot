@@ -5149,6 +5149,9 @@ class VideoScene(WireModel):
     # Where it starts on this version's video and how long it lasts there (None until it's made).
     at: float | None = Field(ge=0)
     length: float | None = Field(ge=0)
+    # What the live preview plays: its video and its voice line, by reference (None when there's none to play).
+    source_ref: str | None = Field(default=None, max_length=512)
+    voice_ref: str | None = Field(default=None, max_length=512)
 
 
 class VideoSceneWrite(WireModel):
