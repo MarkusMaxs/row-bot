@@ -243,6 +243,8 @@ def _save_config(metadata: dict | None = None):
 
 _skills_cache: dict[str, Skill] = {}  # name → Skill
 
+_last_user_skills_signature: tuple | None = None  # mtime signature of USER_SKILLS_DIR
+
 
 def _discover_skills() -> dict[str, Skill]:
     """Scan bundled + tool-guide + user skill folders.  User skills override bundled."""
@@ -291,6 +293,37 @@ def _ordered_unique(names: Iterable[str]) -> list[str]:
             seen.add(name)
             result.append(name)
     return result
+
+
+def _user_skills_signature():
+    """Cheap (mtime) signature of the user-skill folders, so external skills
+    dropped under USER_SKILLS_DIR are picked up without a container restart."""
+    if not USER_SKILLS_DIR.is_dir():
+        return ()
+    entries = []
+    for child in sorted(USER_SKILLS_DIR.iterdir()):
+        md = child / "SKILL.md" if child.is_dir() else None
+        try:
+            st = md.stat() if (md and md.exists()) else None
+            entries.append((child.name, st.st_mtime_ns if st else 0))
+        except OSError:
+            entries.append((child.name, 0))
+    return tuple(entries)
+
+
+@_serialized
+def maybe_reload_skills() -> bool:
+    """Re-scan skills only when USER_SKILLS_DIR changed since the last scan.
+
+    Lets externally created/edited skills appear without a container restart.
+    No-op (False) when nothing changed; runs load_skills() once when changed."""
+    global _last_user_skills_signature
+    sig = _user_skills_signature()
+    if sig == _last_user_skills_signature:
+        return False
+    load_skills()
+    _last_user_skills_signature = _user_skills_signature()
+    return True
 
 
 @_serialized
@@ -566,6 +599,12 @@ def get_skills_prompt(
     # they cannot be toggled off via skill overrides. A tool-linked skill that is off by
     # default is a workflow loaded on request instead (see get_on_demand_tool_skills).
     guides = active_tool_guides(active_tool_names)
+
+    # Pick up externally created/edited user skills without a restart.
+    try:
+        maybe_reload_skills()
+    except Exception:
+        pass
 
     if skill_names is not None:
         manual = [_skills_cache[n] for n in skill_names
