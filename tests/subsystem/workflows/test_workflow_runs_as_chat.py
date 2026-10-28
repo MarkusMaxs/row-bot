@@ -311,8 +311,8 @@ def test_each_delivery_says_first_what_the_run_did(workflows, platform, delivere
     assert latest(workflows, task["id"])["status_message"] == "Delivered to Telegram"
 
 
-def test_only_when_it_needs_me_sends_a_run_that_didnt_finish_and_nothing_else(workflows, platform, delivered,
-                                                                              monkeypatch):  # noqa: F811
+def test_only_when_it_needs_me_sends_a_run_that_didnt_finish_and_nothing_else(
+        workflows, platform, delivered, monkeypatch):  # noqa: F811
     from row_bot import workflow_turns
     monkeypatch.setattr(workflow_turns, "RETRY_WAITS", ())
     quiet = create(workflows, "Read what's new.")
@@ -343,9 +343,11 @@ def test_a_daily_digest_sends_one_line_per_run_once_a_day_from_six(workflows, pl
     assert workflows.send_due_digests(evening) == 1
     assert workflows.send_due_digests(evening + timedelta(hours=2)) == 0, "once a day"
 
+    def stamp(moment: datetime) -> str:
+        return f"{moment:%H:%M}" if moment.date() == evening.date() else f"{moment:%a %H:%M}"
+
     [digest] = delivered
-    when = lambda run: datetime.fromisoformat(run["finished_at"]).astimezone()  # noqa: E731
-    stamp = (lambda moment: f"{moment:%H:%M}" if moment.date() == evening.date() else f"{moment:%a %H:%M}")
+    read = stamp(datetime.fromisoformat(first["finished_at"]).astimezone())
     assert first["status"] == "completed"
-    assert digest == (f"Daily digest · 2 runs\n{stamp(when(first))} · Finished · nothing was posted or sent\n"
+    assert digest == (f"Daily digest · 2 runs\n{read} · Finished · nothing was posted or sent\n"
                       f"{stamp(finished)} · Sent · Posted on X as @row_bot_ai: {POST_LINK}")
