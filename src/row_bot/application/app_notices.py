@@ -104,7 +104,10 @@ class NoticeJournal:
             self._notices.append(notice)
             if startup:
                 self._startup.append(message or title)
-            return notice
+        # A window with no conversation stream open (Home, a new chat) reads it at once, not at its
+        # next half-minute read. A repeat folded above is not news: it keeps its id.
+        _publish_live("notices")
+        return notice
 
     def startup_warning(self, message: str, *, source: str = "startup") -> Notice:
         notice = self.post(title="Start-up warning", message=message, level="warning", source=source,

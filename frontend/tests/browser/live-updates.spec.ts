@@ -23,6 +23,10 @@ const DESKTOP = { width: 1440, height: 900 };
 // The run's conversation, titled with its icon and when it ran.
 const RUN = /^\W*Morning digest/;
 const ASK = "Send this morning's digest to the team?";
+// The run's turn reaches its approval in the background, which a busy runner
+// can take several seconds to do. Pushed, the approval shows as soon as it is
+// raised; read by timer it would wait for the minute's fallback read.
+const RAISED_MS = 10_000;
 
 test.use({ serviceWorkers: 'allow', nativeNetwork: true });
 test.beforeEach(async ({ context, page }) => {
@@ -96,7 +100,7 @@ test('a background workflow run reaches the sidebar and Home at once (B407)', as
   const inSidebar = await startRun(page, row);
   // Its approval waits in Home's Needs you, read the same way.
   const needs = page.getByRole('list', { name: 'Needs you' });
-  await expect(needs.getByText(ASK)).toBeVisible({ timeout: 3000 });
+  await expect(needs.getByText(ASK)).toBeVisible({ timeout: RAISED_MS });
   // Live updates, not a timer: within about a second.
   expect(inSidebar.fromStartMs).toBeLessThan(1500);
   await writeEvidence(info, 'background-run-timing', inSidebar);
@@ -121,7 +125,7 @@ test('Monitor counts a background run and the sidebar says its approval waits (B
   const inMonitor = await startRun(page, lane);
   await expect(
     sidebar(page).getByText('1 approval is waiting', { exact: true }),
-  ).toBeVisible({ timeout: 3000 });
+  ).toBeVisible({ timeout: RAISED_MS });
   expect(inMonitor.fromStartMs).toBeLessThan(1500);
   await writeEvidence(info, 'background-run-monitor-timing', inMonitor);
   await views(page, info, 'background-run-monitor');
