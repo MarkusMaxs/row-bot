@@ -7,6 +7,7 @@ import type {
 import { useRuntime } from '../../runtime';
 import { useShellSettled } from '../../shell-settled';
 import ContextGoal from './ContextGoal';
+import { ContextLive } from './ContextLive';
 import { clientError } from '../../api/errors';
 import {
   Button,
@@ -598,6 +599,11 @@ export default function ConversationContextRail({
             }}
           />
         </div>
+
+        {/* What it waits for, what runs for it, its workflow and linked
+            conversations; after the goal, which always shows, so none of these
+            takes the first section's heading row. */}
+        <ContextLive conversationId={conversationId} />
 
         {/* Kept mounted while empty so delegated work can reveal it; live
             work (or a child's own agent) moves it to the top by order,
