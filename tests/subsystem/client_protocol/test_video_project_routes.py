@@ -6,6 +6,7 @@ the voice and the edit job are fakes.
 from __future__ import annotations
 
 import threading
+import time
 
 import pytest
 
@@ -58,10 +59,11 @@ def _made(client, headers, project_id):
     """The project once its video is made (waited for in-process, so the API's rate limit isn't spent)."""
     from row_bot import video_projects
 
-    for _ in range(500):
+    deadline = time.monotonic() + 30  # Generous: the whole suite may be running alongside.
+    while time.monotonic() < deadline:
         if video_projects.view(video_projects.get(project_id))["status"] not in {"voicing", "rendering"}:
             return client.get(f"/api/v1/video-projects/{project_id}", headers=headers).json()
-        threading.Event().wait(0.01)
+        threading.Event().wait(0.02)
     raise AssertionError("the video was never made")
 
 
