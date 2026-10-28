@@ -1036,6 +1036,8 @@ _STATUS.update(
         "video_project_needs_ffmpeg": 409,
         "video_project_not_made": 409,
         "video_brand_invalid": 422,
+        "row_bot_sandbox_unavailable": 404,
+        "row_bot_sandbox_refused": 409,
         "sent_file_unavailable": 404,
         "sent_file_expired": 410,
         "sent_files_gone": 409,
@@ -1162,6 +1164,12 @@ class ProtocolRoute(APIRoute):
                 return problem(exc)
 
         return safe_handler
+
+
+def _is_sandbox() -> bool:
+    from row_bot.sandboxes import is_sandbox
+
+    return is_sandbox()
 
 
 def problem(exc: Exception) -> JSONResponse:
@@ -1575,6 +1583,7 @@ def create_router(
                 ),
                 # A new schedule keeps its times in this zone unless another is chosen (N9).
                 "server_timezone": _schedule_zone_name(),
+                "sandbox": _is_sandbox(),
                 "native_adapter": {
                     "available": native_window,
                     "proof_required": True,
@@ -5521,6 +5530,75 @@ def create_router(
         body = await _body(request, dto.VideoProjectRestore, 4 * 1024)
         result = await _project_call(restore_video_project, _project_id(project_id), body.number)
         return await respond(request, dto.VideoProjectView, result)
+
+    # Sandboxes (5.3.1 B4): second Row-Bots on made-up data, started, stopped and opened from Settings › Data.
+    def _row_bot_sandbox_id(value: str) -> str:
+        from row_bot.sandboxes import SANDBOX_ID
+
+        if not SANDBOX_ID.fullmatch(str(value or "")):
+            raise ProtocolError("row_bot_sandbox_unavailable", 404)
+        return value
+
+    async def _sandbox_call(function: Any, *args: Any) -> Any:
+        from row_bot import sandboxes
+
+        if sandboxes.is_sandbox():
+            raise ProtocolError("row_bot_sandbox_refused", 409)
+        try:
+            return await call(function, *args)
+        except sandboxes.SandboxError as error:
+            gone = "no longer here" in str(error)
+            raise ProtocolError("row_bot_sandbox_unavailable" if gone else "row_bot_sandbox_refused",
+                                404 if gone else 409) from None
+
+    def _sandbox_page() -> dict[str, Any]:
+        from row_bot import sandboxes
+        from row_bot.sandbox_packs import PACKS
+
+        inside = sandboxes.is_sandbox()
+        return {"items": [] if inside else [sandboxes.view(item) for item in sandboxes.list_sandboxes()],
+                "packs": [{"pack": pack, "name": name} for pack, name in PACKS.items()], "available": not inside}
+
+    @router.get("/row-bot-sandboxes")
+    async def row_bot_sandboxes(request: Request) -> JSONResponse:
+        await session(request)
+        return await respond(request, dto.RowBotSandboxPage, await call(_sandbox_page))
+
+    @router.post("/row-bot-sandboxes")
+    async def create_row_bot_sandbox(request: Request) -> JSONResponse:
+        await session(request, lane="mutation")
+        from row_bot import sandboxes
+
+        body = await _body(request, dto.RowBotSandboxCreate, 4 * 1024)
+        created = await _sandbox_call(sandboxes.create, body.name, body.pack)
+        return await respond(request, dto.RowBotSandboxView, sandboxes.view(created))
+
+    @router.post("/row-bot-sandboxes/{sandbox_id}/link")
+    async def row_bot_sandbox_link(request: Request, sandbox_id: str) -> JSONResponse:
+        await session(request, lane="mutation")
+        from row_bot import sandboxes
+
+        url = await _sandbox_call(sandboxes.sign_in_url, _row_bot_sandbox_id(sandbox_id))
+        return await respond(request, dto.RowBotSandboxLink, {"url": url})
+
+    @router.post("/row-bot-sandboxes/{sandbox_id}/{action}")
+    async def act_on_row_bot_sandbox(request: Request, sandbox_id: str, action: str) -> JSONResponse:
+        await session(request, lane="mutation")
+        from row_bot import sandboxes
+
+        run = {"start": sandboxes.start, "stop": sandboxes.stop, "reset": sandboxes.reset}.get(action)
+        if run is None:
+            raise ProtocolError("row_bot_sandbox_unavailable", 404)
+        result = await _sandbox_call(run, _row_bot_sandbox_id(sandbox_id))
+        return await respond(request, dto.RowBotSandboxView, sandboxes.view(result))
+
+    @router.delete("/row-bot-sandboxes/{sandbox_id}")
+    async def delete_row_bot_sandbox(request: Request, sandbox_id: str) -> JSONResponse:
+        await session(request, lane="mutation")
+        from row_bot import sandboxes
+
+        await _sandbox_call(sandboxes.delete, _row_bot_sandbox_id(sandbox_id))
+        return await respond(request, dto.RowBotSandboxPage, await call(_sandbox_page))
 
     @router.get("/video-brand")
     async def video_brand_route(request: Request) -> JSONResponse:

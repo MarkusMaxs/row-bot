@@ -99,6 +99,7 @@ BROWSER_SMOKE_SPECS = (
     "pages",
     "library-media",
     "video-panel",
+    "sandboxes",
     "x-accounts",
     "outlook",
     "incognito",

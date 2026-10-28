@@ -5240,6 +5240,44 @@ class VideoProjectRestore(WireModel):
     number: int = Field(ge=1)
 
 
+RowBotSandboxId = Annotated[str, StringConstraints(pattern=r"^box-[0-9a-f]{8}$")]
+SandboxPack = Literal["empty", "shop", "charity", "paperwork", "code"]
+
+
+class RowBotSandboxView(WireModel):
+    """A sandbox (5.3.1 B4): a second Row-Bot on its own data folder, port and workspace, on made-up data."""
+    sandbox_id: RowBotSandboxId
+    name: str = Field(min_length=1, max_length=60)
+    pack: SandboxPack
+    pack_name: str = Field(max_length=80)
+    status: Literal["stopped", "starting", "running", "failed"]
+    # Its address while it runs (on this computer only).
+    url: str = Field(max_length=200)
+    problem: str = Field(max_length=300)
+
+
+class SandboxPackView(WireModel):
+    pack: SandboxPack
+    name: str = Field(max_length=80)
+
+
+class RowBotSandboxPage(WireModel):
+    items: list[RowBotSandboxView] = Field(max_length=5)
+    packs: list[SandboxPackView] = Field(max_length=8)
+    # False inside a sandbox: a sandbox starts no sandboxes of its own.
+    available: bool
+
+
+class RowBotSandboxCreate(WireModel):
+    name: str = Field(default="", max_length=60)
+    pack: SandboxPack = "empty"
+
+
+class RowBotSandboxLink(WireModel):
+    """The sandbox's address with a one-time sign-in, for the person's own window or browser."""
+    url: str = Field(max_length=600)
+
+
 SandboxJobId = Annotated[str, StringConstraints(pattern=r"^prep-[0-9a-f]{8}$")]
 
 
@@ -8666,6 +8704,8 @@ class HandshakeView(Choices):
     server_utc_offset_minutes: int | None = Field(default=None, ge=-1440, le=1440)
     # The computer's IANA zone: a new schedule keeps its times in it unless another is chosen (N9).
     server_timezone: str | None = Field(default=None, max_length=64)
+    # A sandbox (5.3.1 B4): a second Row-Bot on made-up data; the client shows its mark.
+    sandbox: bool = False
     native_adapter: NativeAdapter
     limits: Limits
 

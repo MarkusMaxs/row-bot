@@ -1768,6 +1768,11 @@ const CATALOG: Record<string, Entry> = {
     "One of the scenes' videos can't be used any more. Ask Row-Bot to swap it.",
     'none',
   ],
+  row_bot_sandbox_unavailable: ['That sandbox is no longer here.', 'none'],
+  row_bot_sandbox_refused: [
+    'The sandbox can’t do that now: start it first, or delete one (five at most).',
+    'none',
+  ],
   video_brand_invalid: [
     'The brand kit couldn’t be saved: pick its logo from your pictures again.',
     'none',

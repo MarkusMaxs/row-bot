@@ -975,6 +975,17 @@ export interface ClientTransport {
   ): Promise<Wire.VideoProjectView>;
   makeVideoProject?(projectId: string): Promise<Wire.VideoProjectView>;
   videoBrand?(signal?: AbortSignal): Promise<Wire.VideoBrand>;
+  /** Sandboxes (5.3.1 B4): second Row-Bots on made-up data. */
+  rowBotSandboxes?(signal?: AbortSignal): Promise<Wire.RowBotSandboxPage>;
+  createRowBotSandbox?(
+    body: Wire.RowBotSandboxCreate,
+  ): Promise<Wire.RowBotSandboxView>;
+  actOnRowBotSandbox?(
+    sandboxId: string,
+    action: 'start' | 'stop' | 'reset',
+  ): Promise<Wire.RowBotSandboxView>;
+  rowBotSandboxLink?(sandboxId: string): Promise<Wire.RowBotSandboxLink>;
+  deleteRowBotSandbox?(sandboxId: string): Promise<Wire.RowBotSandboxPage>;
   saveVideoBrand?(brand: Wire.VideoBrand): Promise<Wire.VideoBrand>;
   exportVideoProject?(
     projectId: string,
