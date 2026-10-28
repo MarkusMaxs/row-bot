@@ -50,10 +50,12 @@ def studio(tmp_path, monkeypatch):
 
 
 def _made(client, headers, project_id):
-    for _ in range(300):
-        view = client.get(f"/api/v1/video-projects/{project_id}", headers=headers).json()
-        if view["status"] not in {"voicing", "rendering"}:
-            return view
+    """The project once its video is made (waited for in-process, so the API's rate limit isn't spent)."""
+    from row_bot import video_projects
+
+    for _ in range(500):
+        if video_projects.view(video_projects.get(project_id))["status"] not in {"voicing", "rendering"}:
+            return client.get(f"/api/v1/video-projects/{project_id}", headers=headers).json()
         threading.Event().wait(0.01)
     raise AssertionError("the video was never made")
 
