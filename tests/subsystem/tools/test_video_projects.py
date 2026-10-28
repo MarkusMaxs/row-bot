@@ -179,6 +179,30 @@ def test_the_brand_kit_is_used_for_every_video_unless_a_version_turns_it_off(stu
     assert video_projects.view(video_projects.get(project.project_id))["brand"] is False
 
 
+def test_a_recordings_beats_become_its_scenes_live_as_it_is_work_sped_up_and_cuts_left_out(studio):
+    import time
+
+    from row_bot import recordings, video_projects
+    from row_bot.application.attachments import register_attachment
+
+    saved = register_attachment("conversation-a", "generated-recording.mp4", MP4)
+    record = recordings.Recording(recording_id="rec-0a0b0c0d", conversation_id="conversation-a", kind="browser",
+                                  started_at=time.time() - 30, max_seconds=300, status="saved",
+                                  media_ref=saved["attachment_ref"], mime_type="video/mp4",
+                                  beats=[[4.0, "work", "Waiting for the build"], [16.5, "live", ""],
+                                         [22.0, "cut", ""], [25.0, "live", ""]])
+    recordings._ensure_loaded()
+    recordings._RECORDS[record.recording_id] = record
+
+    scenes = video_projects.scenes_from_beats("rec-0a0b0c0d", "conversation-a")
+    assert [(scene["start"], scene["end"], scene["speed"]) for scene in scenes] == [
+        (0.0, 4.0, 1.0), (4.0, 16.5, 4.0), (16.5, 22.0, 1.0), (25.0, None, 1.0)]
+    project = video_projects.create("conversation-a", "Sign-up walkthrough", scenes)
+    assert [scene.source for scene in project.latest.scenes] == ["rec-0a0b0c0d"] * 4
+    with pytest.raises(video_projects.ProjectError, match="isn't a recording in this chat"):
+        video_projects.scenes_from_beats("rec-0a0b0c0d", "conversation-b")
+
+
 def test_scenes_that_cannot_be_used_are_refused_plainly(studio):
     from row_bot import video_projects
 
