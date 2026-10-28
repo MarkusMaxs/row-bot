@@ -332,6 +332,14 @@ export class HttpTransport implements ClientTransport {
   page(pageId: string, signal?: AbortSignal) {
     return wire.getPage(this.base, this.session(), pageId, signal);
   }
+  conversationLinks(conversationId: string, signal?: AbortSignal) {
+    return wire.getConversationLinks(
+      this.base,
+      this.session(),
+      conversationId,
+      signal,
+    );
+  }
   pageFrame(pageId: string, theme: wire.PageTheme, signal?: AbortSignal) {
     return wire.createPageFrame(
       this.base,

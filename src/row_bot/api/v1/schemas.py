@@ -7877,6 +7877,8 @@ class CommandReceipt(WireModel):
     approval_id: OpaqueId | None = None
     attachment_ref: Reference | None = None
     saved_name: str | None = Field(default=None, max_length=128)
+    # conversation.link.start (5.3.1 C): the conversation the person started from a proposal.
+    linked_conversation_id: OpaqueId | None = None
     binding_id: OpaqueId | None = None
     code: str | None = Field(default=None, max_length=80)
     current_revision: str | None = Field(default=None, min_length=1, max_length=128)

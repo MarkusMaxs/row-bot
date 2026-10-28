@@ -2725,6 +2725,11 @@ export class ClientController {
     this.query(() => this.transport.pages?.(conversationId, signal));
   page = (pageId: string, signal?: AbortSignal) =>
     this.query(() => this.transport.page?.(pageId, signal));
+  /** The conversations one started or proposed, with their state (5.3.1 C). */
+  conversationLinks = (conversationId: string, signal?: AbortSignal) =>
+    this.query(() =>
+      this.transport.conversationLinks?.(conversationId, signal),
+    );
   /** One frame address for a page, served once to its sandboxed frame. */
   pageFrame = (pageId: string, theme: PageTheme, signal?: AbortSignal) =>
     this.authenticatedResult((current) => {
