@@ -147,7 +147,9 @@ test('connect a hosted app with sign-in, then turn it off and remove it', async 
   ).toBeVisible();
   await checkLayout(page, info, 'apps-access');
   await steps.click(access.getByRole('button', { name: 'Allow', exact: true }));
-  await expect(page.getByText('Ready', { exact: true })).toBeVisible();
+  await expect(
+    page.getByTestId('conversation-pane').getByText('Ready', { exact: true }),
+  ).toBeVisible();
   await expect(page).toHaveURL(/settings\/apps\/item\?id=mcp%3A/);
   const counted = steps.report(info, 'hosted-connect');
   expect(counted.clicks).toBeLessThanOrEqual(4);
@@ -213,7 +215,9 @@ test('connect an API-key app with one pasted key', async ({
   await steps.click(
     steps.dialog().getByRole('button', { name: 'Allow', exact: true }),
   );
-  await expect(page.getByText('Ready', { exact: true })).toBeVisible();
+  await expect(
+    page.getByTestId('conversation-pane').getByText('Ready', { exact: true }),
+  ).toBeVisible();
   const counted = steps.report(info, 'api-key-connect');
   expect(counted.clicks).toBeLessThanOrEqual(5);
   await expect(page.getByText('Saved in your system keychain')).toBeVisible();
@@ -250,7 +254,9 @@ test('fix sign-in after stopping half way', async ({ page, context }, info) => {
     .getByRole('dialog')
     .getByRole('button', { name: 'Allow', exact: true })
     .click();
-  await expect(page.getByText('Ready', { exact: true })).toBeVisible();
+  await expect(
+    page.getByTestId('conversation-pane').getByText('Ready', { exact: true }),
+  ).toBeVisible();
 });
 
 test('add a skill turns it on and Try it only drafts', async ({
@@ -268,7 +274,9 @@ test('add a skill turns it on and Try it only drafts', async ({
     consent.getByText(/Adds the skill and turns it on/),
   ).toBeVisible();
   await steps.click(consent.getByRole('button', { name: 'Add', exact: true }));
-  await expect(page.getByText('Ready', { exact: true })).toBeVisible();
+  await expect(
+    page.getByTestId('conversation-pane').getByText('Ready', { exact: true }),
+  ).toBeVisible();
   const counted = steps.report(info, 'add-skill');
   expect(counted.clicks).toBeLessThanOrEqual(3);
   await expect(
@@ -514,7 +522,9 @@ test('GitHub is one card, and its token goes only to the keychain', async ({
     .getByRole('dialog')
     .getByRole('button', { name: 'Allow', exact: true })
     .click();
-  await expect(page.getByText('Ready', { exact: true })).toBeVisible();
+  await expect(
+    page.getByTestId('conversation-pane').getByText('Ready', { exact: true }),
+  ).toBeVisible();
   await expect(page.getByText('synthetic-github-token')).toHaveCount(0);
 
   // Its settings stay editable: the saved token is never shown, blank keeps it.
@@ -575,7 +585,9 @@ test('a server that asks to sign in when first checked signs in before anything 
     .getByRole('dialog')
     .getByRole('button', { name: 'Allow', exact: true })
     .click();
-  await expect(page.getByText('Ready', { exact: true })).toBeVisible();
+  await expect(
+    page.getByTestId('conversation-pane').getByText('Ready', { exact: true }),
+  ).toBeVisible();
 });
 
 test('a local app shows exactly what it installs, then waits for its program', async ({
@@ -615,7 +627,9 @@ test('a local app shows exactly what it installs, then waits for its program', a
     .getByRole('dialog')
     .getByRole('button', { name: 'Allow', exact: true })
     .click();
-  await expect(page.getByText('Ready', { exact: true })).toBeVisible();
+  await expect(
+    page.getByTestId('conversation-pane').getByText('Ready', { exact: true }),
+  ).toBeVisible();
 });
 
 test('a picked bundle is checked, reviewed and asks for its own settings', async ({

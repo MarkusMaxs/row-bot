@@ -1861,7 +1861,9 @@ test('MCP tested tools retain their review and accept the saved catalog without 
   // Allow accepts the tools that were tested, then connects with them.
   await access.getByRole('button', { name: 'Allow', exact: true }).click();
   await expect(access).toBeHidden();
-  await expect(page.getByText('Ready', { exact: true })).toBeVisible();
+  await expect(
+    page.getByTestId('conversation-pane').getByText('Ready', { exact: true }),
+  ).toBeVisible();
   await expect(
     page.getByText('3 of 3 actions on · Ask before changes', { exact: true }),
   ).toBeVisible();
@@ -1891,7 +1893,9 @@ test('MCP connection setup survives navigation and turns the owned fake session 
   // and connects, Turn off disconnects and Turn on connects again.
   const access = await continueSetup(page);
   await access.getByRole('button', { name: 'Allow', exact: true }).click();
-  const ready = page.getByText('Ready', { exact: true });
+  const ready = page
+    .getByTestId('conversation-pane')
+    .getByText('Ready', { exact: true });
   await expect(ready).toBeVisible();
   await expectSession(page, true);
   // The connection's state is read again, not repeated, after navigation.
