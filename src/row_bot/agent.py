@@ -1418,23 +1418,22 @@ def _interactive_progress_contract(runtime_surface: str) -> str:
     surface = str(runtime_surface or "").strip()
     if selected_mode != "agent":
         return ""
-    if is_background_workflow():
-        return ""
+    workflow = is_background_workflow()
     if surface == "channel" and not _current_channel_streaming_var.get(False):
         return ""
-    if surface not in {"normal_chat", "remote_client", "designer", "developer", "channel"}:
+    if not workflow and surface not in {"normal_chat", "remote_client", "designer", "developer", "channel"}:
         return ""
 
     parts = [
         "INTERACTIVE PROGRESS:",
-        "For interactive work that will take multiple tool calls or more than a few seconds, "
-        "stream occasional short user-facing progress updates before or between meaningful phases.",
-        "Write them naturally in your own voice. Do not use a fixed template, do not narrate "
-        "every tool call, and do not mention low-level tool names unless the user needs that detail.",
-        "Never reveal hidden reasoning, private secrets, raw logs, or unapproved content.",
-        "Skip progress updates for quick answers. Keep the final answer focused on results and "
-        "avoid repeating the live updates.",
+        "While you work through tools, keep the person posted in short lines: before your first tool step, and "
+        "whenever you move on to something new, one sentence on what you're doing or what you just found "
+        "(\"Checking the October orders…\", \"Found 2 repeat customers; drafting the reply.\").",
+        "Your own words, no tool names. Never reveal hidden reasoning, secrets, raw logs or unapproved content. "
+        "Skip it for quick answers, and don't repeat these lines in the final answer.",
     ]
+    if workflow:
+        parts.append("In a workflow run keep them sparse: a line as you start each part of the work.")
     if surface == "channel":
         parts.append(
             "For channel conversations, keep progress updates especially sparse because message "
@@ -4270,6 +4269,45 @@ def _prepare_agent_request(
     return llm_messages, created, inputs, prepared
 
 
+# After this many tool rounds in a turn without a word to the person, one short note asks for a line (owner,
+# 28 Oct): models that batch tool calls (GPT) often work in silence. It's added to this request only, at its
+# end: never stored, never in the cached prefix, and marked so Learning's capture can tell it apart.
+SILENT_ROUNDS = 3
+_SILENT_AGAIN = 5
+PROGRESS_NOTE = ("Row-Bot note, not from the person: you've worked through several tools without a word to the "
+                 "person. Before your next step, say in one short line what you found and what's next.")
+
+
+def _silent_rounds(messages: list) -> int:
+    """Tool rounds since the person's (or the turn's) last message in which the assistant wrote no text."""
+    rounds = 0
+    for message in reversed(messages):
+        if isinstance(message, HumanMessage):
+            break
+        if not isinstance(message, AIMessage) or not getattr(message, "tool_calls", None):
+            continue
+        content = message.content
+        said = content.strip() if isinstance(content, str) else "".join(
+            str(block.get("text") or "") for block in content if isinstance(block, dict)
+            and block.get("type") == "text").strip()
+        if said:
+            break
+        rounds += 1
+    return rounds
+
+
+def _with_progress_note(messages: list, conversation: list) -> list:
+    """*messages* (the request) with the progress note at its end when *conversation*'s silent rounds call for
+    one."""
+    rounds = _silent_rounds(conversation)
+    if rounds < SILENT_ROUNDS or (rounds - SILENT_ROUNDS) % _SILENT_AGAIN:
+        return messages
+    if not _interactive_progress_contract(_current_runtime_surface_var.get("")):
+        return messages
+    return [*messages, HumanMessage(content=PROGRESS_NOTE,
+                                    additional_kwargs={"ephemeral": True, "row_bot_note": "progress"})]
+
+
 def _pre_model_trim(state: dict, config: dict | None = None) -> dict:
     """Prepare every Agent model/tool-loop call through one accounting path."""
     from row_bot.runtime.executions import current_execution, generation_registry
@@ -4288,6 +4326,7 @@ def _pre_model_trim(state: dict, config: dict | None = None) -> dict:
     # A model that sees images gets the browser page's picture right after the action that took it.
     from row_bot.browser.model_view import with_page_picture
     llm_messages = with_page_picture(llm_messages, str(((config or {}).get("configurable") or {}).get("thread_id") or ""))
+    llm_messages = _with_progress_note(llm_messages, list(state.get("messages") or []))
     if execution is not None:
         generation_registry.check_dispatch(execution)
         from row_bot.application.client_queue import acknowledge_consumed
