@@ -37,6 +37,10 @@ test('Library › Media lists every picture, video and sound with its chat, filt
   expect(seeded.ok(), await seeded.text()).toBe(true);
   await page.goto('/app-v2/library?show=media');
   const list = page.getByRole('list', { name: 'Media items' });
+  // Other journeys leave their own recordings and edits here: this one looks at its chat's.
+  const search = page.getByRole('searchbox', { name: 'Search media' });
+  await search.fill('Launch assets');
+  await expect(list.getByRole('listitem')).toHaveCount(4);
   for (const name of [
     'launch-card.png',
     'pricing-step.png',
@@ -65,9 +69,10 @@ test('Library › Media lists every picture, video and sound with its chat, filt
   await expect(list.getByText('x post', { exact: true })).toBeVisible();
 
   await kinds.getByRole('radio', { name: 'All', exact: true }).click();
-  await page.getByRole('searchbox', { name: 'Search media' }).fill('demo');
+  await search.fill('x post');
   await expect(list.getByRole('listitem')).toHaveCount(1);
-  await page.getByRole('searchbox', { name: 'Search media' }).fill('');
+  await expect(list.getByText('signup-walkthrough.mp4')).toBeVisible();
+  await search.fill('Launch assets');
   await expect(list.getByRole('listitem')).toHaveCount(4);
   await page.setViewportSize(PHONE);
   await views(page, info, 'library-media-phone', list);
