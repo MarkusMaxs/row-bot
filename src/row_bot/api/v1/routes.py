@@ -1085,6 +1085,8 @@ _STATUS.update(dict.fromkeys(('integration_link_unsupported', 'invalid_upload', 
 _STATUS['upload_too_large'] = 413
 # An answer that doesn't fit Row-Bot's question, or answers sent for an approval (N4).
 _STATUS['question_answer_invalid'] = 422
+_STATUS['approval_edit_invalid'] = 422
+_STATUS['scheduled_post_unavailable'] = 404
 _STATUS['app_not_connected'] = 409  # A workflow template whose app is not connected yet.
 # Pages (N5): gone, not valid, too big, written to too often, or nothing to send.
 _STATUS.update({"chat_page_unavailable": 404, "chat_page_invalid": 422, "chat_page_too_large": 413,
@@ -3118,6 +3120,17 @@ def create_router(
         )
         await call(service._metadata, conversation_id)
         return await respond(request, dto.ClientQueueView, asdict(result))
+
+    @router.get("/conversations/{conversation_id}/links")
+    async def conversation_links(conversation_id: str, request: Request) -> JSONResponse:
+        """The conversations this one started or proposed, with their state (5.3.1 C)."""
+        await session(request)
+        await call(service._metadata, conversation_id)
+        from row_bot.linked_conversations import links
+
+        cards = await call(links, conversation_id)
+        items = [{key: value for key, value in card.items() if key != "kind"} for card in cards]
+        return await respond(request, dto.ConversationLinkPage, {"schema_version": 1, "items": items})
 
     @router.get("/conversations/{conversation_id}/steering")
     async def steering_view(
@@ -5221,6 +5234,24 @@ def create_router(
 
         result = await call(read_pending_approvals)
         return await respond(request, dto.PendingApprovalPage, result)
+
+    @router.get("/monitor/scheduled-posts")
+    async def monitor_scheduled_posts(request: Request) -> JSONResponse:
+        # Posts approved for a time slot, waiting for it (G3): Home's Review lists them with Cancel.
+        await session(request)
+        from row_bot.tools import x_posting
+
+        result = await call(x_posting.scheduled_posts)
+        return await respond(request, dto.ScheduledPostPage, {"schema_version": 1, "items": result})
+
+    @router.delete("/monitor/scheduled-posts/{post_id}")
+    async def monitor_cancel_scheduled_post(post_id: str, request: Request) -> JSONResponse:
+        await session(request, lane="control")
+        from row_bot.tools import x_posting
+
+        if not await call(x_posting.cancel_scheduled, post_id):
+            raise ProtocolError("scheduled_post_unavailable", 404)
+        return await respond(request, dto.ScheduledPostCancelled, {"cancelled": True})
 
     @router.get("/monitor/logs")
     async def monitor_logs(request: Request, limit: int = 200) -> JSONResponse:

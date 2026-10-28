@@ -309,12 +309,17 @@ class TTSService:
         """Speak immediately (test button / future read-aloud)."""
         self._speak_internal(text)
 
-    def synthesize_wav_bytes(self, text: str) -> bytes:
-        """Generate local Kokoro audio without using a physical device."""
-        clean = _prepare_text(text)
+    def synthesize_wav_bytes(self, text: str, *, voice: str | None = None, speed: float | None = None,
+                             truncate: bool = True) -> bytes:
+        """Generate local Kokoro audio without using a physical device.
+
+        *voice* and *speed* override the saved ones for this call; *truncate* False keeps every sentence (a voice
+        file, 5.3.1 B) instead of a spoken reply's few.
+        """
+        clean = _prepare_text(text, truncate=truncate)
         if not clean.strip():
             return b""
-        samples, sample_rate = self._synthesize_samples(clean)
+        samples, sample_rate = self._synthesize_samples(clean, voice=voice, speed=speed)
         pcm = (
             np.clip(np.asarray(samples, dtype=np.float32), -1.0, 1.0)
             * 32767.0
@@ -511,15 +516,17 @@ class TTSService:
         except Exception:
             logger.warning("TTS playback error", exc_info=True)
 
-    def _synthesize_samples(self, text: str) -> tuple[np.ndarray, int]:
+    def _synthesize_samples(self, text: str, *, voice: str | None = None,
+                            speed: float | None = None) -> tuple[np.ndarray, int]:
         kokoro = self._get_kokoro()
         if kokoro is None:
             raise RuntimeError("Kokoro model is not installed")
+        chosen = voice if voice in VOICE_CATALOG else self._voice
         samples, sample_rate = kokoro.create(
             text,
-            voice=self._voice,
-            speed=self._speed,
-            lang=_voice_lang(self._voice),
+            voice=chosen,
+            speed=float(speed) if speed else self._speed,
+            lang=_voice_lang(chosen),
         )
         return np.asarray(samples), int(sample_rate)
 

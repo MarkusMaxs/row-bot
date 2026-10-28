@@ -200,8 +200,44 @@ def test_each_message_is_its_own_turn_in_order(workflows, platform):  # noqa: F8
     fake = Recording(reply("Found three creators."), reply("Wrote to the first."))
     task = create(workflows, "Find three creators.", "Draft a note to the first one.")
     done = run(workflows, platform, fake, task)
-    assert fake.prompts == ["Find three creators.", "Draft a note to the first one."]
+    assert fake.prompts[0].endswith("\n\n---\n\nFind three creators.")  # After the workflow's notes (G4).
+    assert fake.prompts[1] == "Draft a note to the first one."
     assert (done["status"], done["steps_done"], done["steps_total"]) == ("completed", 2, 2)
+
+
+def test_a_workflow_keeps_notes_its_next_run_reads_first(workflows, platform):  # noqa: F811
+    """G4: a run keeps short notes with task_update(notes=...); the next run's first message carries them."""
+    from row_bot.tools.task_tool import _task_update
+    fake = Recording(reply("Checked the 5.3.0 release."), reply("Nothing new since."), reply("Posted."),
+                     reply("Said what went out."))
+    task = create(workflows, "Check what's new and post about it.", "Then say what you posted.")
+
+    run(workflows, platform, fake, task)
+    kept = _task_update(task["id"], notes="Release 5.3.0 checked 27 Oct. Last post ids: 2114329103603990962.")
+    second = run(workflows, platform, fake, workflows.get_task(task["id"]))
+
+    assert fake.prompts[0].startswith("This workflow has no notes from earlier runs yet.")
+    assert f'task_update(task_id="{task["id"]}", notes=...)' in fake.prompts[0]
+    assert kept.endswith("Notes: 65 characters kept for the next run")
+    assert fake.prompts[2].startswith("Notes this workflow kept from its earlier runs:\nRelease 5.3.0 checked 27 Oct. "
+                                      "Last post ids: 2114329103603990962.\n\n")
+    assert fake.prompts[2].endswith("Check what's new and post about it.")
+    assert second["status"] == "completed"
+    notes = [row["blocks"][0]["text"] for row in platform.snapshot(second["thread_id"])["rows"]
+             if row.get("note") == "continuation"]
+    assert not any("Notes this workflow kept" in note for note in notes), "the chat shows the run, not its notes"
+
+
+def test_workflow_notes_are_cut_to_their_limit_and_cleared_with_empty_text(workflows):
+    from row_bot import workflow_turns
+    from row_bot.tools.task_tool import _task_update
+    task = create(workflows, "Check the release.")
+
+    cut = _task_update(task["id"], notes="x" * 2_500)
+    assert cut.endswith("Notes: 2,000 characters kept for the next run (cut to 2,000)")
+    assert len(workflow_turns.notes(task["id"])) == 2_000
+    assert _task_update(task["id"], notes="").endswith("Notes: cleared")
+    assert workflow_turns.notes(task["id"]) == ""
 
 
 def test_a_passing_failure_tries_again_but_never_after_something_went_out(workflows, platform, monkeypatch):  # noqa: F811
@@ -243,3 +279,75 @@ def test_the_workflows_always_ask_apps_reach_every_turn_of_its_conversation(work
     workflows.update_task(task["id"], always_ask=["builtin:account:x"], safety_mode="full")
     run(workflows, platform, Rules(reply("Done.")), workflows.get_task(task["id"]))
     assert seen == [{"step": False, "items": ["builtin:account:x"]}]
+
+
+# ── What reaches the channels (5.3.1 G8) ─────────────────────────────────────
+
+
+@pytest.fixture
+def delivered(workflows, monkeypatch) -> list[str]:
+    """What each run sent to the workflow's channels (none are real here)."""
+    sent: list[str] = []
+
+    def deliver(task, text, **_):
+        sent.append(text)
+        return "delivered", "Delivered to Telegram"
+    monkeypatch.setattr(workflows, "_deliver_to_channels", deliver)
+    return sent
+
+
+def test_each_delivery_says_first_what_the_run_did(workflows, platform, delivered):  # noqa: F811
+    report = run(workflows, platform, Recording(reply("Three new posts about local AI today.")),
+                 create(workflows, "Read what's new about local AI."))
+    fake = Recording((("interrupt", X_POST),), posted())
+    task = create(workflows)
+    waiting = run(workflows, platform, fake, task)
+    resolve(platform, pending_approval(workflows, waiting["thread_id"]), "approve", "approve-post")
+    settle(platform, waiting["thread_id"])
+
+    assert report["status"] == "completed"
+    assert delivered == ["Finished · nothing was posted or sent\n\nThree new posts about local AI today.",
+                         f"Sent · Posted on X as @row_bot_ai: {POST_LINK}\n\nPosted."]
+    assert latest(workflows, task["id"])["status_message"] == "Delivered to Telegram"
+
+
+def test_only_when_it_needs_me_sends_a_run_that_didnt_finish_and_nothing_else(
+        workflows, platform, delivered, monkeypatch):  # noqa: F811
+    from row_bot import workflow_turns
+    monkeypatch.setattr(workflow_turns, "RETRY_WAITS", ())
+    quiet = create(workflows, "Read what's new.")
+    workflows.update_task(quiet["id"], send_results="needs_me")
+    fake = Recording(reply("Nothing new."), (("error", "The provider is busy."),))
+    done = run(workflows, platform, fake, workflows.get_task(quiet["id"]))
+    failed = run(workflows, platform, fake, workflows.get_task(quiet["id"]))
+
+    assert (done["status"], done["status_message"]) == ("completed", "")
+    assert failed["status"] == "failed"
+    assert delivered == [f"Didn't finish · {failed['notice']}"]
+
+
+def test_a_daily_digest_sends_one_line_per_run_once_a_day_from_six(workflows, platform, delivered):  # noqa: F811
+    from datetime import datetime, timedelta
+    task = create(workflows, "Read what's new.", name="Daily read")
+    workflows.update_task(task["id"], send_results="digest")
+    fake = Recording(reply("One new release."), (("interrupt", X_POST),), posted())
+    first = run(workflows, platform, fake, workflows.get_task(task["id"]))
+    waiting = run(workflows, platform, fake, workflows.get_task(task["id"]))
+    resolve(platform, pending_approval(workflows, waiting["thread_id"]), "approve", "approve-post")
+    settle(platform, waiting["thread_id"])
+    assert delivered == [], "a digest workflow sends nothing per run"
+    finished = datetime.fromisoformat(latest(workflows, task["id"])["finished_at"]).astimezone()
+    evening = finished.replace(hour=18, minute=5) + (timedelta(days=1) if finished.hour >= 18 else timedelta())
+
+    assert workflows.send_due_digests(evening.replace(hour=17, minute=59)) == 0, "not before six"
+    assert workflows.send_due_digests(evening) == 1
+    assert workflows.send_due_digests(evening + timedelta(hours=2)) == 0, "once a day"
+
+    def stamp(moment: datetime) -> str:
+        return f"{moment:%H:%M}" if moment.date() == evening.date() else f"{moment:%a %H:%M}"
+
+    [digest] = delivered
+    read = stamp(datetime.fromisoformat(first["finished_at"]).astimezone())
+    assert first["status"] == "completed"
+    assert digest == (f"Daily digest · 2 runs\n{read} · Finished · nothing was posted or sent\n"
+                      f"{stamp(finished)} · Sent · Posted on X as @row_bot_ai: {POST_LINK}")

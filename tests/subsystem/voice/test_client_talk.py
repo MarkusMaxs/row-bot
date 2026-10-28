@@ -332,7 +332,7 @@ def test_synthesis_owner_validates_before_model_and_after_worker(runtime):
     effects = []
     revoked = [False]
 
-    def speak(text):
+    def speak(text, **_options):
         effects.append(text)
         revoked[0] = True
         return b"synthetic bytes"

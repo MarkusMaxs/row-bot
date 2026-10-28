@@ -27,9 +27,11 @@ def install(monkeypatch, fake: FakeXApi, *users: tuple[str, str, str]) -> list:
     """Send every X request to ``fake``, with an in-memory keychain and the person's own X app; each user
     in ``users`` (id, handle, name) is a connected account, in that order."""
     from row_bot import secret_store, x_accounts
+    from row_bot.tools import x_posting
     from tests.subsystem.plugins.conftest import MemoryKeyring
 
     monkeypatch.setattr(secret_store, "_backend_override", MemoryKeyring())
+    monkeypatch.setattr(x_posting, "_LIMITS", {})  # Each account's post length, read once per test.
     monkeypatch.setattr(x_accounts, "transport", fake.transport())
     monkeypatch.setenv("X_CLIENT_ID", "fixture-x-client")
     monkeypatch.setenv("X_CLIENT_SECRET", "fixture-x-secret")
@@ -51,10 +53,12 @@ class FakeXApi:
     _next: int = 1_900_000_000_000_000_000
 
     def sign_in(self, user_id: str, username: str, name: str = "", *, access: str = "",
-                expires_at: float = 4_070_908_800.0) -> dict[str, Any]:
-        """A sign-in (token) for this user, as X's token endpoint would give it."""
+                expires_at: float = 4_070_908_800.0, subscription: str = "") -> dict[str, Any]:
+        """A sign-in (token) for this user, as X's token endpoint would give it; *subscription* is X's
+        subscription_type ("Premium" lets the account post up to 25,000 characters)."""
         access = access or f"access-{username}"
-        self.users[access] = {"id": user_id, "username": username, "name": name}
+        self.users[access] = {"id": user_id, "username": username, "name": name,
+                              **({"subscription_type": subscription} if subscription else {})}
         return {"access_token": access, "refresh_token": f"refresh-{username}", "expires_at": expires_at,
                 "token_type": "bearer", "scope": "tweet.read tweet.write users.read offline.access"}
 

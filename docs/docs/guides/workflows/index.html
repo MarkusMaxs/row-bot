@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="generator" content="Docusaurus v3.10.1">
 <title data-rh="true">Workflows | Row-Bot</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:image" content="https://row-bot.ai/img/brand/row_bot_preview.png"><meta data-rh="true" name="twitter:image" content="https://row-bot.ai/img/brand/row_bot_preview.png"><meta data-rh="true" property="og:url" content="https://row-bot.ai/docs/guides/workflows/"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Workflows | Row-Bot"><meta data-rh="true" name="description" content="Create, run, schedule, edit, deliver, and troubleshoot Row-Bot workflows."><meta data-rh="true" property="og:description" content="Create, run, schedule, edit, deliver, and troubleshoot Row-Bot workflows."><link data-rh="true" rel="icon" href="/favicon.ico"><link data-rh="true" rel="canonical" href="https://row-bot.ai/docs/guides/workflows/"><link data-rh="true" rel="alternate" href="https://row-bot.ai/docs/guides/workflows/" hreflang="en"><link data-rh="true" rel="alternate" href="https://row-bot.ai/docs/guides/workflows/" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Workflows","item":"https://row-bot.ai/docs/guides/workflows"}]}</script><link rel="stylesheet" href="/assets/css/styles.e50d20ac.css">
-<script src="/assets/js/runtime~main.ec76348f.js" defer="defer"></script>
+<script src="/assets/js/runtime~main.4057f353.js" defer="defer"></script>
 <script src="/assets/js/main.41211378.js" defer="defer"></script>
 </head>
 <body>
@@ -33,7 +33,12 @@
 <ol>
 <li class="">Choose <strong>New workflow</strong>. The editor opens on the page, as editing does.</li>
 <li class="">Give it a name, an icon and a short description, and choose <strong>Workflow</strong> or <strong>Reminder</strong>.</li>
-<li class="">Write the <strong>Messages</strong>: what you would type in a chat. One message is enough for most workflows; <strong>Add message</strong> sends another after the first is done, in the same conversation, so it can build on the answer. Say what to do when there is nothing to do. Type <code>{{</code> to add the date. Drag messages, or use the arrow keys, to reorder them.</li>
+<li class="">Write the <strong>Messages</strong>: what you would type in a chat. One message is enough for most workflows; <strong>Add message</strong> sends another after the first is done, in the same conversation, so it can build on the answer. Say what to do when there is nothing to do. Type <code>{{</code> to add the date. Drag messages, or use the arrow keys, to reorder them.<!-- -->
+<ul>
+<li class="">Keep a message short and positive: what to make, for whom, in what voice, and where the results go. For example: &quot;Each weekday, write one post for @rowbot_ai about something Row-Bot does well, for people who run AI on their own computer. Friendly and concrete. Post it.&quot;</li>
+<li class="">Leave out the rules Row-Bot already keeps: the approval card for each post or email, the account it names, the length limit, and never sending the same thing twice.</li>
+</ul>
+</li>
 <li class="">Choose <strong>When it runs</strong>: manually, at a date and time, or repeating. Repeating can be every day, weekdays, chosen days, <strong>Monthly</strong>, every few hours or minutes, or a custom cron expression. <strong>Timezone</strong> starts at this computer&#x27;s timezone, and you can search for another. A daily time stays the same across daylight saving.</li>
 <li class="">Choose <strong>Send results to</strong>: follow your defaults, choose channels only for this workflow, or keep results in the app.</li>
 <li class="">Under <strong>Change model and approvals</strong>, pick an <strong>Agent profile</strong> and <strong>Approvals</strong>:<!-- -->
@@ -51,6 +56,7 @@
 <li class="">Every run of a workflow is a new turn in the same conversation, marked with when and how it started, such as <strong>Scheduled run · 26 Oct, 08:00</strong>. Open it with <strong>Open conversation</strong> to read what each run did, see its approval cards, or carry on in it yourself.</li>
 <li class="">A run&#x27;s outcome comes from what its tools did, never from the model&#x27;s own words: <strong>Posted</strong>, with the post&#x27;s link, for example, or <strong>Not sure it went through</strong> when a tool couldn&#x27;t confirm it. A run you said no to ends <strong>You said no</strong>.</li>
 <li class="">A run that fails on a passing problem, such as the network or a busy provider, tries again by itself after a wait. Once something has gone out, it never tries again: nothing is posted or sent twice.</li>
+<li class="">A workflow keeps short notes between runs: what it checked and when, ids it needs again, what&#x27;s left. Each run reads them first and updates them before it ends, so it doesn&#x27;t check again what an earlier run already did. Updating them shows as a step in the run.</li>
 <li class="">A run has no step limit to set. It keeps going while it makes progress, and stops when you press <strong>Stop</strong> or when it keeps repeating the same thing. After a very long run of steps it stops and asks <strong>Keep going?</strong>: send <strong>Continue</strong> in its conversation to pick up from there.</li>
 </ul>
 <h2 class="anchor anchorTargetStickyNavbar_Vzrq" id="workflow-settings">Workflow Settings<a href="#workflow-settings" class="hash-link" aria-label="Direct link to Workflow Settings" title="Direct link to Workflow Settings" translate="no">​</a></h2>
@@ -60,6 +66,13 @@
 <ul>
 <li class=""><strong>Skip it</strong> (the default);</li>
 <li class=""><strong>Run once when Row-Bot starts</strong>: only the latest missed time runs, and the run says it ran late.</li>
+</ul>
+</li>
+<li class=""><strong>Send results</strong>, in Workflow settings, chooses when results reach the workflow&#x27;s channels. Each one starts with what happened: <strong>Sent</strong> and what went out, <strong>Finished · nothing was posted or sent</strong>, <strong>Not sure it went through</strong>, or <strong>Didn&#x27;t finish</strong>.<!-- -->
+<ul>
+<li class=""><strong>After every run</strong> (the default);</li>
+<li class=""><strong>Only when it needs me</strong>: a run that didn&#x27;t finish, or isn&#x27;t sure something went through. Approvals still reach you;</li>
+<li class=""><strong>In a daily digest</strong>: one message from 6 PM, with a line for each run that day.</li>
 </ul>
 </li>
 <li class=""><strong>Code folder</strong>, in Workflow settings, gives the workflow a <a class="" href="/docs/developer/">code folder</a> of its own: its conversation works in it. <strong>None: the conversation&#x27;s folder</strong> keeps today&#x27;s behaviour. If the folder is removed, the next run stops, says why, and opens the settings at <strong>Code folder</strong> so you can choose another.</li>

@@ -122,6 +122,18 @@ When the best answer depends on a choice only you can make, such as your budget,
 - Questions can come from a chat, a helper or a workflow. In Telegram, Discord, Slack and WhatsApp, tap an option, or reply with its number or your own words.
 - An answer is never an approval: anything that needs approval still asks.
 
+## Conversations Row-Bot Starts
+
+For longer work that deserves its own chat, Row-Bot can start a conversation of its own, propose one, or message another conversation and hear back.
+
+- **Started**: the new conversation runs its first turn at once and shows in the sidebar with a shared-message icon. Its first message reads **From** and the conversation that started it, with a link. The chat that started it shows a card with its state (working, waiting for you, done) and **Open**. A turn starts at most three.
+- **Proposed**: a card with **Start** and **Not now**. Nothing runs until you tap **Start**. A proposal expires after a week.
+- **Messages between conversations**: a message to another conversation, a workflow's included, starts a turn there and shows as **From** the conversation that sent it. When that turn ends, its reply comes back as **Reply from**. A conversation that's busy gets the message after its current turn.
+- **Never you**: a message from another conversation is never your request. It can't approve anything, and under **Auto** the reviewer never reads it as yours. A started conversation keeps the approval level of the chat that started it, or a stricter one, and never **Hands-off**, which only you turn on.
+- **Keep going?**: conversations that message each other ten times without you stop and ask you, whatever the approval level.
+
+Helpers stay as they are: quick sub-tasks whose results come back in the same turn.
+
 ## Attachments
 
 Attach files with **+ › Attach file**, by dropping them on the conversation, or by pasting. Each file shows as a small tile above the text: pictures show a preview, other files their type, name and size. Tiles show upload progress and offer **Retry** if an upload fails. You can keep adding files while others upload; **Send** waits for them. Click a tile to preview it, or × to remove it.
@@ -144,7 +156,7 @@ Compaction starts near the end of the model's window, leaving room for the reply
 
 ## The Details Card
 
-**Conversation details** stays open in a rail along the conversation's right edge on a wide screen, and the conversation centres in the space beside it. In a narrower window it opens from the header's **Conversation details** button instead. It shows:
+**Conversation details** stays open on a wide window as a card under the header's buttons, beside the conversation. With less room it sits in a rail along the conversation's right edge, so it never covers the messages, and the conversation centres in the space beside it. In a narrower window it opens from the header's **Conversation details** button instead. It shows:
 
 - **Working on**: the designs and code folders bound to this conversation. Choose one to open its panel, or unbind it from its **⋯** menu. **Add resource** binds another.
 - **Outputs**: images and videos the conversation made, linked to where they appear.

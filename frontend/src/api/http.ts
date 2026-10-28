@@ -332,6 +332,14 @@ export class HttpTransport implements ClientTransport {
   page(pageId: string, signal?: AbortSignal) {
     return wire.getPage(this.base, this.session(), pageId, signal);
   }
+  conversationLinks(conversationId: string, signal?: AbortSignal) {
+    return wire.getConversationLinks(
+      this.base,
+      this.session(),
+      conversationId,
+      signal,
+    );
+  }
   pageFrame(pageId: string, theme: wire.PageTheme, signal?: AbortSignal) {
     return wire.createPageFrame(
       this.base,
@@ -415,6 +423,12 @@ export class HttpTransport implements ClientTransport {
   }
   pendingApprovals(signal?: AbortSignal) {
     return wire.getPendingApprovals(this.base, this.session(), signal);
+  }
+  scheduledPosts(signal?: AbortSignal) {
+    return wire.getScheduledPosts(this.base, this.session(), signal);
+  }
+  cancelScheduledPost(id: string) {
+    return wire.cancelScheduledPost(this.base, this.session(), id);
   }
   monitorLogs(limit = 200, signal?: AbortSignal) {
     return wire.getMonitorLogs(this.base, this.session(), limit, signal);

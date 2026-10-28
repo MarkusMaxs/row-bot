@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import {
   Folder,
   HatGlasses,
+  Pencil,
   Power,
   ShieldAlert,
   ShieldCheck,
@@ -12,18 +13,19 @@ import type {
   ApprovalQuestion,
   ApprovalSetup,
   ApprovalView,
+  XPostEdit,
 } from '../../api/types';
 import { clientError } from '../../api/errors';
 import { useRuntime } from '../../runtime';
 import { useOverlay } from '../../ui/overlays';
-import { Button, Hint, Kbd, Skeleton } from '../../ui/primitives';
+import { Button, Hint, IconButton, Kbd, Skeleton } from '../../ui/primitives';
 import { absoluteTime, humanizeToken, relativeTime } from '../../ui/format';
 import FolderSetupCard from './FolderSetupCard';
 import { BrowserThumbnail } from '../browser/BrowserThumbnail';
 import { ComputerThumbnail } from './ComputerStep';
 import { requestBrowserPane } from '../browser/open-pane';
 import QuestionCard from './QuestionCard';
-import XPostDetails from './XPostDetails';
+import XPostDetails, { XPostEditor } from './XPostDetails';
 import { AppIcon } from '../apps/parts';
 import { WaitingSince } from './waiting-since';
 import { readPendingApprovalsNow } from './pending-approvals';
@@ -249,6 +251,8 @@ export default function ApprovalCard({
   onAllowInChat,
   onResolved,
   notice = false,
+  shortcut = true,
+  onLater,
 }: {
   id: string;
   hint?: Hint_;
@@ -262,6 +266,10 @@ export default function ApprovalCard({
    * (B162): no keyboard shortcut, and one quiet line once it was answered.
    */
   notice?: boolean;
+  /** False where several cards share a page (Home's Review): Ctrl+Enter answers none of them. */
+  shortcut?: boolean;
+  /** Not now: Home's Review sets the card aside; it keeps waiting. */
+  onLater?: () => void;
 }) {
   const { controller } = useRuntime();
   const overlay = useOverlay();
@@ -270,6 +278,7 @@ export default function ApprovalCard({
   const [answered, setAnswered] = useState(false);
   const [busy, setBusy] = useState(false);
   const [resolution, setResolution] = useState('');
+  const [editing, setEditing] = useState(false);
   useEffect(() => {
     const abort = new AbortController();
     void controller
@@ -304,6 +313,26 @@ export default function ApprovalCard({
       setResolution(
         decision === 'approve' ? 'Approval submitted.' : 'Denial submitted.',
       );
+      readPendingApprovalsNow(controller.pendingApprovals);
+      onResolved?.();
+    } catch (cause) {
+      setError(clientError(cause).message);
+      setBusy(false);
+    }
+  }
+  /** An X post edited on its card (G2): Row-Bot asks again with it. */
+  async function saveEdit(edit: XPostEdit) {
+    if (!view || busy || resolution) return;
+    setBusy(true);
+    try {
+      await controller.intent(
+        id,
+        'approval.resolve',
+        { decision: 'edit', nonce: view.nonce, edit },
+        view.revision,
+      );
+      setEditing(false);
+      setResolution('Edited. Row-Bot asks again with your version.');
       readPendingApprovalsNow(controller.pendingApprovals);
       onResolved?.();
     } catch (cause) {
@@ -348,6 +377,8 @@ export default function ApprovalCard({
     !busy &&
     !resolution &&
     !notice &&
+    shortcut &&
+    !editing &&
     !folderCard &&
     !questions.length;
   useEffect(() => {
@@ -550,7 +581,14 @@ export default function ApprovalCard({
             {conversationId && view.action_label === 'Computer activity' && (
               <ComputerThumbnail conversationId={conversationId} />
             )}
-            {post ? (
+            {post && editing ? (
+              <XPostEditor
+                post={post}
+                busy={busy}
+                onSave={(edit) => void saveEdit(edit)}
+                onCancel={() => setEditing(false)}
+              />
+            ) : post ? (
               <XPostDetails post={post} />
             ) : (
               <span
@@ -575,7 +613,25 @@ export default function ApprovalCard({
               </small>
             )}
           </div>
-          <div className="approval-card-actions">
+          <div className="approval-card-actions" hidden={editing}>
+            {onLater && (
+              <Button
+                variant="ghost"
+                disabled={busy || Boolean(resolution)}
+                onClick={onLater}
+              >
+                Not now
+              </Button>
+            )}
+            {post && post.action !== 'delete' && !notice && (
+              <IconButton
+                label="Edit the post"
+                disabled={busy || Boolean(resolution)}
+                onClick={() => setEditing(true)}
+              >
+                <Pencil size={16} aria-hidden />
+              </IconButton>
+            )}
             <Button
               variant="ghost"
               disabled={busy || Boolean(resolution)}
@@ -597,15 +653,15 @@ export default function ApprovalCard({
             </Button>
             <Button
               variant="primary"
-              aria-label="Approve"
+              aria-label={post?.post_at ? 'Approve for then' : 'Approve'}
               aria-keyshortcuts={
-                notice ? undefined : 'Control+Enter Meta+Enter'
+                notice || !shortcut ? undefined : 'Control+Enter Meta+Enter'
               }
               disabled={busy || Boolean(resolution)}
               onClick={() => void resolve('approve')}
             >
-              Approve
-              {!notice && keyboard && (
+              {post?.post_at ? 'Approve for then' : 'Approve'}
+              {!notice && shortcut && keyboard && (
                 <span aria-hidden className="approval-card-kbd">
                   <Kbd keys="Mod+Enter" />
                 </span>

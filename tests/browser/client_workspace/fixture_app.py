@@ -2034,7 +2034,10 @@ def n7_reset(x_fixture_token: str = Header(default="")) -> dict:
     """Remove the accounts, the fake X API and the X app's switch."""
     predecessor._authorize(x_fixture_token)
     from row_bot import x_accounts
+    from row_bot.tools import x_posting
 
+    for post in x_posting.scheduled_posts():
+        x_posting.cancel_scheduled(post["id"])
     for account in x_accounts.listed():
         x_accounts.remove(account.id)
     x_accounts.transport = None
@@ -2068,10 +2071,15 @@ def _n7_stream(text: str, config: dict):
         else:
             args = {"action": "post", "text": _N7_LAUNCH, "account": "@rowbot_ai",
                     "media_paths": [str(_N7["folder"] / "launch-card.png")]}
+        if "later" in text:  # A time slot three hours ahead (G3).
+            from datetime import datetime, timedelta
+            args["post_at"] = (datetime.now() + timedelta(hours=3)).isoformat(timespec="minutes")
         _N7["lose_answer"] = "unsure" in text
         account = x_accounts.resolve(args["account"], required=True)
+        x_posting.text_limit(account)  # The card says how long a post the account may send (G1).
         media = x_posting.media_facts(args.get("media_paths"))
-        payload = x_posting.approval_payload(account, args["action"], args["text"], args.get("tweet_id", ""), media)
+        payload = x_posting.approval_payload(account, args["action"], args["text"], args.get("tweet_id", ""), media,
+                                             post_at=x_posting.slot(args.get("post_at")))
         tool_id = fixture_id(identity + ":tool")
         append_checkpoint_messages(thread, [AIMessage(id=fixture_id(identity + ":tool-call"), content="",
             tool_calls=[{"id": tool_id, "name": "x_post", "args": args}])])
@@ -2093,6 +2101,11 @@ def _n7_resume(enabled_tools: list[str], config: dict, approved: bool, *, interr
     last = next((message for message in reversed(get_latest_checkpoint_messages(thread))
                  if getattr(message, "tool_calls", None)), None)
     asked = last.tool_calls[0] if last is not None else {}
+    edit = next((value["x_post_edit"] for value in (resume_values or {}).values()
+                 if isinstance(value, dict) and isinstance(value.get("x_post_edit"), dict)), None)
+    if asked.get("name") == "x_post" and edit is not None:
+        yield from _n7_edited(config, asked, edit)
+        return
     if asked.get("name") != "x_post" or not approved:  # A denied card ends the turn without resuming it.
         yield from _n12_resume(enabled_tools, config, approved, interrupt_ids=interrupt_ids,
                                resume_values=resume_values, stop_event=stop_event)
@@ -2100,14 +2113,29 @@ def _n7_resume(enabled_tools: list[str], config: dict, approved: bool, *, interr
     call = predecessor._record("resume", config, "n7-sent")
     identity = f"n7-resume:{call['generation_id']}:{call['sequence']}"
     try:
-        args = asked.get("args") or {}
+        edited = _N7.pop("edited", None)
+        args = edited or asked.get("args") or {}
         result_id = fixture_id(identity + ":sent")
         account = x_accounts.resolve(args["account"], required=True)
         if _N7.pop("lose_answer", False):
             _N7["api"].after_send = "timeout"  # X posts it, and its answer is lost on the way back.
+        if args.get("post_at"):  # Approved for its time slot: kept for the scheduler, as the tool does (G3).
+            when = x_posting.slot(args["post_at"])
+            kept = x_posting.schedule(account, args["action"], args.get("text", ""), args.get("tweet_id", ""),
+                                      x_posting.media_facts(args.get("media_paths")), when)
+            content = with_approval(APPROVAL_GIVEN, f"Approved for its time: it goes out as @rowbot_ai at {when:%H:%M} "
+                                    f"on {when:%a %d %b} (scheduled post {kept['id']}).")
+            append_checkpoint_messages(thread, [ToolMessage(id=result_id, tool_call_id=asked["id"], name="x_post",
+                                                            content=content)])
+            yield "tool_done", {"tool_call_id": asked["id"], "message_id": result_id, "name": "x_post",
+                                "args": args, "content": content}
+            yield from _natural_final(call, thread, f"Scheduled: it goes out on @rowbot_ai at {when:%H:%M}.",
+                                      "n7-scheduled")
+            return
         sent = x_posting.post_as(account, args["action"], args.get("text", ""), args.get("tweet_id", ""),
                                  x_posting.media_facts(args.get("media_paths")))
-        content = with_approval(APPROVAL_GIVEN, sent.text)
+        content = with_approval(APPROVAL_GIVEN, sent.text if not edited else (  # As the tool says it (G2).
+            f"The person edited the post on its card, then approved it as edited:\n{args['text']}\n\n{sent.text}"))
         final = (f"X didn't confirm it at first, so I checked @rowbot_ai's latest posts: it went out once. {sent.url}"
                  if sent.text.startswith("Not sure") else f"Done. It's live on @rowbot_ai: {sent.url}")
         append_checkpoint_messages(thread, [ToolMessage(id=result_id, tool_call_id=asked["id"], name="x_post",
@@ -2115,6 +2143,27 @@ def _n7_resume(enabled_tools: list[str], config: dict, approved: bool, *, interr
         yield "tool_done", {"tool_call_id": asked["id"], "message_id": result_id, "name": "x_post",
                             "args": args, "content": content}
         yield from _natural_final(call, thread, final, "n7-sent")
+    finally:
+        call["quiesced"] = True
+
+
+def _n7_edited(config: dict, asked: dict, edit: dict):
+    """The person edited the post on its card (G2): the same call asks again with the edit, on a new card."""
+    from row_bot import x_accounts
+    from row_bot.tools import x_posting
+
+    call = predecessor._record("resume", config, "n7-edited")
+    identity = f"n7-edited:{call['generation_id']}:{call['sequence']}"
+    try:
+        args = dict(_N7.get("edited") or asked.get("args") or {})
+        kept = [path for path in args.get("media_paths") or []
+                if x_posting.media_facts([path])[0].short in edit.get("media", [])]
+        args.update(text=edit["text"], media_paths=kept)
+        _N7["edited"] = args
+        account = x_accounts.resolve(args["account"], required=True)
+        payload = x_posting.approval_payload(account, args["action"], args["text"], args.get("tweet_id", ""),
+                                             x_posting.media_facts(kept))
+        yield "interrupt", [{"__interrupt_id": fixture_id(identity + ":approval"), **payload}]
     finally:
         call["quiesced"] = True
 
@@ -2439,6 +2488,9 @@ def _n11_resume(enabled_tools: list[str], config: dict, approved: bool, *, inter
 
 def stream(text: str, enabled_tools: list[str], config: dict, *, stop_event=None):
     """Script real tools/media projection and a durable final behind a barrier."""
+    if text.startswith(("Notes this workflow kept", "This workflow has no notes")):
+        # A workflow run's first message leads with its notes (G4); the script follows its own message.
+        text = text.rsplit("\n\n---\n\n", 1)[-1]
     if text.startswith("l1a ") and text.rstrip().endswith("fixture"):
         # Learning (L1a): a reply to Teach on, after a step that failed.
         yield from _l1a_stream(text, config)
@@ -2574,6 +2626,45 @@ def stream(text: str, enabled_tools: list[str], config: dict, *, stop_event=None
                                  "description": "Delete file: notes/old-draft.md", "args": args,
                                  "review": {"decision": "ask",
                                             "reason": "You asked to tidy the notes, not to delete any."}}]
+        finally:
+            call["quiesced"] = True
+        return
+    if "<message from=" in text and "Script, record and cut" in text:
+        # The conversation the linked-conversation fixture started answers its first message and ends.
+        call = predecessor._record("submit", config, "linked-started")
+        try:
+            yield from _natural_final(call, call["conversation_id"], "On it: scripting the demo now.",
+                                      "linked-started")
+        finally:
+            call["quiesced"] = True
+        return
+    if "linked conversation fixture" in text and "<message from=" not in text:
+        # 5.3.1 C: the turn proposes a conversation of its own; its card offers Start and Not now.
+        import json as _json
+        from row_bot import linked_conversations
+        from row_bot.threads import append_checkpoint_messages
+        call = predecessor._record("submit", config, "linked-conversation")
+        thread = call["conversation_id"]
+        identity = f"linked:{call['generation_id']}"
+        record = linked_conversations._insert(
+            source_id=thread, kind="proposal", status="proposed", title="Make the 5.3 demo video",
+            message="Script, record and cut a 60 second demo of the browser pane.", approval_mode="approve")
+        args = {"title": record["title"], "message": record["message"], "propose": True}
+        result = _json.dumps({"ok": True, "kind": "linked_conversation", "link_id": record["id"],
+                              "title": record["title"], "conversation_id": None, "state": "proposed",
+                              "proposed": True, "display_summary": "Proposed: " + record["title"]})
+        tool_id, result_id = fixture_id(identity + ":tool"), fixture_id(identity + ":result")
+        try:
+            append_checkpoint_messages(thread, [AIMessage(id=fixture_id(identity + ":call"), content="",
+                tool_calls=[{"id": tool_id, "name": "conversation_start", "args": args}])])
+            yield "tool_call", {"tool_call_id": tool_id, "message_id": result_id, "name": "conversation_start",
+                                "args": args}
+            append_checkpoint_messages(thread, [ToolMessage(id=result_id, tool_call_id=tool_id,
+                                                            name="conversation_start", content=result)])
+            yield "tool_done", {"tool_call_id": tool_id, "message_id": result_id, "name": "conversation_start",
+                                "args": args, "content": result}
+            yield from _natural_final(call, thread, "The demo video deserves its own chat: I've proposed one. "
+                                      "Start it when you're ready.", "linked")
         finally:
             call["quiesced"] = True
         return

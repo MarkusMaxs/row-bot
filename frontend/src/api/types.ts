@@ -917,6 +917,11 @@ export interface ClientTransport {
   /** Pages the agent made (N5): every one, or one conversation's. */
   pages?(conversationId?: string, signal?: AbortSignal): Promise<Wire.PagePage>;
   page?(pageId: string, signal?: AbortSignal): Promise<Wire.PageView>;
+  /** The conversations one started or proposed, with their state (5.3.1 C). */
+  conversationLinks?(
+    conversationId: string,
+    signal?: AbortSignal,
+  ): Promise<Wire.ConversationLinkPage>;
   /** One frame address for a page in this theme, loaded once in a sandbox. */
   pageFrame?(
     pageId: string,
@@ -949,6 +954,8 @@ export interface ClientTransport {
   ): Promise<Wire.ExportSaved>;
   attention?(signal?: AbortSignal): Promise<Wire.AttentionSnapshot>;
   pendingApprovals?(signal?: AbortSignal): Promise<Wire.PendingApprovalPage>;
+  scheduledPosts?(signal?: AbortSignal): Promise<Wire.ScheduledPostPage>;
+  cancelScheduledPost?(id: string): Promise<Wire.ScheduledPostCancelled>;
   monitorLogs?(limit?: number, signal?: AbortSignal): Promise<Wire.MonitorLogs>;
   systemDiagnosis?(signal?: AbortSignal): Promise<Wire.SystemDiagnosis>;
   systemHealth?(signal?: AbortSignal): Promise<Wire.SystemDiagnosis>;
