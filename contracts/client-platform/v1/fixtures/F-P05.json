@@ -10,7 +10,7 @@
       "src/row_bot/api/v1/__init__.py": "f54ba3b1c9555e65c5e715ba99685ae3c795ced6c6c15c9bac2bc3f18a1498a8",
       "src/row_bot/api/v1/document_upload_stream.py": "9d7f480472630d5aa7298503af7b9451607b1856406caa115cb6578bbe700494",
       "src/row_bot/api/v1/routes.py": "8c737f2a4bc24707182420bb8316444f9487afa3fabc90306071b2e141450387",
-      "src/row_bot/api/v1/schemas.py": "a8d0380cc0dad326408f4ba4dac06b00d5bd833a4a6145d269f4f411fda57147",
+      "src/row_bot/api/v1/schemas.py": "e8d53c42430cc0dbc144e1417e05de0846891716aefe6124d8b56dd42d421837",
       "src/row_bot/api/v1/security.py": "d94a1f82917863bd2a6bd7996b268557d742c3a5f0c564dd18c2673c16a63ea3",
       "src/row_bot/application/__init__.py": "139fbb6a5592b9bf600f82c1623c05a4f0b90b793e4d7183cac03951984fff51",
       "src/row_bot/application/app_notices.py": "ad6f7c8e2b2f1d1508d82ee1a82e236d22c5fc0518f1ec871d1d04aaa8ea1338",
@@ -129,11 +129,11 @@
       "src/row_bot/runtime/admissions.py": "9c384ba8d8de92cd862a85591709a6568e5f13e809930b2c155345ae7e4c02e4",
       "src/row_bot/runtime/checkpoint_reader.py": "20b7f65b33f91a14cf364250088f476aedcea9c336ab81f8ead55cb6632b084a",
       "src/row_bot/runtime/executions.py": "ff491708c572e5de6482f0eae4212ce502ecd14aad2b660fecb2d1af390c43c2",
-      "src/row_bot/tasks.py": "66536783d28dcf6e80a03adfc6ffad246cceb5df87cf6e590c799105629f6fad",
+      "src/row_bot/tasks.py": "dbc3e5eead343afed4b36aa56e044159a66b16a4d8505d8d6b31657c90736b37",
       "src/row_bot/threads.py": "8ef91738963fadf21d814f9c918c107af876f59141b56a71f7910a4edd3e38c2",
       "tests/helpers/client_platform_fakes.py": "d42f99a12400aa20b34994a0dbb01904a160f0dd918258e5a3930a0054df898d"
     },
-    "sha256": "51792aa44bbca932d223fcf80a75c6878cbd656fe53c41c2a152b43b337c998e"
+    "sha256": "c6741f67a342d035212bb8a647e7cb2b32e16b9afc0800b1cd1840cc5056d0f6"
   },
   "records": [
     {
