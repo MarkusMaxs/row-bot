@@ -9,8 +9,8 @@
     "files": {
       "src/row_bot/api/v1/__init__.py": "f54ba3b1c9555e65c5e715ba99685ae3c795ced6c6c15c9bac2bc3f18a1498a8",
       "src/row_bot/api/v1/document_upload_stream.py": "9d7f480472630d5aa7298503af7b9451607b1856406caa115cb6578bbe700494",
-      "src/row_bot/api/v1/routes.py": "5467782305505567b4faa0ecda98000ff20d534593925a3ec0ef1d501eb9c618",
-      "src/row_bot/api/v1/schemas.py": "0efaefad04641ee40f4030aacb4ba43503cddb5c7230ae05032b639aa53d0e79",
+      "src/row_bot/api/v1/routes.py": "cecba2a1a6d85bd0b1e35fd08c3812d47f5e595f27fc883f541f0b9b6badfedc",
+      "src/row_bot/api/v1/schemas.py": "889bd076d53c1aa860fb82b85454aae6302b53acb29be50387438dd685644ee6",
       "src/row_bot/api/v1/security.py": "d94a1f82917863bd2a6bd7996b268557d742c3a5f0c564dd18c2673c16a63ea3",
       "src/row_bot/application/__init__.py": "139fbb6a5592b9bf600f82c1623c05a4f0b90b793e4d7183cac03951984fff51",
       "src/row_bot/application/app_notices.py": "ad6f7c8e2b2f1d1508d82ee1a82e236d22c5fc0518f1ec871d1d04aaa8ea1338",
@@ -22,7 +22,7 @@
       "src/row_bot/application/artifact_lifecycle_commands.py": "163d45391fd3e499d4f6ab6c706ee26d49d98e5f2e0c7327b9e75cb7d88e1d2b",
       "src/row_bot/application/artifact_sharing.py": "48ebf9e785573186b63194b3733293abb926aa98e4af25b3453b78e381d301dc",
       "src/row_bot/application/attachment_context.py": "b8c463c9f8b599d203890b0bb9dabddc982333333f71d9262c4e453278c0f2ef",
-      "src/row_bot/application/attachments.py": "df8f1539934c041f65a96822065c189363572632683077ab8b3746959fca3887",
+      "src/row_bot/application/attachments.py": "f1ba7a956bf4cabd4694f1010b510d690eb646b61ed9361d6b06f64e48498112",
       "src/row_bot/application/background_process_views.py": "98e7a8bb090f4d3366cb831694b869d7daf23db01dfab1937f55adca7de8f559",
       "src/row_bot/application/buddy_commands.py": "8a4fe09ee9926132cb20c148e8335dcb430b1b7afe79c0e8d4da23890944a0ac",
       "src/row_bot/application/buddy_policy.py": "1f7219a52a883d87140065bee725a244a3ac12cc6cf97909b4c695f267eb2de2",
@@ -114,7 +114,7 @@
       "src/row_bot/application/task_settings_controls.py": "694c9ff0644d94295d75c89c213ca959ab3897cc7ca385a901942a0772ff9734",
       "src/row_bot/application/transcript_blocks.py": "2b7dd080bae0bc4a6843c25105f6fa85f6d78aacd6ad3af9196ecfb622e9ce6d",
       "src/row_bot/application/video_edit_views.py": "fa8cbaf73f35530d6752d29458d6b966073185ce9be73cbf0c3f86a43f72374f",
-      "src/row_bot/application/video_project_views.py": "2ec0fb7a3a893bc04598df3b4f596abf6ff59e8ff12612660b8114981e58a1f6",
+      "src/row_bot/application/video_project_views.py": "e39b27b475c426cf73da00d85c6b3482958e1a4fa09d586c025c90e7502342e5",
       "src/row_bot/application/wiki_commands.py": "cf2fbb84c69bea86e23c55eceffdf9d3279ab500b7e468dda088a86bd073399c",
       "src/row_bot/application/workspace_edit_commands.py": "8610c1ba41dab554cfadb5e864b57895f25f395e92aa5da8083bcac8a0e4f536",
       "src/row_bot/application/workspace_import_commands.py": "9629e80c491792ae737e011e4fea6ece484d628bc0dd8c15fb3fabbc6928668e",
@@ -133,7 +133,7 @@
       "src/row_bot/threads.py": "8ef91738963fadf21d814f9c918c107af876f59141b56a71f7910a4edd3e38c2",
       "tests/helpers/client_platform_fakes.py": "d42f99a12400aa20b34994a0dbb01904a160f0dd918258e5a3930a0054df898d"
     },
-    "sha256": "2ed99d022e129a1b97e3cf85797adf76c34fbd4b58e9ec14dd6113a0abbabe6f"
+    "sha256": "583025a263925b110a8ca25a0a6879e00fa3413a2b3790a22a2a03dd579909f5"
   },
   "records": [
     {

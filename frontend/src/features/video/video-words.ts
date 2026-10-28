@@ -5,6 +5,25 @@ import type {
 } from '../../api/types';
 import { shortTime } from '../shell/conversation-groups';
 
+/** The other shapes a made version can be exported in, and where each fits. */
+export const SHAPES = [
+  { shape: '16:9', label: 'Wide 16:9', fits: 'X, YouTube', limit: 140 },
+  { shape: '9:16', label: 'Tall 9:16', fits: 'Shorts, Reels', limit: 60 },
+  { shape: '1:1', label: 'Square 1:1', fits: 'X, Instagram', limit: 140 },
+  { shape: 'gif', label: 'GIF', fits: 'Anywhere, without sound', limit: 0 },
+] as const;
+
+/** Where a shape fits, and when the video is too long for it: "Shorts, Reels · longer than Shorts allow (1:00)". */
+export function shapeHint(
+  item: (typeof SHAPES)[number],
+  seconds: number,
+): string {
+  if (!item.limit || seconds <= item.limit) return item.fits;
+  const whole = Math.round(item.limit);
+  const limit = `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`;
+  return `${item.fits} · longer than ${item.shape === '9:16' ? 'Shorts allow' : 'X allows'} (${limit})`;
+}
+
 /** The speeds a scene offers; 2× and up show a badge on the video. */
 export const SPEEDS = [0.5, 1, 1.5, 2, 3, 4] as const;
 

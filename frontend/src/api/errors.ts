@@ -1768,6 +1768,10 @@ const CATALOG: Record<string, Entry> = {
     "One of the scenes' videos can't be used any more. Ask Row-Bot to swap it.",
     'none',
   ],
+  video_project_not_made: [
+    'Make this version first: its other shapes come from it.',
+    'none',
+  ],
   video_project_needs_ffmpeg: [
     'Making the video needs ffmpeg. Ask Row-Bot to make it once, and it offers to download ffmpeg.',
     'none',

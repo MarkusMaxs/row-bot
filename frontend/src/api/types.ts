@@ -974,6 +974,10 @@ export interface ClientTransport {
     number: number,
   ): Promise<Wire.VideoProjectView>;
   makeVideoProject?(projectId: string): Promise<Wire.VideoProjectView>;
+  exportVideoProject?(
+    projectId: string,
+    shape: Wire.VideoProjectExport['shape'],
+  ): Promise<Wire.VideoProjectView>;
   scheduledPosts?(signal?: AbortSignal): Promise<Wire.ScheduledPostPage>;
   cancelScheduledPost?(id: string): Promise<Wire.ScheduledPostCancelled>;
   monitorLogs?(limit?: number, signal?: AbortSignal): Promise<Wire.MonitorLogs>;

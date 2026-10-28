@@ -29,6 +29,7 @@ PUBLIC_MIME_TYPES = frozenset(
     {
         "image/png",
         "image/jpeg",
+        "image/gif",
         "video/mp4",
         "audio/mpeg",
         "audio/ogg",
@@ -148,6 +149,8 @@ def register_attachment(conversation_id: str, name: str, data: bytes,
             if data.startswith(b"\x89PNG\r\n\x1a\n")
             else "image/jpeg"
             if data.startswith(b"\xff\xd8\xff")
+            else "image/gif"
+            if data.startswith((b"GIF87a", b"GIF89a"))
             else "video/mp4"
             if len(data) >= 12 and data[4:8] == b"ftyp"
             else "audio/wav"

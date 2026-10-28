@@ -35,6 +35,11 @@ def studio(tmp_path, monkeypatch):
     def run(edit, request):
         from row_bot.application.attachments import register_attachment
 
+        if request.gif:
+            saved = register_attachment(edit.conversation_id, edit.output_name, b"GIF89a" + bytes(32))
+            video_edits._set(edit, status="saved", media_ref=saved["attachment_ref"], mime_type="image/gif")
+            edit.done.set()
+            return
         saved = register_attachment(edit.conversation_id, edit.output_name, _MP4)
         scenes = request.steps[0].scenes
         video_edits._set(edit, status="saved", media_ref=saved["attachment_ref"], mime_type="video/mp4",
@@ -108,6 +113,17 @@ def test_the_panel_reads_changes_and_goes_back_on_a_project(service, studio, mon
             3, "made", first["edit"]["edit_id"]), "going back reuses that version's video"
         older = client.get(f"/api/v1/video-projects/{project.project_id}", params={"version": 2}, headers=headers)
         assert older.json()["number"] == 2 and older.json()["latest"] == 3
+
+        exported = client.post(f"/api/v1/video-projects/{project.project_id}/export", headers=headers,
+                               json={"shape": "gif"})
+        assert exported.status_code == 200, exported.text
+        assert [item["shape"] for item in exported.json()["exports"]] == ["gif"]
+        video_edits.wait(video_edits.get(exported.json()["exports"][0]["edit"]["edit_id"]), 10)
+        gif = client.get(f"/api/v1/video-projects/{project.project_id}", headers=headers).json()["exports"][0]["edit"]
+        assert (gif["status"], gif["mime_type"]) == ("saved", "image/gif"), "a GIF of the version's video"
+        bad = client.post(f"/api/v1/video-projects/{project.project_id}/export", headers=headers,
+                          json={"shape": "4:3"})
+        assert bad.status_code == 422
 
         monkeypatch.setattr(ffmpeg_runtime, "find", lambda: None)
         refused = client.put(f"/api/v1/video-projects/{project.project_id}", headers=headers,

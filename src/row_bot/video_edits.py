@@ -103,6 +103,8 @@ class Request:
     sounds: dict[str, tuple[Any, bytes, str]] = field(default_factory=dict)
     # Read the finished video's sound, black and still stretches (a video project's review card).
     check: bool = False
+    # Make a looping GIF of the one source video instead (a video project's export).
+    gif: bool = False
 
 
 _LOCK = threading.RLock()
@@ -264,6 +266,8 @@ def start(request: Request) -> VideoEdit:
 
 
 def _summary(request: Request) -> str:
+    if request.gif:
+        return f"A GIF of {request.sources[0].label}"
     if request.kind == "frames":
         count = len(request.times) if request.times else max(1, request.count)
         return f"{count} still{'s' if count != 1 else ''} from {request.sources[0].label}"
@@ -392,6 +396,25 @@ def _measure(edit: VideoEdit, ffmpeg: Any, folder: Path) -> None:
     _set(edit, expected_seconds=round(info.duration, 2))
 
 
+def _save_gif(edit: VideoEdit, output: Path) -> None:
+    from row_bot.application.attachments import AttachmentError, register_attachment
+    from row_bot.video_editing import EditError
+
+    _set(edit, status="saving")
+    data = output.read_bytes() if output.is_file() else b""
+    if not data:
+        raise EditError("ffmpeg finished but made no GIF.")
+    try:
+        saved = register_attachment(edit.conversation_id, edit.output_name, data)
+    except AttachmentError:
+        edit.problem = "not_saved"
+        raise EditError("The GIF couldn't be saved to this chat: make the video shorter first.") from None
+    if saved.get("mime_type") != "image/gif":
+        edit.problem = "not_saved"
+        raise EditError("ffmpeg didn't make a GIF.")
+    _set(edit, media_ref=str(saved["attachment_ref"]), mime_type="image/gif", size_bytes=len(data))
+
+
 def _save_video(edit: VideoEdit, output: Path) -> None:
     from row_bot.application.attachments import MAX_ATTACHMENT_BYTES, AttachmentError, register_attachment
     from row_bot.video_editing import EditError
@@ -489,7 +512,13 @@ def _run(edit: VideoEdit, request: Request) -> None:
         folder.mkdir(parents=True, exist_ok=True)
         inputs = _inputs(edit, request, ffmpeg, folder)
         _check(edit)
-        if request.kind == "video":
+        if request.gif:
+            from row_bot.video_editing import gif_arguments
+
+            _set(edit, expected_seconds=round(inputs[0].info.duration, 2))
+            _run_process(edit, ffmpeg, gif_arguments(inputs[0].path, "output.gif"), folder, "Video GIF")
+            _save_gif(edit, folder / "output.gif")
+        elif request.kind == "video":
             sounds: dict[str, str] = {}
             for number, (name, (path, data, suffix)) in enumerate(request.sounds.items(), start=1):
                 if path is None:  # A chat file: copied in, so ffmpeg reads only the edit's own folder.

@@ -73,6 +73,18 @@ def restore_video_project(project_id: str, number: int) -> dict[str, Any] | None
     return video_projects.view(_stored(project), version.number)
 
 
+def export_video_project(project_id: str, shape: str) -> dict[str, Any] | None:
+    project = _project(project_id)
+    if project is None:
+        return None
+    _need_ffmpeg()
+    try:
+        video_projects.export(project, shape)
+    except ProjectError:
+        raise ProjectRefused("video_project_not_made") from None
+    return video_projects.view(_stored(project))
+
+
 def make_video_project(project_id: str, number: int | None = None) -> dict[str, Any] | None:
     project = _project(project_id)
     if project is None or (number is not None and project.version(number) is None):

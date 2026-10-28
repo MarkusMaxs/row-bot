@@ -137,8 +137,10 @@ class Step:
     role: str = ""
     volume: float | None = None
     duck: bool = True
-    # scenes (a video project's, 5.3.1 B3; never the agent's own step): the pieces, in order.
+    # scenes (a video project's, 5.3.1 B3; never the agent's own step): the pieces, in order, and the shape
+    # the video is reframed to ("16:9", "1:1", "9:16"; "" keeps the first input's).
     scenes: list["SceneCut"] = field(default_factory=list)
+    aspect: str = ""
 
 
 @dataclass(frozen=True)
@@ -156,6 +158,7 @@ class SceneCut:
 
 
 CARD_SECONDS = 3.0
+ASPECTS = {"16:9": 16 / 9, "1:1": 1.0, "9:16": 9 / 16}
 
 
 def _number(value: Any, name: str) -> float | None:
@@ -746,15 +749,22 @@ class _Builder:
             factor = step.scenes[index].speed
             if abs(factor - 1) > 1e-3:
                 begin = sum(lengths[:index])
-                self.speed(Step(op="speed", start=begin, end=begin + lengths[index], factor=factor))
+                # Its badge is laid after the reframe, so a tall shape never cuts it off.
+                self.speed(Step(op="speed", start=begin, end=begin + lengths[index], factor=factor, label=False))
         finals = [length / scene.speed for length, scene in zip(lengths, step.scenes)]
         self.marks = [round(sum(finals[:index]), 3) for index in range(len(finals) + 1)]
         for index, scene in enumerate(step.scenes):
-            begin = sum(finals[:index])
-            end = begin + finals[index]
             if scene.zoom:
                 x, y, width, height = scene.zoom
-                self.zoom(Step(op="zoom", start=begin, end=end, x=x, y=y, width=width, height=height))
+                self.zoom(Step(op="zoom", start=self.marks[index], end=self.marks[index + 1], x=x, y=y,
+                               width=width, height=height))
+        if step.aspect:
+            self._reframe(step.aspect, step.scenes)
+        for index, scene in enumerate(step.scenes):
+            begin, end = self.marks[index], self.marks[index + 1]
+            if abs(scene.speed - 1) > 1e-3:
+                badge = Step(op="text", text=speed_words(scene.speed), position="top-right", style="badge")
+                self.video = self.lay(self.video, text_overlay(badge, self.width, self.height), start=begin, end=end)
             if scene.card:
                 card = Step(op="text", text=scene.card, style="title", position="center")
                 self.video = self.lay(self.video, text_overlay(card, self.width, self.height),
@@ -765,6 +775,28 @@ class _Builder:
                                       start=begin, end=end)
             if scene.voice:
                 self.voice_cues.append((begin, scene.voice))
+
+    def _reframe(self, aspect: str, scenes: list[SceneCut]) -> None:
+        """Each scene cropped to the shape around its focus: the middle of its zoom, else the middle of the
+        picture. A shape the video already has changes nothing."""
+        if aspect not in ASPECTS:
+            raise EditError(f"A video's shape is 16:9, 1:1 or 9:16, not {aspect}.")
+        target, w, h = ASPECTS[aspect], self.width, self.height
+        if abs(w / h - target) < 0.01:
+            return
+        cw, ch = (_even(h * target), h) if w / h > target else (w, _even(w / target))
+        cuts = [(self.marks[index], self.marks[index + 1]) for index in range(len(scenes))]
+        videos, _ = self._pieces(cuts, audio=False)
+        for index, scene in enumerate(scenes):
+            fx, fy = ((scene.zoom[0] + scene.zoom[2] / 2, scene.zoom[1] + scene.zoom[3] / 2) if scene.zoom
+                      else (0.5, 0.5))
+            left = int(min(max(0.0, fx * w - cw / 2), w - cw))
+            top = int(min(max(0.0, fy * h - ch / 2), h - ch))
+            out = self.label("v")
+            self.add(f"{videos[index]}crop={cw}:{ch}:{left}:{top},setsar=1{out}")
+            videos[index] = out
+        self._join(videos, [])
+        self.width, self.height = cw, ch
 
     def _amix(self, labels: list[str]) -> str:
         if len(labels) == 1:
@@ -881,6 +913,14 @@ def build_plan(
                 duration=builder.duration, width=builder.width, height=builder.height,
                 has_audio=bool(builder.audio), summary=describe(steps, len(inputs)), outputs=[output],
                 marks=builder.marks)
+
+
+def gif_arguments(source: str, output: str, *, width: int = 480, fps: int = 12) -> list[str]:
+    """One ffmpeg run that makes a looping GIF of a finished video, with its own palette (clear colours)."""
+    graph = (f"[0:v]fps={fps},scale={width}:-2:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];"
+             "[b][p]paletteuse=dither=bayer:bayer_scale=4")
+    return ["-hide_banner", "-nostdin", "-y", *input_arguments(source), "-filter_complex", graph, "-loop", "0",
+            "-progress", "pipe:1", "-nostats", file_argument(output)]
 
 
 def graph_option_for(version: str) -> str:

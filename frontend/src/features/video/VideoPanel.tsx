@@ -32,10 +32,13 @@ import {
   Toggle,
 } from '../../ui/primitives';
 import { shortTime } from '../shell/conversation-groups';
+import { editLive } from '../shell/video-edits';
 import { VideoTimeline } from './VideoTimeline';
 import {
+  SHAPES,
   SPEEDS,
   draftOf,
+  shapeHint,
   isDirty,
   lengthWords,
   statusWords,
@@ -161,7 +164,11 @@ export default function VideoPanel({
           if (!next) return;
           setView(next);
           setFailed('');
-          if (next.status === 'voicing' || next.status === 'rendering')
+          if (
+            next.status === 'voicing' ||
+            next.status === 'rendering' ||
+            next.exports.some((item) => editLive(item.edit))
+          )
             timer = window.setTimeout(read, POLL_MS);
         },
         (cause) => {
@@ -300,11 +307,12 @@ export default function VideoPanel({
     }
   }
 
-  async function download() {
-    if (!view?.edit?.media_ref) return;
-    const name = view.edit.output_name || 'video.mp4';
+  async function download(edit = view?.edit) {
+    if (!edit?.media_ref) return;
+    const name = edit.output_name || 'video.mp4';
+    const reference = edit.media_ref;
     const result = await saveBrowserDownload(
-      () => controller.download(view.edit!.media_ref!),
+      () => controller.download(reference),
       name,
     );
     if (
@@ -464,7 +472,7 @@ export default function VideoPanel({
             <IconButton
               size="sm"
               label="Download"
-              onClick={() => void download()}
+              onClick={() => void download(view.edit)}
             >
               <Download size={16} aria-hidden />
             </IconButton>
@@ -751,6 +759,45 @@ export default function VideoPanel({
               Post to X
             </Button>
           </div>
+          <h3>Other shapes</h3>
+          <ul className="video-exports" aria-label="Other shapes">
+            {SHAPES.filter((item) => item.shape !== view.aspect).map((item) => {
+              const made = view.exports.find(
+                (entry) => entry.shape === item.shape,
+              )?.edit;
+              const hint = shapeHint(item, view.edit?.duration_seconds ?? 0);
+              return (
+                <li key={item.shape} className="video-export">
+                  <span className="video-export-name">
+                    <strong>{item.label}</strong>
+                    <small>{hint}</small>
+                  </span>
+                  {made && editLive(made) ? (
+                    <StatusDot tone="info" pulse label="Making" showLabel />
+                  ) : made?.status === 'saved' ? (
+                    <IconButton
+                      size="sm"
+                      label={`Download ${item.label}`}
+                      onClick={() => void download(made)}
+                    >
+                      <Download size={16} aria-hidden />
+                    </IconButton>
+                  ) : (
+                    <Button
+                      disabled={busy}
+                      onClick={() =>
+                        void act(() =>
+                          controller.exportVideoProject(projectId, item.shape),
+                        )
+                      }
+                    >
+                      {made ? 'Try again' : 'Make'}
+                    </Button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
         </section>
       )}
       <p className="video-panel-foot" aria-live="polite">

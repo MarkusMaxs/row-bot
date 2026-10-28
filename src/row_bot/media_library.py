@@ -18,7 +18,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 Kind = Literal["image", "video", "audio"]
-KINDS: dict[str, Kind] = {"image/png": "image", "image/jpeg": "image", "video/mp4": "video",
+KINDS: dict[str, Kind] = {"image/png": "image", "image/jpeg": "image", "image/gif": "image", "video/mp4": "video",
                           "audio/mpeg": "audio", "audio/ogg": "audio", "audio/wav": "audio",
                           "audio/flac": "audio", "audio/aac": "audio"}
 MAX_TAGS = 12

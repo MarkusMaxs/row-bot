@@ -57,6 +57,12 @@ test('a video Row-Bot made opens beside the chat as scenes, and an edit there is
     'Ready to share',
   );
   await views(page, info, 'video-panel', panel);
+  // The same version in other shapes, each saying where it fits.
+  const shapes = panel.getByRole('list', { name: 'Other shapes' });
+  await expect(shapes.getByRole('listitem')).toHaveCount(4);
+  await expect(shapes).toContainText('Tall 9:16');
+  await expect(shapes).toContainText('Shorts, Reels');
+  await views(page, info, 'video-panel-review', shapes);
 
   // Edit by text: the line changes, a scene moves; nothing is saved until Save.
   const line = panel.getByLabel('Scene 2 line');
