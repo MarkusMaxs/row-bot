@@ -200,6 +200,19 @@ def test_a_recording_that_starts_on_the_small_live_thumbnail_is_still_made_full_
         assert (stream.codec_context.width, stream.codec_context.height) == (1280, 800)
 
 
+def test_a_recording_keeps_where_its_pointer_went_for_another_shape(tmp_path):
+    clock = _Clock(0.0)
+    recorder = PageRecorder(tmp_path / "rec.mp4", max_seconds=60, size_limit=10_000_000, on_end=lambda *_: None,
+                            clock=clock)
+    recorder.started_at = 1.0
+    clock.now = 3.5
+    recorder.pointer(0.25, 0.75, click=True)
+    clock.now = 4.0
+    recorder.pointer(1.4, -2)
+
+    assert recorder.trail == [(2.5, 0.25, 0.75), (3.0, 1.0, 0.0)], "seconds into it, and on the page"
+
+
 @needs_encoder
 def test_a_recording_stops_before_its_video_outgrows_the_chat(tmp_path):
     ended: list[str] = []
