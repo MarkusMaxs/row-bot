@@ -69,10 +69,11 @@ def test_the_panel_reads_changes_and_goes_back_on_a_project(service, studio, mon
     project = video_projects.create(chat, "Launch demo", [
         {"source": "signup.mp4", "end": 3, "line": "First, sign up."},
         {"source": "signup.mp4", "start": 3, "line": "Then pick a plan."}])
-    video_projects.make(project, 1)
 
     with _client(service) as client:
         _, headers = bootstrap(client)
+        # Made once the app is up: its start-up sweep marks an edit still running then as cut short.
+        video_projects.make(project, 1)
         first = _made(client, headers, project.project_id)
         assert (first["status"], first["number"], first["checks_passed"]) == ("made", 1, True)
         assert [(scene["at"], scene["length"], scene["voiced"]) for scene in first["scenes"]] == [
