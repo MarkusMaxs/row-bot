@@ -521,6 +521,9 @@
 .nav-conversation-item[data-activity='attention'] svg[role='img'] {
   color: var(--status-warning-text);
 }
+.nav-waiting {
+  color: var(--text-secondary);
+}
 
 /* Pin and ⋯ appear over the date on hover and keyboard focus. */
 .nav-conversation-actions {

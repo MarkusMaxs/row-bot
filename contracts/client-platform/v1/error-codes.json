@@ -692,6 +692,7 @@
     "voice_session_expired": 410,
     "voice_session_limit": 429,
     "voice_transcript_changed": 409,
+    "wait_unavailable": 404,
     "whisper_model_missing": 409,
     "wiki_article_unavailable": 404,
     "wiki_cancelled": 409,
