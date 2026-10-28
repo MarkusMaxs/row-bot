@@ -1248,10 +1248,12 @@ test('Buddy keeps appearance edits through navigation and serves bundled media w
     await page
       .getByRole('button', { name: 'Toggle navigation', exact: true })
       .click();
+  // Buddy's avatar opens its peek; Settings is there on every device.
+  await navigation.getByRole('button', { name: /^Open / }).click();
   await activateRoute(
     page,
-    navigation.getByRole('button', {
-      name: 'Buddy settings',
+    page.getByRole('dialog').getByRole('button', {
+      name: 'Settings',
       exact: true,
     }),
     { path: '/app-v2/settings/buddy', headingName: 'Buddy' },
@@ -1398,7 +1400,7 @@ test('Buddy plays the saved bundled motion and switches to its still for reduced
       .click();
   await expect(navigation).toBeVisible();
   await expect(
-    navigation.getByRole('button', { name: 'Buddy settings', exact: true }),
+    navigation.getByRole('button', { name: /^Open / }),
   ).toBeVisible();
   const [stillResponse, motionResponse] = await Promise.all([
     bundledStill,

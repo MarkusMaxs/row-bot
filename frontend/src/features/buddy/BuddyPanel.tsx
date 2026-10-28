@@ -489,6 +489,7 @@ export type BuddyPanelProps = Pick<
   BuddyControlsProps,
   | 'scopeKey'
   | 'renderAvatar'
+  | 'renderPortrait'
   | 'renderPackPreview'
   | 'previewUrl'
   | 'companionVisible'
