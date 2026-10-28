@@ -1248,6 +1248,32 @@
 .x-post-media abbr {
   text-decoration: none;
 }
+.x-post-media-remove {
+  margin-inline-start: auto;
+}
+/* Editing a post on its card (G2): the text, its length as X counts it, the files kept. */
+.x-post-edit-text {
+  /* Grows with the post, up to the card's own text height. */
+  field-sizing: content;
+  min-height: 112px;
+  max-height: 20rem;
+  resize: vertical;
+  font-size: var(--text-14);
+  line-height: 21px;
+}
+.x-post-edit-count {
+  color: var(--text-muted);
+  font-size: var(--text-12);
+  font-variant-numeric: tabular-nums;
+}
+.x-post-edit-count[data-over] {
+  color: var(--status-danger-text);
+}
+.x-post-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
 /* Under Auto: why the reviewer asked. Visible but quiet. */
 .approval-card-reviewer {
   display: inline-flex;

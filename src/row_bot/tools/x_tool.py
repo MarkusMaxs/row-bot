@@ -952,7 +952,19 @@ class XTool(BaseTool):
         except (x_posting.XPostError, XAccountChoice) as exc:
             return str(exc)
         target_text = x_posting.read_text(chosen, target) if action == "delete" else ""
-        refusal, line = x_posting.approve(chosen, action, words, target, media, target_text=target_text)
+        edited = False
+        while True:
+            try:
+                refusal, line = x_posting.approve(chosen, action, words, target, media, target_text=target_text)
+                break
+            except x_posting.PostEdited as edit:
+                # The person changed the post on its card (G2): a new card, bound to the edited post.
+                try:
+                    words, _ = x_posting.check_text(action, edit.text, tweet_id)
+                    x_posting.check_length(chosen, action, words)
+                except x_posting.XPostError as exc:
+                    return f"The person edited the post, but it can't go out as edited: {exc} Nothing was sent to X."
+                media, edited = [item for item in media if item.short in edit.kept], True
         if refusal is not None:
             return refusal
         from row_bot.tools.approval_gate import with_approval
@@ -961,6 +973,8 @@ class XTool(BaseTool):
             sent = x_posting.post_as(chosen, action, words, target, media).text
         except x_posting.XPostError as exc:
             sent = str(exc)
+        if edited:
+            sent = f"The person edited the post on its card, then approved it as edited:\n{words}\n\n{sent}"
         return with_approval(line, sent) if line else sent
 
     # ── Engage operations ────────────────────────────────────────────────────

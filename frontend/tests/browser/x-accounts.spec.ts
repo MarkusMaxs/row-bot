@@ -151,6 +151,59 @@ test('the post card names the account and shows the whole text and the picture; 
   await everywhere(page, info, 'x-post-result', result);
 });
 
+test('the post is edited on its card: the text against the account’s limit, a picture taken off, then the edited post asks again (G2)', async ({
+  page,
+}, info) => {
+  await newConversation(page);
+  await send(page, 'n7 post fixture');
+  const card = page.getByRole('complementary', {
+    name: 'Approval required: Post to X as @rowbot_ai?',
+  });
+  await expect(card.getByText(/Row-Bot 5\.3 is out\./)).toBeVisible();
+  await card.getByRole('button', { name: 'Edit the post' }).click();
+  const text = card.getByRole('textbox', {
+    name: 'Edit the post as @rowbot_ai',
+  });
+  await expect(text).toBeFocused();
+  await expect(card.getByText(/^\d+ of 280$/)).toBeVisible();
+  await expect(
+    card.getByRole('button', { name: 'Approve', exact: true }),
+  ).toBeHidden();
+  await everywhere(page, info, 'x-post-edit', card);
+
+  await text.fill(
+    'Row-Bot 5.3.1 is out: edit a post right on its card before it goes to X.',
+  );
+  await card.getByRole('button', { name: 'Remove launch-card.png' }).click();
+  await expect(card.getByText('72 of 280')).toBeVisible();
+  await card.getByRole('button', { name: 'Save edits' }).click();
+  const edited = page.getByRole('complementary', {
+    name: 'Approval required: Post to X as @rowbot_ai?',
+  });
+  // The new card, loaded: the edited text as the post's own, no picture.
+  await expect(
+    edited.getByRole('button', { name: 'Approve', exact: true }),
+  ).toBeEnabled();
+  await expect(edited.locator('.x-post-text')).toHaveText(
+    'Row-Bot 5.3.1 is out: edit a post right on its card before it goes to X.',
+  );
+  await expect(edited.getByText('launch-card.png')).toHaveCount(0);
+  await everywhere(page, info, 'x-post-edited', edited);
+
+  await edited.getByRole('button', { name: 'Approve', exact: true }).click();
+  await expect(
+    transcript(page).getByText(
+      /^Done\. It's live on @rowbot_ai: https:\/\/x\.com\/rowbot_ai\/status\/\d+$/,
+    ),
+  ).toBeVisible();
+  await expect(
+    await openResult(
+      page,
+      /Row-Bot 5\.3\.1 is out: edit a post right on its card/,
+    ),
+  ).toBeVisible();
+});
+
 test('a reply card links the post it answers', async ({ page }, info) => {
   await newConversation(page);
   await send(page, 'n7 reply fixture');

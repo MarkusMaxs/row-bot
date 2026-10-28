@@ -164,6 +164,7 @@ def card(account: XAccount, action: str, text: str, target: str, media: list[Med
         "target_text": target_text[:_MAX_TEXT],
         "media": [{"name": item.name, "size": item.size, "sha256": item.short, "kind": item.kind,
                    "thumbnail": item.thumbnail} for item in media],
+        "limit": _LIMITS.get(account.id, 0),  # How long a post the account may send, when X said (0: unknown).
     }
 
 
@@ -191,14 +192,40 @@ def approval_payload(account: XAccount, action: str, text: str, target: str, med
             "x_post": card(account, action, text, target, media, target_text=target_text)}
 
 
+class PostEdited(Exception):
+    """The person edited the post on its card (G2): ask again with this text and the files they kept."""
+
+    def __init__(self, text: str, kept: list[str]) -> None:
+        super().__init__("The person edited the post.")
+        self.text, self.kept = text, kept
+
+
+def _edited(answer: Any) -> PostEdited | None:
+    edit = answer.get("x_post_edit") if isinstance(answer, dict) else None
+    if not isinstance(edit, dict) or not isinstance(edit.get("text"), str):
+        return None
+    return PostEdited(edit["text"], [str(item) for item in edit.get("media") or []])
+
+
 def approve(account: XAccount, action: str, text: str, target: str, media: list[Media], *,
             target_text: str = "") -> tuple[str | None, str]:
-    """(None, its approval line) when this exact post may go out; else (the refusal, its line)."""
+    """(None, its approval line) when this exact post may go out; else (the refusal, its line).
+
+    Raises PostEdited when the person edited it on the card instead: never an approval of anything.
+    """
     from row_bot.tools.approval_gate import X_POST_RISK, current_approval_mode, resolve_approval_line, with_approval
 
     payload = approval_payload(account, action, text, target, media, target_text=target_text)
+    answers: list[Any] = []
+
+    def ask(asked: dict[str, Any]) -> Any:
+        answers.append(_ask(asked))
+        return answers[-1]
     outcome, line = resolve_approval_line(payload, approval_mode=current_approval_mode(), risks=(X_POST_RISK,),
-                                          approval_callback=lambda asked: _ask(asked))
+                                          approval_callback=ask)
+    edited = _edited(answers[-1]) if answers and outcome == "deny" else None
+    if edited is not None:
+        raise edited
     if outcome == "allow":
         return None, line
     if outcome == "block":

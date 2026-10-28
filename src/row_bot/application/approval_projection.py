@@ -155,9 +155,11 @@ def _x_post_card(post: Mapping[str, Any]) -> dict[str, Any] | None:
         media.append({"name": _text(entry.get("name"), 256), "size": size, "sha256": entry["sha256"],
                       "kind": entry["kind"],
                       "thumbnail": thumbnail if len(thumbnail) <= 32768 and _THUMBNAIL.fullmatch(thumbnail) else ""})
+    limit = post.get("limit")
     return {"account_id": account_id, "username": username, "name": _text(post.get("name"), 80), "action": action,
             "text": post["text"], "target_id": target_id, "target_url": target_url,
-            "target_text": str(post.get("target_text") or "")[:25000], "media": media}
+            "target_text": str(post.get("target_text") or "")[:25000], "media": media,
+            "limit": limit if isinstance(limit, int) and not isinstance(limit, bool) and 0 <= limit <= 25000 else 0}
 
 
 def _setup_card(setup: Mapping[str, Any]) -> dict[str, Any] | None:

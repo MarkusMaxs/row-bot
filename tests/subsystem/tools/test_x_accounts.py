@@ -289,6 +289,59 @@ def test_a_changed_file_asks_again_in_a_paused_conversation(x, monkeypatch, tmp_
     assert "\nPosted as @rowbot_ai: " in done["result"] and len(fake.posts) == 1
 
 
+def test_the_person_edits_a_post_on_its_card_and_approves_the_edited_post(x, monkeypatch, tmp_path):
+    """G2: an edit is never an approval: the paused tool asks again with the edited text and the files kept."""
+    from typing import TypedDict
+
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.graph import END, START, StateGraph
+    from langgraph.types import Command
+
+    fake, tool = x
+    _mode(monkeypatch, "ask")
+    x_accounts.add(fake.sign_in(*ROWBOT))
+    first, second = _picture(tmp_path / "a.png"), _picture(tmp_path / "b.png", "navy")
+
+    class State(TypedDict, total=False):
+        result: str
+
+    def call(_state):
+        return {"result": tool._x_post("post", text="Draft launch post", media_paths=[str(first), str(second)])}
+    graph = StateGraph(State)
+    graph.add_node("x_post", call)
+    graph.add_edge(START, "x_post")
+    graph.add_edge("x_post", END)
+    app = graph.compile(checkpointer=InMemorySaver())
+    config = {"configurable": {"thread_id": "g2"}}
+
+    card = app.invoke({}, config)["__interrupt__"][0].value
+    kept = card["x_post"]["media"][1]["sha256"]
+    again = app.invoke(Command(resume={"x_post_edit": {"text": "Row-Bot 5.3.1 is out.", "media": [kept]}}), config)
+
+    assert fake.posts == [], "an edit sends nothing"
+    edited = again["__interrupt__"][0].value
+    assert edited["x_post"]["text"] == "Row-Bot 5.3.1 is out." and edited["binding"] != card["binding"]
+    assert [item["name"] for item in edited["x_post"]["media"]] == ["b.png"]
+    assert edited["x_post"]["limit"] == 280  # The account's limit, read before the card.
+    done = app.invoke(Command(resume=True), config)
+
+    [sent] = fake.posts
+    assert sent["text"].startswith("Row-Bot 5.3.1 is out.") and len(sent["media_ids"]) == 1
+    assert "The person edited the post on its card, then approved it as edited:\nRow-Bot 5.3.1 is out." in done["result"]
+
+
+def test_an_edit_too_long_for_the_account_sends_nothing(x, person):
+    fake, tool = x
+    asked, answers = person
+    x_accounts.add(fake.sign_in(*ROWBOT))
+    answers.append({"x_post_edit": {"text": "Longer. " * 40, "media": []}})
+
+    result = tool._x_post("post", text="Short", account="@rowbot_ai")
+
+    assert result.startswith("The person edited the post, but it can't go out as edited: That post is 320 characters")
+    assert result.endswith("Nothing was sent to X.") and len(asked) == 1 and _creates(fake) == 0
+
+
 # ── Who approves ─────────────────────────────────────────────────────────────
 
 

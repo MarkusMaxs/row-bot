@@ -1085,6 +1085,7 @@ _STATUS.update(dict.fromkeys(('integration_link_unsupported', 'invalid_upload', 
 _STATUS['upload_too_large'] = 413
 # An answer that doesn't fit Row-Bot's question, or answers sent for an approval (N4).
 _STATUS['question_answer_invalid'] = 422
+_STATUS['approval_edit_invalid'] = 422
 _STATUS['app_not_connected'] = 409  # A workflow template whose app is not connected yet.
 # Pages (N5): gone, not valid, too big, written to too often, or nothing to send.
 _STATUS.update({"chat_page_unavailable": 404, "chat_page_invalid": 422, "chat_page_too_large": 413,
