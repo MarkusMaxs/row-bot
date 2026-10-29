@@ -128,7 +128,7 @@ def test_a_training_rows_targets_start_after_the_persons_message_and_the_note_st
     store = LearningStore(learning_on, clock=clock)
     clock.advance(HOUR)
 
-    compiled = dataset.compile_dataset(store, recipes.load("8gb"), lookup=chats, refresh_vault=False,
+    compiled = dataset.compile_dataset(store, recipes.load("16gb"), lookup=chats, refresh_vault=False,
                                        shape="captured")
 
     rows = {item.thread_id: item.row["messages"] for item in (*compiled.train, *compiled.validation)}
