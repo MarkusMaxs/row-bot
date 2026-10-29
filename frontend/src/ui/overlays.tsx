@@ -26,6 +26,8 @@ type Overlay = {
   /** A palette has no header or footer chrome; Escape closes it. */
   kind?: 'dialog' | 'sheet' | 'drawer' | 'alert' | 'palette';
   confirmLabel?: string;
+  /** The alert's way out when "Cancel" would read as the action itself ("Cancel the run?" › "Keep running"). */
+  cancelLabel?: string;
   onConfirm?: () => void;
   returnFocusTo?: HTMLElement | null;
 };
@@ -350,7 +352,7 @@ export function OverlayProvider({ children }: { children: ReactNode }) {
                     {confirmation ? (
                       <>
                         <Button ref={cancelRef} onClick={() => close()}>
-                          Cancel
+                          {confirmation.cancelLabel ?? 'Cancel'}
                         </Button>
                         <Button
                           variant="danger"
