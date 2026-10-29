@@ -639,7 +639,10 @@ function proofHeaders(proof?: SessionProof): Record<string, string> {
 const budgets = new WeakMap<SessionProof, Map<string, {tokens:number; at:number; waiting:number}>>();
 async function pace(proof: SessionProof | undefined, path: string, method: string, signal?: AbortSignal, body?: unknown): Promise<void> {
   if (!proof) return;
-  const view = /^\/conversations\/[^/?]+(?:\/(?:open|workspace|delegated))?(?:\?|$)/.test(path);
+  // An approval card reads what it asks about: the person is looking at it,
+  // so it never waits behind background reads.
+  const view = /^\/conversations\/[^/?]+(?:\/(?:open|workspace|delegated))?(?:\?|$)/.test(path)
+    || /^\/approvals\/[^/?]+(?:\?|$)/.test(path);
   // Following a computer-use session (about once a second) is observation.
   const observation = path.startsWith('/events') || path.startsWith('/live') || /^\/conversations\/[^/]+\/subscriptions$/.test(path) || /^\/subscriptions\/[^/]+$/.test(path)
     || method === 'GET' && /^\/conversations\/[^/]+\/computer(?:\/preview)?(?:\?|$)/.test(path);

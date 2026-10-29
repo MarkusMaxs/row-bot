@@ -10744,7 +10744,9 @@ def create_router(
     async def approval_view(
         approval_id: str, request: Request, include_summary: bool = False
     ) -> JSONResponse:
-        current = await session(request)
+        # The card the person is looking at, like a conversation view: it does
+        # not wait behind the background reads that a reply sets off.
+        current = await session(request, lane="view")
         view = await call(service.get_approval, approval_id)
         ttl = 300.0
         if view.get("expires_at"):
