@@ -6144,7 +6144,12 @@ def get_agent_graph(enabled_tool_names: list[str] | None = None,
             "forced_resume": force_external_discovery,
         },
     )
-    offered_parents = tuple(sorted({str(entry["parent"]) for entry in eager_core_entries}))
+    # The groups the tool-guide index names (effective_parent_names below): MCP tools come as external ones, so
+    # without "mcp" here the index offered mcp_guide and skill_load refused it.
+    offered = {str(entry["parent"]) for entry in eager_core_entries}
+    if any(record.parent == "mcp" or record.source.startswith("mcp") for record in external_records):
+        offered.add("mcp")
+    offered_parents = tuple(sorted(offered))
     (
         authorized_skill_records,
         active_skill_ids,
