@@ -259,6 +259,15 @@ it('marks what the running turn has read, and offers nothing on it (5.3.1)', () 
   ).not.toBeInTheDocument();
 });
 
+it('says "them" while two messages wait for the running turn', () => {
+  list(waitingFrom(view(item('a', 'queued'), item('b', 'queued')), null), true);
+  expect(
+    screen.getByRole('region', { name: 'Waiting messages' }),
+  ).toHaveTextContent(
+    '2 messages waiting · Row-Bot reads them at its next step',
+  );
+});
+
 it('says so when everything waiting has been read', () => {
   list(waitingFrom(view(item('a', 'steered')), null), true);
   expect(

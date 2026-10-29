@@ -151,7 +151,7 @@ test('ordinary queued messages support edit and removal before one accepted disp
       exact: true,
     });
     await expect(queue).toContainText(
-      '2 messages waiting · sends when Row-Bot finishes',
+      '2 messages waiting · Row-Bot reads them at its next step',
     );
     await expect(queue.getByRole('listitem')).toHaveCount(2);
     // While Row-Bot answers, waiting messages go by themselves.

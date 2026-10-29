@@ -203,7 +203,10 @@ export default function WaitingMessages({
               : `${count} messages waiting`}
         </strong>
         {running && count > 0 && (
-          <span> · Row-Bot reads it at its next step</span>
+          <span>
+            {' · Row-Bot reads '}
+            {count === 1 ? 'it' : 'them'} at its next step
+          </span>
         )}
       </p>
       <ol className="waiting-message-list">
