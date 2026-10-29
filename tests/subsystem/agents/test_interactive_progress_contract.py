@@ -45,8 +45,14 @@ def _prompt_for(agent, *, surface: str, selected_mode: str = "agent", channel_st
             HumanMessage(content="Please do a multi-step check."),
         ]
     })
+    def text(content) -> str:
+        # The system prompt is a string, or blocks with cache markers when the provider caches it.
+        if isinstance(content, list):
+            return "\n".join(str(block.get("text", "")) if isinstance(block, dict) else str(block) for block in content)
+        return str(content or "")
+
     return "\n".join(
-        str(getattr(message, "content", ""))
+        text(getattr(message, "content", ""))
         for message in result["llm_input_messages"]
         if getattr(message, "type", "") == "system"
     )
