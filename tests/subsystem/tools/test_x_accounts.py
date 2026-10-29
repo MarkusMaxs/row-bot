@@ -704,6 +704,75 @@ def test_a_picture_goes_up_through_xs_v2_upload_and_a_video_waits_for_its_proces
     assert [post["media_ids"] for post in fake.posts] == [[image_id], [video_id]]
 
 
+@pytest.fixture
+def chats(tmp_path, monkeypatch):
+    """Two chats with real attachment storage in the test's folder, as Library › Media reads them; the tool runs in
+    the second."""
+    import sqlite3
+
+    from row_bot import threads, tool_outputs
+
+    monkeypatch.setattr(threads, "DB_PATH", str(tmp_path / "threads.db"))
+    monkeypatch.setattr(threads, "_MEDIA_DIR", tmp_path / "media")
+    threads._ensure_thread_db()
+    with sqlite3.connect(threads.DB_PATH) as connection:
+        connection.executemany("INSERT INTO thread_meta(thread_id,name) VALUES(?,?)",
+                               [("growth-assets", "Growth | Assets"), ("growth-x", "Growth | X content")])
+    monkeypatch.setattr(tool_outputs, "current_thread_id", lambda: "growth-x")
+
+
+def test_a_post_attaches_a_library_item_by_its_reference_or_a_chat_file_by_its_name(x, person, chats, tmp_path):
+    """29 Oct: the growth run's screenshots were in Library › Media, but x_post took only file paths."""
+    from row_bot.application.attachments import register_attachment
+
+    fake, tool = x
+    asked, _ = person
+    x_accounts.add(fake.sign_in(*ROWBOT))
+    screenshot = _picture(tmp_path / "a.png").read_bytes()
+    card = _picture(tmp_path / "b.png", "navy").read_bytes()
+    shot = register_attachment("growth-assets", "screenshot-2026-10-29-115700.png", screenshot)
+    register_attachment("growth-x", "launch-card.png", b"an older card")
+    register_attachment("growth-x", "launch-card.png", card)  # The newest with the name is the one meant.
+
+    by_ref = tool._x_post("post", text="Memory that lasts", media_paths=[shot["attachment_ref"]],
+                          account="@rowbot_ai")
+    by_name = tool._x_post("post", text="Launch", media_paths=["launch-card.png"], account="@rowbot_ai")
+
+    assert "Posted as @rowbot_ai" in by_ref and "Posted as @rowbot_ai" in by_name
+    shown = [payload["x_post"]["media"] for payload in asked]
+    assert [(item["name"], item["sha256"]) for [item] in shown] == [
+        ("screenshot-2026-10-29-115700.png", hashlib.sha256(screenshot).hexdigest()[:12]),
+        ("launch-card.png", hashlib.sha256(card).hexdigest()[:12])]
+    assert [post["media_ids"] for post in fake.posts] == [[media_id] for media_id in fake.uploaded]
+    assert str(tmp_path) not in json.dumps(asked)
+
+    missing = tool._x_post("post", text="Nothing", media_paths=["chart.png"], account="@rowbot_ai")
+    assert missing == ("chart.png isn't a file Row-Bot can read, a file in this chat or a Library › Media item "
+                       "(media_find gives its reference), so nothing was posted.")
+    assert len(asked) == 2 and _creates(fake) == 2
+
+
+def test_a_scheduled_post_finds_its_library_item_again_at_its_time(x, person, notices, chats, tmp_path):
+    from datetime import datetime, timedelta
+
+    from row_bot.application.attachments import register_attachment
+
+    fake, tool = x
+    x_accounts.add(fake.sign_in(*ROWBOT))
+    shot = register_attachment("growth-assets", "screenshot-2026-10-29-115700.png",
+                               _picture(tmp_path / "a.png").read_bytes())
+    when = (datetime.now() + timedelta(hours=1)).replace(second=0, microsecond=0)
+
+    tool._x_post("post", text="At noon", media_paths=[shot["attachment_ref"]], account="@rowbot_ai",
+                 post_at=when.isoformat(timespec="minutes"))
+
+    [waiting] = x_posting.scheduled_posts()
+    assert [item["name"] for item in waiting["media"]] == ["screenshot-2026-10-29-115700.png"]
+    assert str(tmp_path) not in json.dumps(waiting)
+    [sent] = x_posting.send_due(when)
+    assert sent["status"] == "posted" and fake.posts[0]["media_ids"] == list(fake.uploaded)
+
+
 def test_an_account_connected_before_pictures_is_asked_to_reconnect_before_any_card(x, person, tmp_path):
     from tests.helpers.fake_x_api import OLD_SCOPE
 

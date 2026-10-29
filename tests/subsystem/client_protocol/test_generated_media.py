@@ -45,6 +45,23 @@ def test_generated_outputs_use_owned_opaque_refs_and_leave_original_video(conver
     assert generated_media.capture_generated_media("fixture", cache) == []
 
 
+def test_a_shown_picture_keeps_the_name_its_tool_gave_it(conversation):
+    """A screenshot is saved as screenshot-<time>.png, so a later step can tell it from another picture."""
+    png = base64.b64encode(b"\x89PNG\r\n\x1a\nfixture").decode()
+    jpeg = base64.b64encode(b"\xff\xd8\xfffixture").decode()
+    named = AttachmentExecutionCaches("fixture", pending_image=png,
+                                      pending_image_name="screenshot-2026-10-29-115700.png")
+    wrong_suffix = AttachmentExecutionCaches("fixture", pending_image=jpeg, pending_image_name="screenshot-1.png")
+    unnamed = AttachmentExecutionCaches("fixture", pending_image=png)
+
+    refs = [generated_media.capture_generated_media("fixture", cache)[0]["payload"]["media_ref"]
+            for cache in (named, wrong_suffix, unnamed)]
+
+    assert [attachments.read_attachment(ref)[0]["name"] for ref in refs] == [
+        "screenshot-2026-10-29-115700.png", "screenshot-1.jpg", "generated-image.png"]  # The bytes decide the type.
+    assert named.pending_image_name == ""
+
+
 def test_oversized_video_preflight_never_reads_or_deletes_source(conversation, monkeypatch):
     source = conversation / "fixture.mp4"
     data = b"\x00\x00\x00\x18ftypisom" + b"fixture"

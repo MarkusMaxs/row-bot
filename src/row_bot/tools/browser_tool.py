@@ -799,10 +799,12 @@ def browser_screenshot(full_page: bool = False) -> str:
         return _failure(exc)
     if image is None:
         return words
-    if not _show_image(image):
+    # Its own name, so a later step (x_post, media_find) can tell one screenshot from another.
+    name = f"screenshot-{datetime.now():%Y-%m-%d-%H%M%S}" + (".png" if image.startswith(b"\x89PNG") else ".jpg")
+    if not _show_image(image, name):
         return "The screenshot was taken but couldn't be shown in the chat."
     _keep_picture(session, thread_id)
-    return f"{words} Saved to this chat's files and shown to the person."
+    return f"{words} Saved to this chat's files as {name} and shown to the person."
 
 
 def browser_viewport(preset: str, device_scale: float | None = None) -> str:
@@ -821,7 +823,7 @@ def browser_viewport(preset: str, device_scale: float | None = None) -> str:
         return _failure(exc)
 
 
-def _show_image(image: bytes) -> bool:
+def _show_image(image: bytes, name: str = "") -> bool:
     """Show a picture in the chat and save it to the conversation's files, as a generated image is."""
 
     import base64
@@ -829,7 +831,7 @@ def _show_image(image: bytes) -> bool:
     try:
         from row_bot.tools.image_gen_tool import _set_pending_image
 
-        _set_pending_image(base64.b64encode(image).decode("ascii"))
+        _set_pending_image(base64.b64encode(image).decode("ascii"), name)
         return True
     except Exception:
         return False

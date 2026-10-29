@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import io
+import re
 
 import pytest
 
@@ -227,20 +228,24 @@ def test_back_to_desktop_is_a_desktop_window_again_and_bad_sizes_are_refused(eng
 
 
 def test_the_screenshot_tool_shows_the_picture_in_the_chat_without_asking(engines, monkeypatch):
-    shown: list[str] = []
+    shown: list[tuple[str, str]] = []
     asked: list[dict] = []
     manager = BrowserSessionManager()
     monkeypatch.setattr(browser_tool, "_session_manager", manager)
     monkeypatch.setattr(browser_tool, "_get_thread_id", lambda: "chat")
-    monkeypatch.setattr("row_bot.tools.image_gen_tool._set_pending_image", shown.append)
+    monkeypatch.setattr("row_bot.tools.image_gen_tool._set_pending_image",
+                        lambda value, name="": shown.append((value, name)))
     monkeypatch.setattr(approval_gate, "current_approval_mode", lambda: "block")  # Even on Block.
     monkeypatch.setattr("langgraph.types.interrupt", lambda payload: asked.append(payload) or True)
     page = _Page("http://localhost:5173/")
     engines(page, manager.get_session("chat"))
 
     result = browser_tool.browser_screenshot(full_page=False)
-    assert result.endswith("Saved to this chat's files and shown to the person.")
-    assert [base64.b64decode(value) for value in shown] == [_PNG]
+    [(value, name)] = shown
+    assert base64.b64decode(value) == _PNG
+    # Its own name, so a later step can attach this screenshot and not another.
+    assert re.fullmatch(r"screenshot-\d{4}-\d{2}-\d{2}-\d{6}\.png", name)
+    assert result.endswith(f"Saved to this chat's files as {name} and shown to the person.")
     assert browser_tool.browser_viewport("tablet").startswith("The page now shows at tablet size")
     assert asked == []
 

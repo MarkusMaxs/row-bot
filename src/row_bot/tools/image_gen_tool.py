@@ -175,7 +175,7 @@ def _execution_image_cache() -> dict[str, bytes]:
     return tool_cache("images", _image_cache)
 
 
-def _set_pending_image(value: str) -> None:
+def _set_pending_image(value: str, name: str = "") -> None:
     from row_bot.application.attachment_context import current_caches
     global _last_generated_image
     if _strict_output.get() is not None:
@@ -186,7 +186,7 @@ def _set_pending_image(value: str) -> None:
     if caches is None:
         _last_generated_image = value
     else:
-        caches.pending_image = value
+        caches.pending_image, caches.pending_image_name = value, name
 
 
 def get_and_clear_last_image() -> str | None:
@@ -196,7 +196,7 @@ def get_and_clear_last_image() -> str | None:
     caches = current_caches()
     if caches is not None:
         img = caches.pending_image
-        caches.pending_image = None
+        caches.pending_image, caches.pending_image_name = None, ""
         return img
     img = _last_generated_image
     _last_generated_image = None
