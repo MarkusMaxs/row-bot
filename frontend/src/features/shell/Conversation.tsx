@@ -159,6 +159,11 @@ import {
   type CardActions,
 } from './TranscriptCards';
 import type { RecoveryAction } from './turn-errors';
+import {
+  answerQuestion,
+  readQuestion,
+  waitingApproval,
+} from './answer-question';
 import { modelRefName, splitModelLabel } from './model-choices';
 
 const EMPTY_ROWS: readonly TranscriptRow[] = [];
@@ -390,6 +395,8 @@ export default function Conversation({
     return () => abort.abort();
   }, [controller, settledIdentity]);
   const [busy, setBusy] = useState(false);
+  // A message answering Row-Bot's waiting question is on its way.
+  const answeringQuestion = useRef(false);
   const [error, setErrorState] = useState<{
     message: string;
     action?: ErrorAction;
@@ -1607,8 +1614,22 @@ export default function Conversation({
     keepTargets = false,
     attachments: typeof draft.attachments = [],
     retry = false,
+    questionChecked = false,
   ) {
     const outgoing = example ? { text: example, attachments } : draft;
+    // A message typed while Row-Bot's turn waits on one question answers it,
+    // in the person's own words ("done, signed in"), and the turn goes on.
+    const waiting = example || questionChecked ? null : waitingApproval(state);
+    if (
+      id &&
+      waiting &&
+      outgoing.text.trim() &&
+      !outgoing.attachments.length &&
+      outgoing.text.trim().length <= 500
+    ) {
+      void answerOrSend(waiting, outgoing.text.trim(), keepTargets, retry);
+      return;
+    }
     if (
       !id ||
       !outgoing.text.trim() ||
@@ -1677,6 +1698,35 @@ export default function Conversation({
     const text = outgoing.text;
     const selectedVersion = controller.getSelectionVersion();
     void dispatch(text, targets, outgoing, selectedVersion, retry);
+  }
+  /** The waiting approval is one question: the message answers it; else it goes as usual. */
+  async function answerOrSend(
+    approvalId: string,
+    text: string,
+    keepTargets: boolean,
+    retry: boolean,
+  ) {
+    // Not gated on busy: the turn that asked is still the composer's send.
+    if (!id || answeringQuestion.current) return;
+    const target = id;
+    answeringQuestion.current = true;
+    let answered = false;
+    try {
+      const asked = await readQuestion(controller, approvalId);
+      if (asked) {
+        await answerQuestion(controller, asked, { other: text });
+        const current = controller.getDraft(target);
+        controller.setDraft(target, { ...current, text: '' });
+        setError('');
+        answered = true;
+      }
+    } catch (cause) {
+      setError(clientError(cause).message);
+      answered = true;
+    } finally {
+      answeringQuestion.current = false;
+    }
+    if (!answered) send(undefined, keepTargets, [], retry, true);
   }
   const sendFirstPrompt = useEffectEvent(() => send());
   useEffect(() => {

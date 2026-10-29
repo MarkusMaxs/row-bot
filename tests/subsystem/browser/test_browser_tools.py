@@ -2,7 +2,7 @@
 
 Row-Bot never types a password, one-time code or card number. Paying, sending, deleting and the
 rest ask by the approval level: Ask asks the person, Auto the reviewer first, Hands-off runs it,
-Block refuses. While the person has control the agent waits. An address on this computer opens
+Block refuses. The page is shared: while the person uses it the agent waits. An address on this computer opens
 once allowed in that chat; the local network and Row-Bot itself never do. Nothing launches a
 browser: the engine's page work is a fake that records what would have run.
 """
@@ -31,7 +31,7 @@ NEXT = {"role": "button", "name": "Next", "url": "https://www.homeserve.co.uk/cl
 
 
 class FakeEngine(BrowserEngine):
-    """The real engine's grants, control and pane state; page work is recorded, not run."""
+    """The real engine's grants, the person's use of the page and pane state; page work is recorded, not run."""
 
     def __init__(self, state) -> None:
         super().__init__()
@@ -175,29 +175,56 @@ def test_uploading_a_file_asks_and_names_it(browser, monkeypatch):
     assert browser.acts == [("conversation-a", "Uploading leak.jpg")]
 
 
-# ── The person's control ──────────────────────────────────────────────────────
+# ── The shared page: the person uses it whenever they like ─────────────────────
 
 
-def test_while_the_person_has_control_the_agent_waits_then_carries_on(browser):
+@pytest.fixture
+def page_open(browser, monkeypatch):
+    """A page open in the chat: the person's input is played (recorded), not refused."""
+
+    monkeypatch.setattr(BrowserEngine, "running", property(lambda self: True))
+    browser.engine._chat("conversation-a").active = SimpleNamespace(page=None)
+    played: list[list[dict]] = []
+    monkeypatch.setattr(browser.engine, "_run", lambda job, **_kw: played.append(True) or {"status": "ok",
+                                                                                            "copied": ""})
+    return played
+
+
+def test_hovering_never_makes_row_bot_wait_and_the_person_is_never_refused(browser, page_open):
+    engine = browser.engine
+    move = {"type": "mouse", "action": "move", "x": 10, "y": 10}
+    assert engine.person_input("conversation-a", [move, move])["status"] == "ok"
+    assert engine.person_still_for("conversation-a") == float("inf")  # Hovering isn't using the page.
+    # Mid-action too: the person is never told to wait or take anything over.
+    engine._chat("conversation-a").acting = 'Clicking button "Next"'
+    assert engine.person_input("conversation-a", [{"type": "key", "action": "down", "key": "a"}])["status"] == "ok"
+    assert engine.person_still_for("conversation-a") < 1
+    assert len(page_open) == 2
+
+
+def test_while_the_person_uses_the_page_the_agent_waits_until_they_are_still(browser, page_open, monkeypatch):
+    monkeypatch.setattr(service_module, "PERSON_STILL_SECONDS", 0.4)
     browser.targets["e2"] = NEXT
-    browser.engine.take_control("conversation-a")
+    engine = browser.engine
+    engine.person_input("conversation-a", [{"type": "mouse", "action": "down", "x": 5, "y": 5}])
     waiting: list[str] = []
 
-    def give_back() -> None:
-        time.sleep(0.3)
-        waiting.append(browser.engine.pane_state("conversation-a")["waiting"])
-        browser.engine.give_back("conversation-a")
+    def look() -> None:
+        time.sleep(0.15)
+        waiting.append(engine.pane_state("conversation-a")["waiting"])
 
-    threading.Thread(target=give_back).start()
+    threading.Thread(target=look).start()
+    started = time.monotonic()
     result = _tool("browser_click", ref="e2")
 
-    assert waiting == ["Waiting for you to give back control"]
-    assert result.endswith(": done") and browser.engine.pane_state("conversation-a")["waiting"] == ""
+    assert waiting == ["Waiting while you use the page"]
+    assert time.monotonic() - started >= 0.2
+    assert result.endswith(": done") and engine.pane_state("conversation-a")["waiting"] == ""
 
 
-def test_stop_ends_the_wait_for_control(browser):
+def test_stop_ends_the_wait_while_the_person_uses_the_page(browser, page_open):
     browser.targets["e2"] = NEXT
-    browser.engine.take_control("conversation-a")
+    browser.engine.person_input("conversation-a", [{"type": "key", "action": "down", "key": "a"}])
     scope = CancellationScope()
     threading.Timer(0.2, scope.cancel).start()
     with use_cancellation_scope(scope):
@@ -205,13 +232,9 @@ def test_stop_ends_the_wait_for_control(browser):
     assert result == service_module.STOPPED and browser.acts == []
 
 
-def test_the_person_using_the_page_takes_control_but_not_mid_action(browser):
-    engine = browser.engine
-    engine._chat("conversation-a").acting = 'Clicking button "Next"'
-    assert engine.person_input("conversation-a", [{"type": "key", "action": "down", "key": "a"}]) == "agent_acting"
-    assert not engine.person_has_control("conversation-a")
-    engine._chat("conversation-a").acting = ""
-    assert engine.person_input("conversation-a", [{"type": "key", "action": "down", "key": "a"}]) == "no_page"
+def test_without_a_page_the_persons_input_has_nothing_to_play(browser):
+    result = browser.engine.person_input("conversation-a", [{"type": "key", "action": "down", "key": "a"}])
+    assert result == {"status": "no_page", "copied": ""}
 
 
 # ── Addresses on this computer (F4) ───────────────────────────────────────────

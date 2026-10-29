@@ -276,9 +276,7 @@ def _builtin(
         "created_from_workflow_id": "",
         "owner_workspace_id": "",
         "model_policy_json": _default_model_policy(),
-        # Default (the orchestrator) hands work to helpers as a chat without a profile does; workflows run
-        # under it. Specialists don't; nesting is bounded by max_spawn_depth either way.
-        "tool_policy_json": _tool_policy(capability, allow_delegation=capability == "orchestrator"),
+        "tool_policy_json": _tool_policy(capability),
         "skill_policy_json": _skill_policy(skills_override=skills_override),
         "context_policy_json": _context_policy(context_mode),
         "workspace_policy_json": _workspace_policy(
