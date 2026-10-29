@@ -114,20 +114,25 @@ test('sending to your devices shows the download here and on your phone, with a 
     await expect(
       transcript.getByText(/Sent: q3-report.pdf is on your devices/),
     ).toBeVisible();
-    await everywhere(page, info, 'sent-to-devices', () =>
-      card.scrollIntoViewIfNeeded(),
-    );
     // This device has the chat open: the card is the news, no notice.
     await expect(page.getByText('Row-Bot sent you q3-report.pdf')).toHaveCount(
       0,
     );
 
-    // The phone, in another chat: "Row-Bot sent you …" with Open.
+    // The phone, in another chat: "Row-Bot sent you …" with Open. It shows
+    // for six seconds: look for it now and hold it, before the screenshots
+    // here, which can take longer than that (seen on CI).
     const notice = phone
       .locator('.toast')
       .filter({ hasText: 'Row-Bot sent you q3-report.pdf' });
     await expect(notice).toBeVisible({ timeout: 15_000 });
     await notice.hover(); // Held while it's looked at.
+    await everywhere(page, info, 'sent-to-devices', () =>
+      card.scrollIntoViewIfNeeded(),
+    );
+    await expect(page.getByText('Row-Bot sent you q3-report.pdf')).toHaveCount(
+      0,
+    );
     await views(phone, info, 'device-notice-phone', () => notice.hover());
     await notice.getByRole('button', { name: 'Open' }).click();
     await expect(phone).toHaveURL(
