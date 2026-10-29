@@ -347,7 +347,8 @@ class _XPostInput(BaseModel):
     media_paths: Optional[List[str]] = Field(
         default=None,
         description=(
-            "Optional list of file paths for media to attach. "
+            "Optional media to attach, each a file in this chat by its name, a Library › Media item by its "
+            "reference (from media_find), or a file path. "
             "Supports pictures (JPEG, PNG, WebP, GIF) and videos (MP4, MOV). "
             "Max 4 pictures, or 1 video or GIF, per post."
         ),
@@ -981,7 +982,10 @@ class XTool(BaseTool):
             words, target = x_posting.check_text(action, text, tweet_id)
             chosen = x_accounts.resolve(account, required=True)
             x_posting.check_length(chosen, action, words)
-            media = x_posting.media_facts(media_paths) if action != "delete" else []
+            from row_bot.tool_outputs import current_thread_id
+
+            media = (x_posting.media_facts(media_paths, str(current_thread_id() or "")) if action != "delete"
+                     else [])
             if media and not x_accounts.can_post_media(chosen):
                 # Before any card: the person reconnects once, then the post with its pictures can go.
                 return (f"{x_accounts.media_reconnect(chosen)} Ask the person (ask_person) to do that, with Done as "

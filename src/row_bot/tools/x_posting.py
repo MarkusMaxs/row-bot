@@ -70,6 +70,7 @@ class Media:
     mime: str
     kind: str  # image, gif or video
     thumbnail: str = ""  # A small JPEG as a data URL, for the card; "" for a video.
+    source: str = ""  # What finds it again at its time slot: its path, or its Library › Media reference.
 
     @property
     def short(self) -> str:
@@ -120,20 +121,39 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def media_facts(paths: list[str] | None) -> list[Media]:
+def _find(value: str, conversation_id: str) -> tuple[Path, str, str, str]:
+    """A file to attach: its path, name, MIME type and what finds it again. It is a file on this computer, a
+    Library › Media item by its reference (media_find), or a file in this chat by its name (the newest)."""
+    from row_bot import media_library, media_sources
+
+    path = Path(value).expanduser()
+    if path.is_file():
+        return path, path.name, mimetypes.guess_type(path.name)[0] or "", str(path)
+    ref = value if media_library.REF.fullmatch(value) else ""
+    if not ref and conversation_id and not ("/" in value or "\\" in value):
+        found = media_sources.chat_file(conversation_id, value)
+        ref = found.ref if found is not None else ""
+    if ref:
+        try:
+            facts, stored = media_library.locate(ref)
+        except media_library.MediaError:
+            raise XPostError(f"{value} isn't in Library › Media any more, so nothing was posted.") from None
+        return stored, str(facts["name"]), str(facts["mime_type"]), ref
+    raise XPostError(f"{path.name or value} isn't a file Row-Bot can read, a file in this chat or a Library › Media "
+                     "item (media_find gives its reference), so nothing was posted.")
+
+
+def media_facts(paths: list[str] | None, conversation_id: str = "") -> list[Media]:
     """Each file to attach: its name, size, SHA-256 and kind (with a thumbnail for a picture)."""
     found: list[Media] = []
     for raw in paths or []:
-        path = Path(str(raw)).expanduser()
-        if not path.is_file():
-            raise XPostError(f"{path.name or raw} isn't a file Row-Bot can read, so nothing was posted.")
-        mime = mimetypes.guess_type(path.name)[0] or ""
+        path, name, mime, source = _find(str(raw).strip(), conversation_id)
         if mime not in _IMAGE_TYPES | _SINGLE_TYPES:
-            raise XPostError(f"X takes JPEG, PNG, WebP or GIF pictures and MP4 or MOV videos; {path.name} isn't "
+            raise XPostError(f"X takes JPEG, PNG, WebP or GIF pictures and MP4 or MOV videos; {name} isn't "
                              "one, so nothing was posted.")
         kind = "video" if mime.startswith("video/") else "gif" if mime == "image/gif" else "image"
-        found.append(Media(path, path.name[:256], path.stat().st_size, _sha256(path), mime, kind,
-                           _thumbnail(path) if kind != "video" else ""))
+        found.append(Media(path, name[:256], path.stat().st_size, _sha256(path), mime, kind,
+                           _thumbnail(path) if kind != "video" else "", source))
     singles = [item for item in found if item.kind != "image"]
     if len(found) > _MAX_IMAGES or (singles and len(found) > 1):
         raise XPostError("A post takes up to four pictures, or one video or GIF, so nothing was posted.")
@@ -320,7 +340,8 @@ def schedule(account: XAccount, action: str, text: str, target: str, media: list
     """Keep an approved post for its time slot; the scheduler sends it then."""
     item = {"id": f"xs-{uuid.uuid4().hex[:12]}", "account_id": account.id, "action": action, "text": text,
             "target": target, "post_at": post_at.isoformat(timespec="minutes"),
-            "media": [{"path": str(entry.path), "sha256": entry.sha256} for entry in media],
+            "media": [{"path": entry.source or str(entry.path), "sha256": entry.sha256, "name": entry.name}
+                      for entry in media],
             "created_at": _stamp(_now()), "status": "scheduled"}
     with _SCHEDULE_LOCK:
         _save_scheduled([*_scheduled(), item])
@@ -346,13 +367,13 @@ def scheduled_posts() -> list[dict[str, Any]]:
         account = accounts.get(str(item.get("account_id")))
         files = []
         for entry in item.get("media") or []:
-            path = Path(str(entry.get("path") or ""))
             try:
+                path, name, mime, _ = _find(str(entry.get("path") or ""), "")
                 size = path.stat().st_size
-            except OSError:
-                size = 0
-            mime = mimetypes.guess_type(path.name)[0] or ""
-            files.append({"name": path.name[:256], "size": size, "sha256": str(entry.get("sha256") or "")[:12],
+            except (XPostError, OSError):
+                name = str(entry.get("name") or Path(str(entry.get("path") or "")).name)
+                size, mime = 0, mimetypes.guess_type(name)[0] or ""
+            files.append({"name": name[:256], "size": size, "sha256": str(entry.get("sha256") or "")[:12],
                           "kind": "video" if mime.startswith("video/") else "gif" if mime == "image/gif" else "image"})
         shown.append({"id": item["id"], "account_id": str(item.get("account_id") or ""),
                       "username": account.username if account else "", "action": str(item.get("action") or "post"),

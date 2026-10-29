@@ -238,7 +238,7 @@ def _kind_of(name: str, mime: str = "") -> Kind | None:
     return None
 
 
-def _chat_file(conversation_id: str, name: str) -> Media | None:
+def chat_file(conversation_id: str, name: str) -> Media | None:
     from row_bot.application.attachments import AttachmentError, list_conversation_files
 
     wanted = name.strip().casefold()
@@ -295,7 +295,7 @@ def resolve(value: str, conversation_id: str) -> list[Media]:
             if kind is None:
                 raise SourceError(f"{text} isn't a video or a picture.")
             return [Media(label=_relative(place.root, str(path)), kind=kind, path=path)]
-    found = _chat_file(conversation_id, text)
+    found = chat_file(conversation_id, text)
     if found is not None:
         return [found]
     looks_like_path = "/" in text or "\\" in text or Path(text).is_absolute()
