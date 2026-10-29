@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import {
   listConversations,
   getConversation,
+  getApproval,
   saveDraft,
   sendConversationCommand,
   cancelUpload,
@@ -356,6 +357,41 @@ it('keeps a conversation view responsive while library continuation waits', asyn
   );
   const view = await getConversation('', proof, 'conversation-a');
   expect(view.id).toBe('conversation-a');
+  expect(fetcher).toHaveBeenCalledTimes(21);
+  abort.abort();
+  await vi.runAllTimersAsync();
+  await queries;
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it('loads a new approval card at once while the reads a reply sets off wait', async () => {
+  vi.useFakeTimers();
+  const fetcher = vi.fn(async (url: string) => ({
+    ok: true,
+    json: async () =>
+      url.includes('/approvals/')
+        ? {
+            id: 'approval-b',
+            status: 'pending',
+            revision: '0',
+            policy_revision: '1',
+            nonce: 'synthetic'.repeat(4),
+          }
+        : { items: [], has_more: false, next_cursor: null },
+  }));
+  vi.stubGlobal('fetch', fetcher);
+  const proof: SessionProof = {
+    client_session_id: crypto.randomUUID(),
+    csrf_token: 'synthetic'.repeat(8),
+  };
+  const abort = new AbortController();
+  const queries = Promise.allSettled(
+    Array.from({ length: 25 }, () =>
+      listConversations('', proof, 50, undefined, abort.signal),
+    ),
+  );
+  const approval = await getApproval('', proof, 'approval-b');
+  expect(approval.id).toBe('approval-b');
   expect(fetcher).toHaveBeenCalledTimes(21);
   abort.abort();
   await vi.runAllTimersAsync();
