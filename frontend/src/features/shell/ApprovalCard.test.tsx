@@ -7,6 +7,7 @@ import {
   within,
 } from '@testing-library/react';
 import { beforeEach, expect, it, vi } from 'vitest';
+import { clientError } from '../../api/errors';
 import ApprovalCard from './ApprovalCard';
 import { usePendingApprovals } from './pending-approvals';
 
@@ -77,6 +78,35 @@ async function renderCard() {
     expect(screen.getByRole('button', { name: 'Approve' })).toBeEnabled(),
   );
 }
+
+it('answers a card left open past its five-minute nonce, with a fresh one, only while the approval is unchanged (#631)', async () => {
+  await renderCard();
+  // Read later: the card's nonce ran out, the approval still waits as shown.
+  intent.mockRejectedValueOnce(clientError({ code: 'approval_expired' }));
+  approval.mockResolvedValue({ ...view, nonce: 'nonce-b' });
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+  });
+  expect(intent.mock.calls.map((call) => call[2].nonce)).toEqual([
+    'nonce-a',
+    'nonce-b',
+  ]);
+  expect(intent.mock.calls[1][3]).toBe('3');
+  expect(await screen.findByText('Approval submitted.')).toBeVisible();
+});
+
+it('never re-sends an answer to an approval that changed after the person read it (#631)', async () => {
+  await renderCard();
+  intent.mockRejectedValueOnce(clientError({ code: 'approval_expired' }));
+  approval.mockResolvedValue({ ...view, revision: '4', nonce: 'nonce-b' });
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+  });
+  expect(intent).toHaveBeenCalledTimes(1);
+  expect(
+    screen.getByText(/This approval expired/, { exact: false }),
+  ).toBeVisible();
+});
 
 it('ignores Ctrl+Enter typed in a text field (B134)', async () => {
   await renderCard();
