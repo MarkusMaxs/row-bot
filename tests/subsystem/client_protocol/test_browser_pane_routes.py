@@ -42,8 +42,7 @@ class _Engine(BrowserEngine):
 
     def person_input(self, chat_id, events):
         self.played.append(events)
-        self.take_control(chat_id)
-        return "ok"
+        return {"status": "ok", "copied": "ABCD-1234" if events[0]["type"] == "copy" else ""}
 
     def latest_frame(self, chat_id):
         frame = super().latest_frame(chat_id)
@@ -86,7 +85,7 @@ def test_reading_the_pane_never_starts_the_browser(service, browser):  # noqa: F
         state = client.get(f"/api/v1/conversations/{chat}/browser", headers=headers)
     assert state.status_code == 200, state.text
     assert state.json() | {"revision": 0} == {
-        "schema_version": 1, "conversation_id": chat, "status": "stopped", "control": "agent", "acting": "",
+        "schema_version": 1, "conversation_id": chat, "status": "stopped", "acting": "",
         "waiting": "", "url": "", "title": "", "site": "", "loading": False, "sign_in": "", "recording": False,
         "tabs": [], "revision": 0}
     assert not browser.has_active_session()
@@ -135,13 +134,16 @@ def test_the_persons_input_is_checked_and_played_on_the_page(service, browser): 
                 {"type": "key", "action": "down", "key": "a"}, {"type": "text", "text": "Leak under the sink"}]
         played = client.post(url, json={"events": good}, headers=headers)
         assert played.status_code == 200, played.text
-        assert played.json() == {"status": "ok", "control": "person"}  # Using the page takes control.
+        assert played.json() == {"status": "ok", "copied": ""}
+        # Copy reads the page's selection for the person's clipboard.
+        copied = client.post(url, json={"events": [{"type": "copy"}]}, headers=headers)
+        assert copied.json() == {"status": "ok", "copied": "ABCD-1234"}
         for bad in ([{"type": "mouse", "action": "type", "x": 1, "y": 1}],
                     [{"type": "key", "action": "down", "key": ""}],
                     [{"type": "text", "text": "\x1b[2J"}],
                     [{"type": "mouse", "action": "move"}] * 65):
             assert client.post(url, json={"events": bad}, headers=headers).status_code == 422
-    assert len(engine.played) == 1 and engine.played[0][2]["text"] == "Leak under the sink"
+    assert len(engine.played) == 2 and engine.played[0][2]["text"] == "Leak under the sink"
 
 
 def test_the_address_bar_refuses_what_never_opens_and_allows_what_the_person_typed(service, browser):  # noqa: F811
@@ -160,9 +162,8 @@ def test_the_address_bar_refuses_what_never_opens_and_allows_what_the_person_typ
         # The person's own network (5.3.1 B3): what they typed opens, and the chat may use it.
         assert client.post(url, json={"action": "navigate", "url": "http://192.168.1.1/"},
                            headers=headers).status_code == 200
-        state = client.post(url, json={"action": "take_control"}, headers=headers).json()
-        assert state["control"] == "person"
-        assert client.post(url, json={"action": "give_back"}, headers=headers).json()["control"] == "agent"
+        # The page is shared: there's nothing to take over or give back.
+        assert client.post(url, json={"action": "take_control"}, headers=headers).status_code == 422
         assert client.post(url, json={"action": "close_tab", "tab": "../x"}, headers=headers).status_code == 422
     assert engine.actions == [(chat, "navigate", "https://homeserve.co.uk"), (chat, "navigate", "http://localhost:5173"),
                               (chat, "navigate", "http://192.168.1.1/")]
@@ -177,7 +178,7 @@ def test_with_the_browser_turned_off_the_pane_says_so(service, browser, monkeypa
     chat = _chat(service)
     with _client(service) as client:
         _, headers = bootstrap(client)
-        response = client.post(f"/api/v1/conversations/{chat}/browser/actions", json={"action": "take_control"},
+        response = client.post(f"/api/v1/conversations/{chat}/browser/actions", json={"action": "reload"},
                                headers=headers)
     assert response.status_code == 403 and response.json()["code"] == "browser_disabled"
 

@@ -14,6 +14,7 @@ import struct
 import zlib
 import queue
 import threading
+import time
 from dataclasses import replace
 
 from fastapi import Header, HTTPException
@@ -133,7 +134,7 @@ from row_bot.tools import browser_tool as _browser_tool  # noqa: E402
 
 
 class _N12Browser(_BrowserEngine):
-    """The engine's own grants, control, viewers and pane state; the page itself is a picture."""
+    """The engine's own grants, viewers and pane state; the page itself is a picture."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -143,9 +144,6 @@ class _N12Browser(_BrowserEngine):
 
     def pane_state(self, chat_id: str) -> dict:
         state = super().pane_state(chat_id)
-        chat = self._chats.get(str(chat_id))
-        if chat is not None:
-            state.update(control=chat.control)
         state.update(self.shown.get(str(chat_id), {}))
         return state
 
@@ -168,8 +166,8 @@ class _N12Browser(_BrowserEngine):
         self._publish(str(chat_id))
 
     def person_input(self, chat_id, events):
-        self.take_control(chat_id)
-        return "ok"
+        self._chat(chat_id).person_at = time.monotonic()
+        return {"status": "ok", "copied": ""}
 
     def sites(self):
         return list(self.signed_in)
@@ -216,9 +214,6 @@ def n12_browser(body: dict, x_fixture_token: str = Header(default="")) -> dict:
     engine = _browser_tool.get_session_manager().get_session()
     chat = str(body["conversation_id"])
     state = dict(body.get("state") or {})
-    record = engine._chat(chat)
-    # Who drives is the engine's own (Take control and Give back in the pane change it).
-    record.control = str(state.pop("control", record.control) or "agent")
     engine.show(chat, state, body.get("frame"), float(body.get("width") or 1280), float(body.get("height") or 800))
     return {"ready": True}
 

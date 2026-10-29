@@ -640,10 +640,11 @@ function proofHeaders(proof?: SessionProof): Record<string, string> {
 const budgets = new WeakMap<SessionProof, Map<string, {tokens:number; at:number; waiting:number}>>();
 async function pace(proof: SessionProof | undefined, path: string, method: string, signal?: AbortSignal, body?: unknown): Promise<void> {
   if (!proof) return;
-  // An approval card reads what it asks about: the person is looking at it,
-  // so it never waits behind background reads.
+  // An approval card reads what it asks about, and a sent-files card what was
+  // sent: the person is looking at them, so they never wait behind background reads.
   const view = /^\/conversations\/[^/?]+(?:\/(?:open|workspace|delegated))?(?:\?|$)/.test(path)
-    || /^\/approvals\/[^/?]+(?:\?|$)/.test(path);
+    || /^\/approvals\/[^/?]+(?:\?|$)/.test(path)
+    || method === 'GET' && /^\/deliveries\/[^/?]+(?:\?|$)/.test(path);
   // Following a computer-use session (about once a second) is observation.
   const observation = path.startsWith('/events') || path.startsWith('/live') || /^\/conversations\/[^/]+\/subscriptions$/.test(path) || /^\/subscriptions\/[^/]+$/.test(path)
     || method === 'GET' && /^\/conversations\/[^/]+\/computer(?:\/preview)?(?:\?|$)/.test(path);
@@ -659,8 +660,9 @@ async function pace(proof: SessionProof | undefined, path: string, method: strin
   // Draft autosaves, uploads and ordinary commands consume one server bucket.
   // Stop/approval/cancel and ACK retain their independent admission paths.
   if (control || mcpCleanup || type === 'provider.subscription.cancel' || type === 'buddy.cancel' || /\/settings\/providers\/subscriptions\/(?:starts|probes)\/[^/]+\/cancel$/.test(path) || method === 'DELETE' && path === '/settings/providers/subscriptions/flows' || /^\/subscriptions\/[^/]+\/ack$/.test(path) || /\/voice\/(?:talk|realtime)\/[^/]+\/(?:stop|heartbeat)$/.test(path)) return;
-  // The desktop terminal sends each typed key and reads its echo (B248).
-  const terminal = method !== 'DELETE' && /^\/native\/terminals\/[^/?]+(?:\/(?:input|resize))?(?:\?|$)/.test(path);
+  // The desktop terminal sends each typed key and reads its echo (B248); the Browser pane sends the person's keys.
+  const terminal = method !== 'DELETE' && /^\/native\/terminals\/[^/?]+(?:\/(?:input|resize))?(?:\?|$)/.test(path)
+    || method === 'POST' && /^\/conversations\/[^/]+\/browser\/input$/.test(path);
   const lane = terminal ? 'terminal' : observation || voiceEvent && eventType !== 'function_call_ready' && eventType !== 'consult_fallback_needed' ? 'observation' : method === 'GET' ? (view ? 'view' : 'query') : 'mutation';
   let lanes = budgets.get(proof);
   if (!lanes) { lanes = new Map(); budgets.set(proof, lanes); }

@@ -370,8 +370,6 @@ class BrowserPaneState(WireModel):
     schema_version: Literal[1]
     conversation_id: OpaqueId
     status: Literal["stopped", "starting", "running", "crashed"]
-    # Who drives the page: Row-Bot, or the person (Take control / Give back).
-    control: Literal["agent", "person"]
     # What Row-Bot is doing on the page now ("Clicking button \"Next\""), and what it waits on.
     acting: str = Field(max_length=160)
     waiting: str = Field(max_length=160)
@@ -395,8 +393,8 @@ class BrowserFrame(WireModel):
 
 
 class BrowserInputEvent(WireModel):
-    """The person's mouse, wheel or key in the pane, in the page's CSS pixels."""
-    type: Literal["mouse", "key", "text"]
+    """The person's mouse, wheel or key in the pane, in the page's CSS pixels; ``copy`` reads the selection."""
+    type: Literal["mouse", "key", "text", "copy"]
     action: Literal["move", "down", "up", "wheel", ""] = ""
     x: float = Field(default=0, ge=-10_000, le=100_000)
     y: float = Field(default=0, ge=-10_000, le=100_000)
@@ -425,15 +423,15 @@ class BrowserInput(WireModel):
 
 
 class BrowserInputResult(WireModel):
-    status: Literal["ok", "agent_acting", "no_page"]
-    control: Literal["agent", "person"]
+    status: Literal["ok", "no_page"]
+    # What a ``copy`` event read from the page (the selection), for the person's clipboard.
+    copied: str = Field(default="", max_length=65_536)
 
 
 class BrowserPaneAction(WireModel):
-    """The pane's own controls: the address bar, Back, Forward, Reload, tabs, control and Restart."""
+    """The pane's own controls: the address bar, Back, Forward, Reload, tabs and Restart."""
     action: Literal[
-        "navigate", "back", "forward", "reload", "stop_loading", "take_control", "give_back",
-        "new_tab", "switch_tab", "close_tab", "restart",
+        "navigate", "back", "forward", "reload", "stop_loading", "new_tab", "switch_tab", "close_tab", "restart",
     ]
     url: str = Field(default="", max_length=8192)
     tab: str = Field(default="", pattern=r"^(t[0-9]{1,6})?$")

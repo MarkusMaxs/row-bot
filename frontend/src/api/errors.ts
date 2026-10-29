@@ -471,6 +471,10 @@ const CATALOG: Record<string, Entry> = {
 
   // Connection and access
   action_denied: ["This device isn't allowed to do that.", 'none'],
+  sign_in_required: [
+    "This window isn't signed in, so it can only look. Open Row-Bot from its app, or a sandbox from Settings › Sandboxes, to change things.",
+    'none',
+  ],
   agent_run_finished: [
     'This agent has already finished, so it can’t take a message.',
     'none',
@@ -3163,6 +3167,7 @@ const refusals = new Set([
   'migration_path_escaped',
   'path_denied',
   'process_policy_denied',
+  'sign_in_required',
   'resource_binding_revoked',
   'sandbox_prepare_blocked',
   'view_tool_denied',

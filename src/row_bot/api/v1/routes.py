@@ -104,6 +104,7 @@ _STATUS = {
     "model_selection_required": 422,
     "authentication_required": 401,
     "action_denied": 403,
+    "sign_in_required": 403,
     "upload_expired": 410,
     "upload_incomplete": 409,
     "payload_too_large": 413,
@@ -2753,7 +2754,8 @@ def create_router(
 
     @router.post("/conversations/{conversation_id}/browser/input")
     async def browser_input(conversation_id: str, request: Request) -> JSONResponse:
-        current = await session(request, lane="mutation")
+        # The person's keys and clicks in the shared page: the terminal's interactive lane, not the write budget.
+        current = await session(request, lane="terminal")
         body = await _body(request, dto.BrowserInput, 64 * 1024)
         validate = await browser_authority(conversation_id, request, current)
         from row_bot.application.client_browser import pane_input
@@ -5721,7 +5723,8 @@ def create_router(
 
     @router.get("/deliveries/{delivery_id}")
     async def delivery(request: Request, delivery_id: str) -> JSONResponse:
-        await session(request)
+        # The sent-files card in the transcript, like an approval card: the view lane.
+        await session(request, lane="view")
         from row_bot.application.delivery_views import read_delivery
 
         result = await call(read_delivery, _delivery(delivery_id)[0])

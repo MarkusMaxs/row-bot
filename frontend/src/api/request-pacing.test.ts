@@ -3,6 +3,7 @@ import {
   listConversations,
   getConversation,
   getApproval,
+  getDelivery,
   saveDraft,
   sendConversationCommand,
   cancelUpload,
@@ -10,6 +11,7 @@ import {
   reviewMcpRuntime,
   readNativeTerminal,
   writeNativeTerminal,
+  sendBrowserInput,
   type ConversationRenameCommand,
   type SessionProof,
 } from '../../../contracts/client-platform/v1/typescript/client';
@@ -192,6 +194,83 @@ it('sends typed terminal keys and the reads that echo them on their own budget (
     ),
   );
   expect(fetcher).toHaveBeenCalledTimes(128);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it('loads a sent-files card at once while background reads wait', async () => {
+  vi.useFakeTimers();
+  const fetcher = vi.fn(async () => ({
+    ok: false,
+    json: async () => ({
+      type: 'urn:row-bot:error:not_found',
+      title: 'not found',
+      status: 404,
+      code: 'not_found',
+      request_id: crypto.randomUUID(),
+      retryable: false,
+      recovery: 'none',
+    }),
+  }));
+  vi.stubGlobal('fetch', fetcher);
+  const proof: SessionProof = {
+    client_session_id: crypto.randomUUID(),
+    csrf_token: 'synthetic'.repeat(8),
+  };
+  const abort = new AbortController();
+  const queries = Promise.allSettled(
+    Array.from({ length: 25 }, () =>
+      listConversations('', proof, 50, undefined, abort.signal),
+    ),
+  );
+  await getDelivery('', proof, 'delivery-a').catch(() => undefined);
+  expect(fetcher).toHaveBeenCalledTimes(21);
+  abort.abort();
+  await vi.runAllTimersAsync();
+  await queries;
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it('sends the person’s keys in the Browser pane at typing speed, keeping the write budget', async () => {
+  vi.useFakeTimers();
+  const proof: SessionProof = {
+    client_session_id: crypto.randomUUID(),
+    csrf_token: 'synthetic'.repeat(8),
+  };
+  const fetcher = vi.fn(async (url: string) => ({
+    ok: true,
+    json: async () =>
+      url.endsWith('/browser/input')
+        ? { status: 'ok', copied: '' }
+        : {
+            conversation_id: 'conversation-a',
+            revision: '1',
+            text: '',
+            attachments: [],
+          },
+  }));
+  vi.stubGlobal('fetch', fetcher);
+  // Forty keystrokes (a pasted-by-hand sign-in code) go out at once.
+  const typed = Promise.all(
+    Array.from({ length: 40 }, (_, index) =>
+      sendBrowserInput('', proof, 'conversation-a', {
+        events: [{ type: 'key', action: 'down', key: String(index % 10) }],
+      }),
+    ),
+  );
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+  expect(fetcher).toHaveBeenCalledTimes(40);
+  await typed;
+  // Drafts and commands keep their whole budget.
+  await Promise.all(
+    Array.from({ length: 8 }, () =>
+      saveDraft('', proof, 'conversation-a', {
+        expected_revision: '1',
+        text: '',
+        attachment_refs: [],
+      }),
+    ),
+  );
+  expect(fetcher).toHaveBeenCalledTimes(48);
   expect(vi.getTimerCount()).toBe(0);
 });
 

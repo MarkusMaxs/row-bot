@@ -578,6 +578,7 @@
     "sharing_incomplete": 409,
     "sharing_media_limit": 413,
     "sharing_outcome_uncertain": 409,
+    "sign_in_required": 403,
     "skill_catalog_changed": 409,
     "skill_catalog_expired": 410,
     "skill_command_conflict": 409,
