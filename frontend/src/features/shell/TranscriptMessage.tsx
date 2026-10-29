@@ -36,6 +36,7 @@ import type { TracedAgent } from './transcript-model';
 import { TurnMarker } from './TurnMarker';
 import { RECOVERY_LABELS, turnError, type RecoveryAction } from './turn-errors';
 import { useTeach } from '../learning/chat-learning';
+import { copyUnavailableMessage } from '../../platform/clipboard';
 
 const NO_BLOCKS: TranscriptRow['blocks'] = [];
 const NO_MEDIA: GeneratedMedia[] = [];
@@ -172,7 +173,7 @@ export const TranscriptMessage = memo(function TranscriptMessage({
       const result = await platform.writeClipboard(copyText || text);
       if (result.status !== 'ok') {
         setCopied(false);
-        setError('Copy is unavailable in this browser.');
+        setError(copyUnavailableMessage());
         return;
       }
       setCopied(true);
