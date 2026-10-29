@@ -491,6 +491,10 @@ class ClientPlatformService:
                     client_queue.pause_pending(self, conversation_id)
             final_view = {**handle.view(), "status": status, "revision": str(handle.revision + 1),
                           "quiesced": True, "cleanup_complete": True, "can_stop": False}
+            # And Row-Bot's reply (or its question) moves it up again when the turn ends.
+            with _turn_end_step(conversation_id, "moving the chat up the list"):
+                from row_bot.threads import touch_thread
+                touch_thread(conversation_id)
             self.projection.publish(conversation_id, "generation.state", final_view)
             self.registry.finish(handle, status=status)
             from row_bot.application import approval_grants
@@ -1738,6 +1742,10 @@ class ClientPlatformService:
             if handle.producer_done.is_set():
                 raise ClientPlatformError("generation_failed") from exc
             raise
+        if not resume:
+            # The chats list follows activity: a message sent moves its chat to the top.
+            from row_bot.threads import touch_thread
+            touch_thread(conversation_id)
         return {"conversation_id": conversation_id, **admitted, "execution_id": handle.execution_id,
                 "status": "accepted"}
 
