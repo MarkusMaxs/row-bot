@@ -537,6 +537,89 @@ it('anchors bounded approval context inline with canonical resolve controls', as
   );
 });
 
+it('a message sent while Row-Bot waits on one question answers it in those words', async () => {
+  activeConversation();
+  mock.state.projection = {
+    ...mock.state.projection!,
+    generation: {
+      generation_id: 'run-a',
+      quiesced: true,
+      can_stop: true,
+      status: 'waiting_approval',
+      approval_id: 'approval-q',
+    },
+  } as unknown as Snapshot;
+  mock.state.activity = [
+    {
+      cursor: '4',
+      event: {
+        event_id: 'event-question',
+        type: 'approval.required',
+        conversation_id: 'conversation-a',
+        projection_revision: '4',
+        protocol_version: '1.0',
+        server_epoch: 'epoch',
+        source: 'runtime',
+        source_epoch: 'epoch',
+        source_stream_id: 'conversation-a',
+        source_sequence_start: '4',
+        source_sequence_end: '4',
+        payload: {
+          status: 'waiting_approval',
+          approval_id: 'approval-q',
+          questions: [
+            {
+              header: 'Sign in',
+              question: 'Sign in to ChatGPT in the browser, then press Done.',
+              options: [
+                { label: 'Done', recommended: true },
+                { label: "I can't" },
+              ],
+            },
+          ],
+        },
+      },
+    },
+  ] as never[];
+  mock.approval.mockResolvedValue({
+    id: 'approval-q',
+    status: 'pending',
+    revision: '0',
+    policy_revision: '1',
+    nonce: 'n'.repeat(32),
+    questions: [
+      {
+        header: 'Sign in',
+        question: 'Sign in to ChatGPT in the browser, then press Done.',
+        options: [{ label: 'Done', recommended: true }, { label: "I can't" }],
+      },
+    ],
+  } satisfies ApprovalView);
+  mock.intent.mockResolvedValue({ status: 'accepted' });
+  mock.drafts.set('conversation-a', {
+    text: 'done, signed in',
+    attachments: [],
+  });
+
+  await act(async () => conversation());
+  await act(async () =>
+    fireEvent.submit(screen.getByRole('form', { name: 'Message composer' })),
+  );
+  await waitFor(() =>
+    expect(mock.intent).toHaveBeenCalledWith(
+      'approval-q',
+      'approval.resolve',
+      {
+        decision: 'approve',
+        nonce: 'n'.repeat(32),
+        answers: [{ other: 'done, signed in' }],
+      },
+      '0',
+    ),
+  );
+  expect(mock.drafts.get('conversation-a')?.text).toBe('');
+});
+
 function computerAsking() {
   activeConversation();
   mock.state.projection = {

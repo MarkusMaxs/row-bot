@@ -7,8 +7,9 @@ of the page (``browser.model_view``).
 
 Row-Bot never types a password, one-time code or card number: the person does,
 in the pane. Paying, buying, booking with a charge, sending, posting, deleting
-and changing account settings ask first (D19, ``browser.policy``). While the
-person has control of the browser, the agent's actions wait.
+and changing account settings ask first (D19, ``browser.policy``). The page is
+shared: while the person clicks or types in it, the agent's next step waits
+until they're still.
 """
 
 from __future__ import annotations
@@ -45,15 +46,17 @@ from row_bot.tools.base import BaseTool
 
 DATA_DIR = _DEFAULT_HISTORY_PATH.parent
 _HISTORY_PATH = _DEFAULT_HISTORY_PATH
-# How long an action waits for the person to give the browser back.
-CONTROL_WAIT_SECONDS = 300.0
+# How long a step waits while the person keeps using the page before it asks them instead.
+PERSON_WAIT_SECONDS = 120.0
+# The person does these on the shared page: ask_person with Done as the recommended option, which they can also
+# press above the page in the Browser pane; a message from them answers it too.
 _SECRET_REFUSAL = {
     "password": ("That's a password field. Row-Bot never types passwords: ask the person (ask_person) to sign in "
-                 "in the browser pane, then carry on."),
-    "code": ("That's a one-time code field. The person types it in the browser pane: ask them (ask_person), then "
-             "carry on."),
+                 "in the browser pane, with Done as the recommended option, then carry on."),
+    "code": ("That's a one-time code field. The person types it in the browser pane: ask them (ask_person, with "
+             "Done as the recommended option), then carry on."),
     "card": ("That's a card field. Row-Bot never types card numbers: ask the person (ask_person) to enter their "
-             "card details in the browser pane."),
+             "card details in the browser pane, with Done as the recommended option."),
 }
 
 
@@ -255,21 +258,23 @@ def _local_address_refusal(session: BrowserSession, thread_id: str, url: str, to
     return None, ""
 
 
-def _wait_for_control(session: BrowserSession, thread_id: str) -> str | None:
-    """Wait while the person has control of the browser; a refusal when they keep it too long."""
+def _wait_for_person(session: BrowserSession, thread_id: str) -> str | None:
+    """Wait while the person is using the shared page, so Row-Bot never acts under their hand."""
 
-    if not session.person_has_control(thread_id):
+    from row_bot.browser.service import PERSON_STILL_SECONDS
+
+    if session.person_still_for(thread_id) >= PERSON_STILL_SECONDS:
         return None
     scope = current_cancellation_scope()
-    session.set_waiting(thread_id, "Waiting for you to give back control")
-    deadline = time.monotonic() + CONTROL_WAIT_SECONDS
+    session.set_waiting(thread_id, "Waiting while you use the page")
+    deadline = time.monotonic() + PERSON_WAIT_SECONDS
     try:
-        while session.person_has_control(thread_id):
+        while session.person_still_for(thread_id) < PERSON_STILL_SECONDS:
             if scope is not None and scope.is_cancelled():
                 return STOPPED
             if time.monotonic() >= deadline:
-                return ("The person still has control of the browser, so nothing was done. Ask them (ask_person) to "
-                        "press Give back in the browser pane when they're finished.")
+                return ("The person is still using the page, so nothing was done. Ask them (ask_person) what "
+                        "they're doing there, with Done as an option, and carry on when they answer.")
             time.sleep(0.25)
     finally:
         session.set_waiting(thread_id, "")
@@ -328,7 +333,7 @@ def _history(thread_id: str, action: str, **values: Any) -> None:
 
 
 def _run(session: BrowserSession, thread_id: str, label: str, step: Any, *, settle: bool = True) -> str:
-    refusal = _wait_for_control(session, thread_id)
+    refusal = _wait_for_person(session, thread_id)
     if refusal:
         return refusal
     try:
@@ -687,7 +692,7 @@ def browser_extract(ref: str | None = None) -> str:
 
     thread_id = _get_thread_id()
     session = _session_manager.get_session(thread_id)
-    refusal = _wait_for_control(session, thread_id)
+    refusal = _wait_for_person(session, thread_id)
     if refusal:
         return refusal
     try:
@@ -805,7 +810,7 @@ def browser_viewport(preset: str, device_scale: float | None = None) -> str:
 
     thread_id = _get_thread_id()
     session = _session_manager.get_session(thread_id)
-    refusal = _wait_for_control(session, thread_id)
+    refusal = _wait_for_person(session, thread_id)
     if refusal:
         return refusal
     try:
@@ -1045,7 +1050,8 @@ class BrowserTool(BaseTool):
     def description(self) -> str:
         return (
             "Use websites in Row-Bot's own browser, shown live in the Browser pane, where the person stays signed "
-            "in. Use the computer tool for desktop apps or the person's own browser."
+            "in. The page is shared: the person can use it any time, and your next step waits while they do. "
+            "Use the computer tool for desktop apps or the person's own browser."
         )
 
     @property

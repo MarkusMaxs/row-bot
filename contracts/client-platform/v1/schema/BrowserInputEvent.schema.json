@@ -1,6 +1,6 @@
 {
   "additionalProperties": false,
-  "description": "The person's mouse, wheel or key in the pane, in the page's CSS pixels.",
+  "description": "The person's mouse, wheel or key in the pane, in the page's CSS pixels; ``copy`` reads the selection.",
   "properties": {
     "action": {
       "default": "",
@@ -61,7 +61,8 @@
       "enum": [
         "mouse",
         "key",
-        "text"
+        "text",
+        "copy"
       ],
       "title": "Type",
       "type": "string"

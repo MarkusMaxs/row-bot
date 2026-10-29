@@ -85,10 +85,23 @@ DESKTOP_METRICS = (1280, 800, 1.0)
 # A pane that reconnects at a new size (a resize) doesn't flash the desktop layout in between.
 PANE_GONE_GRACE_SECONDS = 1.0
 ACTION_TIMEOUT_MS = 8_000
+# The person and Row-Bot share the page: Row-Bot's next step waits until the person has been still this long.
+PERSON_STILL_SECONDS = 2.0
+# What the pane's Copy may carry.
+COPY_LIMIT = 65_536
 NAVIGATION_TIMEOUT_MS = 30_000
 MAX_EXTRACT_CHARS = 20_000
 STOPPED = "Stopped: the person pressed Stop."
 _BLANK_URLS = frozenset({"", "about:blank", "chrome://newtab/", "edge://newtab/"})
+# The pane's Copy: the focused field's selected text (never a password field's), else the page's selection.
+_SELECTION_SCRIPT = """() => {
+  const field = document.activeElement;
+  if (field && (field.tagName === 'TEXTAREA' || (field.tagName === 'INPUT' && field.type !== 'password'))) {
+    try { return field.value.substring(field.selectionStart, field.selectionEnd); } catch (e) { return ''; }
+  }
+  if (field && field.tagName === 'INPUT') return '';
+  return String(window.getSelection() || '');
+}"""
 _IDENTITY_FILE = "row-bot-identity.json"
 # Fields Row-Bot never types into; the person does, in the pane.
 _SECRET_JS = r"""
@@ -255,7 +268,7 @@ class _Chat:
     id: str
     tabs: list[_Tab] = field(default_factory=list)
     active: _Tab | None = None
-    control: str = "agent"
+    person_at: float = 0.0  # When the person last clicked, typed or scrolled in the pane (monotonic).
     acting: str = ""
     waiting: str = ""
     secret: str = ""
@@ -967,7 +980,6 @@ class BrowserEngine:
         status = self._status
         return {
             "status": status,
-            "control": chat.control if chat else "agent",
             "acting": (chat.acting if chat else "")[:160],
             "waiting": (chat.waiting if chat else "")[:160],
             "url": "" if url in _BLANK_URLS else url,
@@ -1162,7 +1174,7 @@ class BrowserEngine:
         recorder = self._recorders.get(chat_id)
         if recorder is not None:
             chat = self._chats.get(chat_id)
-            recorder.shielded = bool(chat and (chat.secret or chat.control == "person"))
+            recorder.shielded = bool(chat and (chat.secret or self._person_active(chat)))
             try:
                 recorder.offer_frame(base64.b64decode(frame.data))
             except Exception:
@@ -1186,43 +1198,43 @@ class BrowserEngine:
 
     # ---- The person in the pane -----------------------------------------------------
 
-    def take_control(self, chat_id: str) -> None:
-        chat = self._chat(chat_id)
-        chat.control = "person"
-        logger.info("The person took control of Row-Bot's browser")
-        self._publish(chat.id)
+    @staticmethod
+    def _person_active(chat: _Chat) -> bool:
+        return time.monotonic() - chat.person_at < PERSON_STILL_SECONDS
 
-    def give_back(self, chat_id: str) -> None:
-        chat = self._chat(chat_id)
-        chat.control = "agent"
-        self._publish(chat.id)
+    def person_still_for(self, chat_id: str) -> float:
+        """Seconds since the person last clicked, typed or scrolled in this chat's page (a large number if never)."""
 
-    def person_has_control(self, chat_id: str) -> bool:
         chat = self._chats.get(str(chat_id))
-        return bool(chat and chat.control == "person")
+        return time.monotonic() - chat.person_at if chat and chat.person_at else float("inf")
 
-    def person_input(self, chat_id: str, events: list[dict[str, Any]]) -> str:
-        """Play the person's mouse, wheel and keys on the active tab. Returns ``ok``, ``agent_acting`` or ``no_page``."""
+    def person_input(self, chat_id: str, events: list[dict[str, Any]]) -> dict[str, Any]:
+        """Play the person's mouse, wheel and keys on the active tab; the person is never refused.
+
+        The page is shared: a click, key, scroll or paste here makes Row-Bot's next step wait until the person is
+        still (``PERSON_STILL_SECONDS``); hovering never does. A ``copy`` event returns the page's selection.
+        Returns ``{"status": "ok" | "no_page", "copied": text}``.
+        """
 
         chat = self._chat(chat_id)
-        if chat.acting and chat.control != "person":
-            return "agent_acting"
         if not self.running or chat.active is None:
-            return "no_page"
-        if chat.control != "person":
-            # Clicking into the page takes control, so Row-Bot doesn't act under the person's hand.
-            chat.control = "person"
-            self._publish(chat.id)
-        return str(self._run(lambda: self._play(chat, events), timeout=15.0, cancellable=False))
+            return {"status": "no_page", "copied": ""}
+        if any(not (event.get("type") == "mouse" and event.get("action") == "move") for event in events):
+            chat.person_at = time.monotonic()
+        return self._run(lambda: self._play(chat, events), timeout=15.0, cancellable=False)
 
     async def _play(self, chat: _Chat, events: list[dict[str, Any]]) -> str:
         tab = chat.active
         if tab is None:
             return "no_page"
         page = tab.page
+        copied = ""
         for event in events:
             kind = event.get("type")
             try:
+                if kind == "copy":
+                    copied = str(await page.evaluate(_SELECTION_SCRIPT) or "")[:COPY_LIMIT]
+                    continue
                 if kind == "mouse":
                     x, y = float(event.get("x", 0)), float(event.get("y", 0))
                     action = event.get("action")
@@ -1250,7 +1262,7 @@ class BrowserEngine:
                 # An unknown key name, or the page moved on: the next event still plays.
                 logger.debug("A pane input event was skipped", exc_info=True)
         chat.last_used = time.monotonic()
-        return "ok"
+        return {"status": "ok", "copied": copied}
 
     def person_action(self, chat_id: str, action: str, *, url: str = "", tab: str = "") -> None:
         """The pane's own controls: address bar, Back, Forward, Reload, tabs and Restart."""
@@ -1561,7 +1573,7 @@ class BrowserEngine:
         self._notify(chat_id)
 
     def evict_idle(self, ttl_seconds: float = 600.0) -> int:
-        """Close tabs nobody has used for a while (not while a turn runs, someone watches or the person has control)."""
+        """Close tabs nobody has used for a while (not while a turn runs, someone watches or the person uses them)."""
 
         if not self.running:
             return 0
@@ -1569,7 +1581,7 @@ class BrowserEngine:
         watched = {viewer.chat for viewer in list(self._viewers.values())}
         cutoff = time.monotonic() - ttl_seconds
         idle = [chat.id for chat in list(self._chats.values())
-                if chat.tabs and chat.id not in busy and chat.id not in watched and chat.control != "person"
+                if chat.tabs and chat.id not in busy and chat.id not in watched and not self._person_active(chat)
                 and chat.last_used < cutoff]
         for chat_id in idle:
             self.release_thread(chat_id)

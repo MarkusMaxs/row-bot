@@ -658,8 +658,9 @@ async function pace(proof: SessionProof | undefined, path: string, method: strin
   // Draft autosaves, uploads and ordinary commands consume one server bucket.
   // Stop/approval/cancel and ACK retain their independent admission paths.
   if (control || mcpCleanup || type === 'provider.subscription.cancel' || type === 'buddy.cancel' || /\/settings\/providers\/subscriptions\/(?:starts|probes)\/[^/]+\/cancel$/.test(path) || method === 'DELETE' && path === '/settings/providers/subscriptions/flows' || /^\/subscriptions\/[^/]+\/ack$/.test(path) || /\/voice\/(?:talk|realtime)\/[^/]+\/(?:stop|heartbeat)$/.test(path)) return;
-  // The desktop terminal sends each typed key and reads its echo (B248).
-  const terminal = method !== 'DELETE' && /^\/native\/terminals\/[^/?]+(?:\/(?:input|resize))?(?:\?|$)/.test(path);
+  // The desktop terminal sends each typed key and reads its echo (B248); the Browser pane sends the person's keys.
+  const terminal = method !== 'DELETE' && /^\/native\/terminals\/[^/?]+(?:\/(?:input|resize))?(?:\?|$)/.test(path)
+    || method === 'POST' && /^\/conversations\/[^/]+\/browser\/input$/.test(path);
   const lane = terminal ? 'terminal' : observation || voiceEvent && eventType !== 'function_call_ready' && eventType !== 'consult_fallback_needed' ? 'observation' : method === 'GET' ? (view ? 'view' : 'query') : 'mutation';
   let lanes = budgets.get(proof);
   if (!lanes) { lanes = new Map(); budgets.set(proof, lanes); }

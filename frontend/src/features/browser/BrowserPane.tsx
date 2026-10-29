@@ -12,7 +12,6 @@ import {
   ArrowLeft,
   ArrowRight,
   Globe,
-  Hand,
   KeyRound,
   Laptop,
   MoreHorizontal,
@@ -34,6 +33,12 @@ import {
 } from '../../ui/primitives';
 import { useNotify, useOverlay } from '../../ui/overlays';
 import { LocalAddresses } from './LocalAddresses';
+import {
+  answerQuestion,
+  readQuestion,
+  waitingApproval,
+  type WaitingQuestion,
+} from '../shell/answer-question';
 import { BrowserSites } from './BrowserSites';
 import {
   BUTTONS,
@@ -55,22 +60,19 @@ export function actingWords(acting: string) {
 
 const SIGN_IN: Record<
   Exclude<BrowserPaneState['sign_in'], ''>,
-  { title: string; text: string; action: string }
+  { title: string; text: string }
 > = {
   password: {
-    title: 'Sign in here',
-    text: "Row-Bot doesn't type passwords. Sign in on the page; Row-Bot carries on when you give it back.",
-    action: 'Sign in',
+    title: 'Sign in here.',
+    text: "Row-Bot doesn't type passwords: click the page and sign in.",
   },
   code: {
-    title: 'Enter the code here',
-    text: "Row-Bot doesn't type one-time codes. Enter it on the page, then give it back.",
-    action: 'Enter code',
+    title: 'Enter the code here.',
+    text: "Row-Bot doesn't type one-time codes: click the page and enter it.",
   },
   card: {
-    title: 'Enter your card details here',
-    text: "Row-Bot doesn't type card numbers. Enter them on the page, then give it back.",
-    action: 'Enter details',
+    title: 'Enter your card details here.',
+    text: "Row-Bot doesn't type card numbers: click the page and enter them.",
   },
 };
 
@@ -81,9 +83,11 @@ export function browserRoute(conversationId: string) {
 
 /**
  * Row-Bot's browser for one conversation (N12-A): the live page Row-Bot is
- * using, with tabs, an address bar, Back, Forward and Reload, Take control /
- * Give back and Stop. The person can click and type in the page directly:
- * doing so takes control, and Row-Bot waits until it's given back.
+ * using, with tabs, an address bar, Back, Forward and Reload, and Stop. The
+ * page is shared, with no hand-over: the person clicks, types, pastes and
+ * copies whenever they like, and Row-Bot's next step waits until they're
+ * still. When Row-Bot asks them for something there (a sign-in), the
+ * question and its answer show above the page.
  */
 export default function BrowserPane({
   conversationId,
@@ -100,7 +104,6 @@ export default function BrowserPane({
   const viewport = useRef<HTMLDivElement>(null);
   const picture = useRef<HTMLImageElement>(null);
   const keys = useRef<HTMLTextAreaElement>(null);
-  const takeControlButton = useRef<HTMLButtonElement>(null);
   // The page lays out at the pane's size, so the site is legible and the picture is 1:1.
   const size = usePaneSize(viewport);
   const { state, frame, connection } = useBrowserLive({
@@ -122,6 +125,22 @@ export default function BrowserPane({
       : undefined,
   );
   const running = Boolean(generation && !generation.quiesced);
+  // What Row-Bot's turn asks the person, when it waits on one question.
+  const waitingId = useClientSelector((value) =>
+    value.conversation?.id === conversationId ? waitingApproval(value) : null,
+  );
+  const [asked, setAsked] = useState<WaitingQuestion | null>(null);
+  useEffect(() => {
+    setAsked(null);
+    if (!waitingId) return;
+    const abort = new AbortController();
+    readQuestion(controller, waitingId, abort.signal)
+      .then((question) => {
+        if (!abort.signal.aborted) setAsked(question);
+      })
+      .catch(() => undefined); // Its card in the chat says what went wrong.
+    return () => abort.abort();
+  }, [controller, waitingId]);
   // A turn parked on an approval is still this conversation's turn.
   const turn = running || generation?.status === 'waiting_approval';
   const [busy, setBusy] = useState(false);
@@ -167,21 +186,39 @@ export default function BrowserPane({
 
   const input = useMemo(
     () =>
-      createInputQueue(async (events) => {
-        const result = await controller.browserInput(conversationId, events);
-        if (result.status === 'agent_acting') {
-          notify(
-            'Row-Bot is using the page. Take control to use it yourself.',
-            'warning',
-          );
-          takeControlButton.current?.focus();
-        }
-      }),
-    [controller, conversationId, notify],
+      createInputQueue((events) =>
+        controller.browserInput(conversationId, events),
+      ),
+    [controller, conversationId],
+  );
+  const copy = useCallback(async () => {
+    try {
+      const result = await controller.browserInput(conversationId, [
+        { type: 'copy' },
+      ]);
+      if (!result.copied) return;
+      await navigator.clipboard.writeText(result.copied);
+      notify('Copied');
+    } catch (cause) {
+      notify(clientError(cause).message, 'warning');
+    }
+  }, [controller, conversationId, notify]);
+  const answer = useCallback(
+    async (question: WaitingQuestion, choice: number) => {
+      setBusy(true);
+      try {
+        await answerQuestion(controller, question, { choices: [choice] });
+        setAsked(null);
+      } catch (cause) {
+        notify(clientError(cause).message, 'warning');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [controller, notify],
   );
 
   const status = state?.status ?? 'stopped';
-  const control = state?.control ?? 'agent';
   const acting = state?.acting ?? '';
   const waiting = state?.waiting ?? '';
   const signIn = state?.sign_in || '';
@@ -284,10 +321,15 @@ export default function BrowserPane({
     if (!page || event.nativeEvent.isComposing) return;
     const key = pageKey(event.key);
     if (!key) return;
+    const command = event.ctrlKey || event.metaKey;
     // The person's paste reaches the page as text (below), not as the keystroke.
-    const paste =
-      (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'v';
-    if (paste) return;
+    if (command && event.key.toLowerCase() === 'v') return;
+    // Copy reads the page's selection onto the person's clipboard.
+    if (command && event.key.toLowerCase() === 'c') {
+      event.preventDefault();
+      if (action === 'down') void copy();
+      return;
+    }
     event.preventDefault();
     input.push({ type: 'key', action, key });
   }
@@ -332,16 +374,9 @@ export default function BrowserPane({
     },
   ];
 
-  const driving = control === 'agent' && Boolean(acting);
-  // The toolbar offers Take control only while the status line has no control of its own.
-  const quiet = control === 'agent' && !signIn && !acting && !(turn && waiting);
+  const driving = Boolean(acting);
   return (
-    <section
-      className="browser-pane"
-      data-mode={mode}
-      data-control={control}
-      aria-label="Browser"
-    >
+    <section className="browser-pane" data-mode={mode} aria-label="Browser">
       <div className="browser-chrome">
         <div className="browser-nav">
           <IconButton
@@ -415,20 +450,6 @@ export default function BrowserPane({
           />
         </form>
         <div className="browser-tools">
-          {quiet && (
-            <IconButton
-              ref={takeControlButton}
-              label="Take control"
-              size="sm"
-              disabled={!page}
-              onClick={() => {
-                void act({ action: 'take_control' });
-                keys.current?.focus({ preventScroll: true });
-              }}
-            >
-              <Hand aria-hidden />
-            </IconButton>
-          )}
           {mode === 'docked' && (
             <IconButton
               label="Pop out"
@@ -476,24 +497,19 @@ export default function BrowserPane({
       )}
       <PaneStatus
         status={status}
-        control={control}
         acting={acting}
         waiting={turn ? waiting : ''}
         signIn={signIn}
+        asked={asked}
+        busy={busy}
         running={running && Boolean(generation?.can_stop)}
-        onTakeControl={() => {
-          void act({ action: 'take_control' });
-          keys.current?.focus({ preventScroll: true });
-        }}
-        onGiveBack={() => void act({ action: 'give_back' })}
+        onAnswer={(choice) => asked && void answer(asked, choice)}
         onStop={() => void stop()}
       />
       <div
         ref={viewport}
         className="browser-viewport"
-        data-driving={
-          driving ? 'agent' : control === 'person' ? 'person' : undefined
-        }
+        data-driving={driving ? 'agent' : undefined}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
@@ -604,42 +620,56 @@ function siteOf(url: string) {
   }
 }
 
-/** One line under the address bar: who's driving, and the one thing to do about it. */
+/**
+ * One line under the address bar: what Row-Bot asks the person here (with
+ * its answer), a sign-in only they can type, or what Row-Bot is doing.
+ */
 function PaneStatus({
   status,
-  control,
   acting,
   waiting,
   signIn,
+  asked,
+  busy,
   running,
-  onTakeControl,
-  onGiveBack,
+  onAnswer,
   onStop,
 }: {
   status: BrowserPaneState['status'];
-  control: BrowserPaneState['control'];
   acting: string;
   waiting: string;
   signIn: BrowserPaneState['sign_in'];
+  asked: WaitingQuestion | null;
+  busy: boolean;
   running: boolean;
-  onTakeControl: () => void;
-  onGiveBack: () => void;
+  onAnswer: (choice: number) => void;
   onStop: () => void;
 }) {
   if (status !== 'running') return null;
-  if (control === 'person')
+  if (asked) {
+    // The question's recommended option (else its first) answers it here;
+    // the others, and an answer in words, are on its card in the chat.
+    const options = asked.question.options;
+    const choice = Math.max(
+      0,
+      options.findIndex((option) => option.recommended),
+    );
     return (
       <div className="browser-status" data-tone="accent" role="status">
-        <Hand size={16} aria-hidden className="browser-status-icon" />
+        <KeyRound size={16} aria-hidden className="browser-status-icon" />
         <span className="browser-status-text">
-          <strong>You have control.</strong> Row-Bot waits until you give it
-          back.
+          <strong>Row-Bot is waiting for you.</strong> {asked.question.question}
         </span>
-        <Button variant="primary" onClick={onGiveBack}>
-          Give back
+        <Button
+          variant="primary"
+          disabled={busy}
+          onClick={() => onAnswer(choice)}
+        >
+          {options[choice]?.label ?? 'Done'}
         </Button>
       </div>
     );
+  }
   if (signIn)
     return (
       <div className="browser-status" data-tone="info" role="status">
@@ -647,9 +677,6 @@ function PaneStatus({
         <span className="browser-status-text">
           <strong>{SIGN_IN[signIn].title}</strong> {SIGN_IN[signIn].text}
         </span>
-        <Button variant="primary" onClick={onTakeControl}>
-          {SIGN_IN[signIn].action}
-        </Button>
       </div>
     );
   if (acting || waiting)
@@ -663,7 +690,6 @@ function PaneStatus({
         <span className="browser-status-text">
           {acting ? `Row-Bot: ${actingWords(acting)}` : waiting}
         </span>
-        <Button onClick={onTakeControl}>Take control</Button>
         {running && (
           // The composer's Stop: a round ink button with a filled square.
           <IconButton

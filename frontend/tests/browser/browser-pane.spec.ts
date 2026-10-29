@@ -258,8 +258,12 @@ test('the Browser pane in every state, from nothing open to a crash', async ({
   };
   await paint(page, conversation, signIn, 'sign-in');
   await expect(pane(page)).toContainText(
-    "Sign in here Row-Bot doesn't type passwords.",
+    "Sign in here. Row-Bot doesn't type passwords: click the page and sign in.",
   );
+  // One shared page: nothing to take over or give back.
+  await expect(
+    pane(page).getByRole('button', { name: /Take control|Give back/ }),
+  ).toHaveCount(0);
   await everywhere(
     page,
     info,
@@ -268,20 +272,10 @@ test('the Browser pane in every state, from nothing open to a crash', async ({
     () => paint(page, conversation, signIn, 'sign-in'),
   );
 
-  // Signing in: the person takes control, and gives it back when done.
-  await pane(page).getByRole('button', { name: 'Sign in' }).click();
-  await expect(pane(page)).toContainText('You have control.');
-  const signedIn = { ...RUNNING, sign_in: '' };
-  await paint(page, conversation, signedIn, 'account');
-  await everywhere(
-    page,
-    info,
-    'pane-person-control',
-    () => paneInView(page),
-    () => paint(page, conversation, signedIn, 'account'),
-  );
-  await pane(page).getByRole('button', { name: 'Give back' }).click();
-  await expect(pane(page)).not.toContainText('You have control.');
+  // Signing in: the person just uses the page, and moving the mouse there takes nothing over.
+  await pane(page).locator('.browser-viewport').hover();
+  await page.mouse.move(40, 40);
+  await expect(pane(page)).not.toContainText('You have control');
 
   await show(page, conversation, { status: 'crashed', tabs: [] });
   const crash = pane(page).getByRole('alert');
@@ -289,6 +283,48 @@ test('the Browser pane in every state, from nothing open to a crash', async ({
   await everywhere(page, info, 'pane-crash', () => paneInView(page));
   await crash.getByRole('button', { name: 'Restart' }).click();
   await expect(pane(page).getByRole('alert')).toHaveCount(0);
+});
+
+test('when Row-Bot asks for something on the page, the question and its answer show above it', async ({
+  page,
+}, info) => {
+  await page.setViewportSize(DESKTOP);
+  const conversation = await newConversation(page);
+  await openPane(page);
+  const signIn = {
+    ...RUNNING,
+    url: 'https://homecover.example/login',
+    title: 'Sign in',
+    sign_in: 'password',
+  };
+  await paint(page, conversation, signIn, 'sign-in');
+  try {
+    await composer(page).fill('n4 question fixture');
+    await page.getByRole('button', { name: 'Send', exact: true }).click();
+    await expect(pane(page)).toContainText(
+      'Row-Bot is waiting for you. When should the beta go out?',
+    );
+    const answer = pane(page).getByRole('button', { name: /Beta\.1 now/ });
+    await expect(answer).toBeEnabled();
+    await everywhere(
+      page,
+      info,
+      'pane-asks-you',
+      () => paneInView(page),
+      () => paint(page, conversation, signIn, 'sign-in'),
+    );
+    await answer.click();
+    await expect(
+      page
+        .getByRole('log', { name: 'Conversation' })
+        .getByText("Thanks. I'll plan the beta that way.", { exact: true }),
+    ).toBeVisible();
+    await expect(pane(page)).not.toContainText('Row-Bot is waiting for you.');
+  } finally {
+    await page.request.post('/__n4_fixture/reset', {
+      headers: fixtureHeaders(),
+    });
+  }
 });
 
 test('a turn using the browser shows live in the chat, then asks before paying', async ({
@@ -314,7 +350,7 @@ test('a turn using the browser shows live in the chat, then asks before paying',
   await expect(pane(page)).toContainText('Row-Bot: Clicking "Make a claim"');
   await expect(
     pane(page).getByRole('button', { name: 'Take control' }),
-  ).toBeVisible();
+  ).toHaveCount(0);
   // With the pane hidden on a phone the page is a desktop window again: the step shows it so.
   await everywhere(
     page,
