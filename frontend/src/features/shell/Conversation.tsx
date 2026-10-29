@@ -1942,7 +1942,7 @@ export default function Conversation({
           overlay.notify(
             checking
               ? 'Your waiting message went through. Your current draft is kept.'
-              : 'Message waiting: it sends when Row-Bot finishes.',
+              : 'Message waiting: Row-Bot reads it at its next step.',
           );
           waiting.reload();
         }
