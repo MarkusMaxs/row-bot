@@ -15,7 +15,7 @@ import pytest
 
 from row_bot.application import client_models_settings as owner
 from row_bot.application import provider_default_model as default_model
-from row_bot.providers import config, model_catalog, saved_model_settings
+from row_bot.providers import config, model_catalog, model_visibility, saved_model_settings
 from row_bot.providers import model_catalog_cache as cache
 from row_bot.providers.config import ProviderConfigError
 
@@ -102,6 +102,8 @@ def saved_state(tmp_path, monkeypatch):
     settings_path = tmp_path / "model_settings.json"
     monkeypatch.setattr(saved_model_settings, "SETTINGS_PATH", settings_path)
     monkeypatch.setattr(models, "_SETTINGS_PATH", settings_path)
+    # Stars too: a star a test adds stays in its own folder, never the suite's shared one for the next run.
+    monkeypatch.setattr(model_visibility, "_settings_path", lambda: settings_path)
 
     # Fixed local provider status; no provider, token or catalog is contacted.
     monkeypatch.setattr(model_catalog, "_provider_status_by_id", lambda: STATUSES)

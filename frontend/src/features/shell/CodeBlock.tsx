@@ -4,6 +4,7 @@ import { saveTextDownload } from '../../platform/download';
 import { CopyGlyph, IconButton } from '../../ui/primitives';
 import type { Token } from './syntax';
 import { languageLabel, resolveLanguage } from './syntax-languages';
+import { copyUnavailableMessage } from '../../platform/clipboard';
 
 export { languageForFile } from './syntax-languages';
 
@@ -78,7 +79,7 @@ export function CodeBlock({
     try {
       const ok = await (copyText ?? (async () => false))(text);
       setCopied(ok);
-      setStatus(ok ? 'Code copied.' : 'Copy is unavailable.');
+      setStatus(ok ? 'Code copied.' : copyUnavailableMessage());
     } catch {
       setStatus('Code could not be copied.');
     }

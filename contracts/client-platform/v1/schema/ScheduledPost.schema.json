@@ -69,6 +69,13 @@
       "title": "Id",
       "type": "string"
     },
+    "limit": {
+      "default": 0,
+      "maximum": 25000,
+      "minimum": 0,
+      "title": "Limit",
+      "type": "integer"
+    },
     "media": {
       "items": {
         "$ref": "#/$defs/XPostMedia"
@@ -76,6 +83,12 @@
       "maxItems": 4,
       "title": "Media",
       "type": "array"
+    },
+    "name": {
+      "default": "",
+      "maxLength": 80,
+      "title": "Name",
+      "type": "string"
     },
     "post_at": {
       "pattern": "^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d$",

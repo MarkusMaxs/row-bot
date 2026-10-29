@@ -41,6 +41,7 @@ import type {
   MigrationApplyCommand,
   GitHubAccessCommand,
   AccountAuthCommand,
+  XPostEdit,
 } from './types';
 
 const INITIAL: ClientState = {
@@ -2840,6 +2841,9 @@ export class ClientController {
     this.query(() => this.transport.scheduledPosts?.(signal));
   cancelScheduledPost = (id: string) =>
     this.query(() => this.transport.cancelScheduledPost?.(id));
+  /** The person's edit of a post waiting for its time: its text and which files go; it keeps its time. */
+  editScheduledPost = (id: string, edit: XPostEdit) =>
+    this.query(() => this.transport.editScheduledPost?.(id, edit));
   /** Try again on a scheduled post that didn't go out: it goes now (without its media, when asked). */
   retryScheduledPost = (id: string, withoutMedia = false) =>
     this.query(() => this.transport.retryScheduledPost?.(id, withoutMedia));

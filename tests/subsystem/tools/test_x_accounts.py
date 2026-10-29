@@ -682,6 +682,35 @@ def test_a_scheduled_post_never_goes_out_cancelled_changed_or_long_missed(x, per
                                                "A scheduled post as @rowbot_ai didn't go out"]
 
 
+def test_the_person_edits_a_scheduled_post_and_it_goes_out_as_edited_at_its_time(x, person, notices, tmp_path):
+    """Home › Review's Edit: the text and which files go change; the time and the approval stay."""
+    from datetime import datetime, timedelta
+
+    fake, tool = x
+    x_accounts.add(fake.sign_in(*ROWBOT))
+    chart, photo = _picture(tmp_path / "chart.png"), _picture(tmp_path / "photo.png", "navy")
+    when = (datetime.now() + timedelta(hours=2)).replace(second=0, microsecond=0)
+    tool._x_post("post", text="Tonight's chart", media_paths=[str(chart), str(photo)], account="@rowbot_ai",
+                 post_at=when.isoformat(timespec="minutes"))
+    [waiting] = x_posting.scheduled_posts()
+    kept = waiting["media"][1]["sha256"]
+
+    assert x_posting.edit_scheduled(waiting["id"], "Tonight's chart, with the photo", [kept])
+    with pytest.raises(x_posting.XPostError, match="@rowbot_ai can post up to 280"):
+        x_posting.edit_scheduled(waiting["id"], "x" * 281, [kept])
+    with pytest.raises(x_posting.XPostError, match="Give the text to post"):
+        x_posting.edit_scheduled(waiting["id"], "  ", [kept])
+    assert not x_posting.edit_scheduled("xs-000000000000", "Nothing waits here", [])
+
+    [edited] = x_posting.scheduled_posts()
+    assert (edited["text"], edited["post_at"]) == ("Tonight's chart, with the photo", waiting["post_at"])
+    assert [item["name"] for item in edited["media"]] == ["photo.png"]
+    [sent] = x_posting.send_due(when)
+    assert sent["status"] == "posted" and fake.posts[0]["text"].startswith("Tonight's chart, with the photo")
+    assert len(fake.posts[0]["media_ids"]) == 1
+    assert not x_posting.edit_scheduled(waiting["id"], "Too late", []), "a post that went out can't be edited"
+
+
 def test_a_picture_goes_up_through_xs_v2_upload_and_a_video_waits_for_its_processing(x, person, tmp_path):
     """29 Oct: every picture post failed on v1.1's upload, which refuses an OAuth 2.0 sign-in."""
     fake, tool = x

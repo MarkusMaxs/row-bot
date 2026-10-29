@@ -996,6 +996,10 @@ export interface ClientTransport {
   ): Promise<Wire.VideoProjectView>;
   scheduledPosts?(signal?: AbortSignal): Promise<Wire.ScheduledPostPage>;
   cancelScheduledPost?(id: string): Promise<Wire.ScheduledPostCancelled>;
+  editScheduledPost?(
+    id: string,
+    edit: Wire.XPostEdit,
+  ): Promise<Wire.ScheduledPostEdited>;
   retryScheduledPost?(
     id: string,
     withoutMedia: boolean,

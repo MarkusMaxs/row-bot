@@ -1108,6 +1108,7 @@ _STATUS['question_answer_invalid'] = 422
 _STATUS['approval_edit_invalid'] = 422
 _STATUS['media_unavailable'] = 404
 _STATUS['scheduled_post_unavailable'] = 404
+_STATUS['scheduled_post_invalid'] = 422
 _STATUS['app_not_connected'] = 409  # A workflow template whose app is not connected yet.
 # Pages (N5): gone, not valid, too big, written to too often, or nothing to send.
 _STATUS.update({"chat_page_unavailable": 404, "chat_page_invalid": 422, "chat_page_too_large": 413,
@@ -5281,6 +5282,21 @@ def create_router(
         if not await call(x_posting.cancel_scheduled, post_id):
             raise ProtocolError("scheduled_post_unavailable", 404)
         return await respond(request, dto.ScheduledPostCancelled, {"cancelled": True})
+
+    @router.post("/monitor/scheduled-posts/{post_id}/edit")
+    async def monitor_edit_scheduled_post(post_id: str, request: Request) -> JSONResponse:
+        # The person's Edit on a post waiting for its time (5.3.1): its text and which files go; it keeps its time.
+        await session(request, lane="mutation")
+        body = await _body(request, dto.XPostEdit, 128 * 1024)
+        from row_bot.tools import x_posting
+
+        try:
+            edited = await call(x_posting.edit_scheduled, post_id, body.text, list(body.media))
+        except x_posting.XPostError:
+            raise ProtocolError("scheduled_post_invalid", 422) from None
+        if not edited:
+            raise ProtocolError("scheduled_post_unavailable", 404)
+        return await respond(request, dto.ScheduledPostEdited, {"edited": True})
 
     @router.post("/monitor/scheduled-posts/{post_id}/retry")
     async def monitor_retry_scheduled_post(post_id: str, request: Request) -> JSONResponse:

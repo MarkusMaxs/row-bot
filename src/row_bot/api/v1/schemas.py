@@ -8903,6 +8903,9 @@ class ScheduledPost(WireModel):
     id: str = Field(pattern=r"^xs-[0-9a-f]{12}$")
     account_id: str = Field(pattern=r"^[0-9]{1,20}$")
     username: str = Field(default="", pattern=r"^[A-Za-z0-9_]{0,50}$")
+    name: str = Field(default="", max_length=80)
+    # How long a post the account may send, for Edit's count; 0 when X hasn't said.
+    limit: int = Field(default=0, ge=0, le=25000)
     action: Literal["post", "reply", "quote"]
     text: str = Field(default="", max_length=25000)
     target_url: str = Field(default="", max_length=256, pattern=r"^(https://x\.com/[A-Za-z0-9_]+/status/[0-9]+)?$")
@@ -8921,6 +8924,10 @@ class ScheduledPostRetry(WireModel):
 
 class ScheduledPostRetried(WireModel):
     retried: Literal[True]
+
+
+class ScheduledPostEdited(WireModel):
+    edited: Literal[True]
 
 
 class ScheduledPostPage(WireModel):
