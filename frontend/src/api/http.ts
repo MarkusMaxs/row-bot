@@ -504,6 +504,11 @@ export class HttpTransport implements ClientTransport {
   cancelScheduledPost(id: string) {
     return wire.cancelScheduledPost(this.base, this.session(), id);
   }
+  retryScheduledPost(id: string, withoutMedia: boolean) {
+    return wire.retryScheduledPost(this.base, this.session(), id, {
+      without_media: withoutMedia,
+    });
+  }
   monitorLogs(limit = 200, signal?: AbortSignal) {
     return wire.getMonitorLogs(this.base, this.session(), limit, signal);
   }

@@ -567,6 +567,11 @@
   -webkit-line-clamp: 2;
   white-space: normal;
 }
+/* Why a scheduled post didn't go out, in full: it often says what to do. */
+.overview-not-sent-reason {
+  color: var(--status-warning-text);
+  white-space: normal;
+}
 .overview-needs-more {
   display: inline-flex;
   align-items: center;

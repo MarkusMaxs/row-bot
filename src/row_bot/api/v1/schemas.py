@@ -8899,7 +8899,8 @@ class XPostApproval(WireModel):
 
 
 class ScheduledPost(WireModel):
-    """A post approved for a time slot, waiting for it (G3); Cancel stops it."""
+    """A post approved for a time slot, waiting for it (G3); Cancel stops it. One that didn't go out stays, with why,
+    until the person tries it again or dismisses it."""
 
     id: str = Field(pattern=r"^xs-[0-9a-f]{12}$")
     account_id: str = Field(pattern=r"^[0-9]{1,20}$")
@@ -8909,6 +8910,19 @@ class ScheduledPost(WireModel):
     target_url: str = Field(default="", max_length=256, pattern=r"^(https://x\.com/[A-Za-z0-9_]+/status/[0-9]+)?$")
     post_at: str = Field(pattern=r"^\d{4}-\d\d-\d\dT\d\d:\d\d$")
     media: list[XPostMedia] = Field(default_factory=list, max_length=4)
+    status: Literal["scheduled", "failed", "missed", "unknown"] = "scheduled"
+    # Why it didn't go out, in Row-Bot's words (X's reason included); "" while it waits.
+    reason: str = Field(default="", max_length=2000)
+
+
+class ScheduledPostRetry(WireModel):
+    """Try again on a post that didn't go out, now; ``without_media`` posts its text alone."""
+
+    without_media: bool = False
+
+
+class ScheduledPostRetried(WireModel):
+    retried: Literal[True]
 
 
 class ScheduledPostPage(WireModel):

@@ -682,6 +682,99 @@ def test_a_scheduled_post_never_goes_out_cancelled_changed_or_long_missed(x, per
                                                "A scheduled post as @rowbot_ai didn't go out"]
 
 
+def test_a_picture_goes_up_through_xs_v2_upload_and_a_video_waits_for_its_processing(x, person, tmp_path):
+    """29 Oct: every picture post failed on v1.1's upload, which refuses an OAuth 2.0 sign-in."""
+    fake, tool = x
+    x_accounts.add(fake.sign_in(*ROWBOT))
+    picture = _picture(tmp_path / "chart.png")
+    video = tmp_path / "demo.mp4"
+    video.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"0" * 4096)
+
+    shown = tool._x_post("post", text="Tonight's chart", media_paths=[str(picture)], account="@rowbot_ai")
+    clip = tool._x_post("post", text="The demo", media_paths=[str(video)], account="@rowbot_ai")
+
+    assert "Posted as @rowbot_ai" in shown and "Posted as @rowbot_ai" in clip
+    steps = [path for method, path in fake.requests if "/media/upload" in path]
+    image_id, video_id = list(fake.uploaded)
+    assert steps == ["/2/media/upload/initialize", f"/2/media/upload/{image_id}/append",
+                     f"/2/media/upload/{image_id}/finalize",
+                     "/2/media/upload/initialize", f"/2/media/upload/{video_id}/append",
+                     f"/2/media/upload/{video_id}/finalize", "/2/media/upload"]  # The video's STATUS.
+    assert fake.categories == {image_id: "tweet_image", video_id: "tweet_video"}
+    assert [post["media_ids"] for post in fake.posts] == [[image_id], [video_id]]
+
+
+def test_an_account_connected_before_pictures_is_asked_to_reconnect_before_any_card(x, person, tmp_path):
+    from tests.helpers.fake_x_api import OLD_SCOPE
+
+    fake, tool = x
+    asked, _ = person
+    x_accounts.add(fake.sign_in(*ROWBOT, scope=OLD_SCOPE))
+
+    refused = tool._x_post("post", text="Tonight's chart", media_paths=[str(_picture(tmp_path / "c.png"))],
+                           account="@rowbot_ai")
+
+    assert refused.startswith("@rowbot_ai was connected before Row-Bot could post pictures and videos. Sign in to "
+                              "it once more in Settings › Apps › X")
+    assert "Nothing was sent to X." in refused and asked == []
+    assert not [path for _, path in fake.requests if "media" in path]
+    # Text alone still goes; signing in again (with media.write now) lets the picture go too.
+    assert "Posted as @rowbot_ai" in tool._x_post("post", text="Words only", account="@rowbot_ai")
+    x_accounts.add(fake.sign_in(*ROWBOT, access="access-rowbot-again"))
+    assert "Posted as @rowbot_ai" in tool._x_post("post", text="Now with it", account="@rowbot_ai",
+                                                   media_paths=[str(_picture(tmp_path / "c.png"))])
+
+
+def test_a_refused_upload_says_xs_own_reason(x, person, tmp_path, monkeypatch):
+    import httpx
+
+    fake, tool = x
+    x_accounts.add(fake.sign_in(*ROWBOT))
+    real = fake.handle
+
+    def refuse(request):
+        if str(request.url).endswith("/2/media/upload/initialize"):
+            return httpx.Response(400, json={"title": "Invalid Request", "detail": "media_type is not supported"})
+        return real(request)
+
+    monkeypatch.setattr(x_accounts, "transport", httpx.MockTransport(refuse))
+    result = tool._x_post("post", text="Chart", media_paths=[str(_picture(tmp_path / "c.png"))])
+
+    assert ("Uploading c.png to X failed (start), so nothing was posted. X refused it (400): media_type is not "
+            "supported.") in result
+    assert fake.posts == []
+
+
+def test_a_scheduled_post_that_didnt_go_out_stays_in_review_with_why_and_goes_when_tried_again(
+        x, person, notices, tmp_path):
+    from datetime import datetime, timedelta
+    from tests.helpers.fake_x_api import OLD_SCOPE
+
+    fake, tool = x
+    x_accounts.add(fake.sign_in(*ROWBOT))
+    when = (datetime.now() + timedelta(hours=1)).replace(second=0, microsecond=0)
+    for text in ("With its picture", "Dismissed"):
+        tool._x_post("post", text=text, account="@rowbot_ai", post_at=when.isoformat(timespec="minutes"),
+                     media_paths=[str(_picture(tmp_path / f"{text[:4]}.png"))])
+    # The sign-in loses media.write before the slot (an account from before 5.3.1, say).
+    x_accounts.add(fake.sign_in(*ROWBOT, access="access-old", scope=OLD_SCOPE))
+    x_posting.send_due(when)
+
+    failed, dismissed = x_posting.scheduled_posts()
+    assert (failed["status"], failed["text"]) == ("failed", "With its picture")
+    assert failed["reason"].startswith("Nothing was sent: @rowbot_ai was connected before Row-Bot could post")
+    assert notices[0][1].endswith("It's in Home › Review, where you can try it again.")
+    assert x_posting.cancel_scheduled(dismissed["id"])  # Dismiss: it leaves Review.
+    assert [item["id"] for item in x_posting.scheduled_posts()] == [failed["id"]]
+
+    # Post without the picture: the text goes now.
+    assert x_posting.retry_scheduled(failed["id"], without_media=True)
+    x_posting.send_due(datetime.now() + timedelta(minutes=1))
+    [post] = fake.posts
+    assert post["text"] == "With its picture" and post["media_ids"] == []
+    assert x_posting.scheduled_posts() == [] and not x_posting.retry_scheduled(failed["id"])
+
+
 def test_a_delete_has_no_time_slot(x, person):
     fake, tool = x
     asked, _ = person

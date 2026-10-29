@@ -577,6 +577,7 @@ export default function Home({
                   identity ? controller.scheduledPosts : undefined
                 }
                 onCancelScheduledPost={controller.cancelScheduledPost}
+                onRetryScheduledPost={controller.retryScheduledPost}
                 buddy={<BuddyPortrait />}
                 onAsk={onAsk}
                 asking={asking}

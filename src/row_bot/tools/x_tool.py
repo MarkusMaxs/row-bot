@@ -46,7 +46,7 @@ _TOKEN_URL = x_accounts.TOKEN_URL
 # ── OAuth 2.0 scopes ────────────────────────────────────────────────────────
 _SCOPES = (
     "tweet.read tweet.write users.read like.read like.write "
-    "bookmark.read bookmark.write offline.access"
+    "bookmark.read bookmark.write media.write offline.access"
 )
 
 # Fixed port for OAuth callback — must match what user registers in X Developer Portal
@@ -982,6 +982,10 @@ class XTool(BaseTool):
             chosen = x_accounts.resolve(account, required=True)
             x_posting.check_length(chosen, action, words)
             media = x_posting.media_facts(media_paths) if action != "delete" else []
+            if media and not x_accounts.can_post_media(chosen):
+                # Before any card: the person reconnects once, then the post with its pictures can go.
+                return (f"{x_accounts.media_reconnect(chosen)} Ask the person (ask_person) to do that, with Done as "
+                        "the recommended option, then make the post again. Nothing was sent to X.")
             if post_at and action == "delete":
                 raise x_posting.XPostError("A delete happens at once; leave post_at out.")
             when = x_posting.slot(post_at)

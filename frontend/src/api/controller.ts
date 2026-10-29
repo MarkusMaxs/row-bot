@@ -2840,6 +2840,9 @@ export class ClientController {
     this.query(() => this.transport.scheduledPosts?.(signal));
   cancelScheduledPost = (id: string) =>
     this.query(() => this.transport.cancelScheduledPost?.(id));
+  /** Try again on a scheduled post that didn't go out: it goes now (without its media, when asked). */
+  retryScheduledPost = (id: string, withoutMedia = false) =>
+    this.query(() => this.transport.retryScheduledPost?.(id, withoutMedia));
   monitorLogs = (limit = 200, signal?: AbortSignal) =>
     this.query(() => this.transport.monitorLogs?.(limit, signal));
   systemDiagnosis = (signal?: AbortSignal) =>

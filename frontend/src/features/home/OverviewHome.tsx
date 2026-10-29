@@ -18,9 +18,11 @@ import {
   Code2,
   HeartPulse,
   Hourglass,
+  ImageOff,
   MessageSquare,
   Palette,
   Paperclip,
+  RotateCw,
   Send,
   ShieldAlert,
   Workflow,
@@ -82,6 +84,11 @@ export type OverviewHomeProps = {
   /** Posts approved for a time slot, waiting for it: Review lists them (G3). */
   loadScheduledPosts?: (signal?: AbortSignal) => Promise<ScheduledPostPage>;
   onCancelScheduledPost?: (id: string) => Promise<unknown>;
+  /** Try again on a post that didn't go out: it goes now, or without its media. */
+  onRetryScheduledPost?: (
+    id: string,
+    withoutMedia: boolean,
+  ) => Promise<unknown>;
   /** Buddy's live avatar beside the greeting. */
   buddy?: ReactNode;
   /**
@@ -370,6 +377,7 @@ export default function OverviewHome({
   refreshKey,
   loadScheduledPosts,
   onCancelScheduledPost,
+  onRetryScheduledPost,
 }: OverviewHomeProps) {
   const navigate = useNavigate();
   const [tasks, setTasks] = useState<readonly TaskSummary[] | null>(null);
@@ -413,6 +421,23 @@ export default function OverviewHome({
       setScheduleError(clientError(cause).message);
     }
   }
+  async function retryScheduled(post: ScheduledPost, withoutMedia: boolean) {
+    if (!onRetryScheduledPost) return;
+    setScheduleError('');
+    try {
+      await onRetryScheduledPost(post.id, withoutMedia);
+      // It goes now; the list reads again once X has answered.
+      setScheduled((items) => items.filter((item) => item.id !== post.id));
+    } catch (cause) {
+      setScheduleError(clientError(cause).message);
+    }
+  }
+  const notSent = scheduled.filter(
+    (post) => post.status && post.status !== 'scheduled',
+  );
+  const upcoming = scheduled.filter(
+    (post) => !post.status || post.status === 'scheduled',
+  );
   const refixed = () => {
     setFixed((value) => value + 1);
     attentionFeed.refresh();
@@ -997,11 +1022,70 @@ export default function OverviewHome({
               <ChevronRight size={13} aria-hidden />
             </button>
           )}
-          {scheduled.length > 0 && (
+          {notSent.length > 0 && (
+            <>
+              <h4 className="overview-review-heading">Didn't go out</h4>
+              <ul
+                className="overview-rows"
+                aria-label="Posts that didn't go out"
+              >
+                {notSent.map((post) => (
+                  <li
+                    key={post.id}
+                    className="overview-row overview-row-approval"
+                  >
+                    <div className="overview-row-body">
+                      <Tile tone="warning">
+                        <AlertTriangle size={16} />
+                      </Tile>
+                      <span className="overview-row-text">
+                        <strong className="overview-row-title">
+                          {slotWords(post.post_at, now)}
+                          {post.username && ` · @${post.username}`}
+                        </strong>
+                        <span className="overview-row-meta overview-review-text">
+                          {post.text}
+                        </span>
+                        <span className="overview-row-meta overview-not-sent-reason">
+                          {post.reason}
+                        </span>
+                      </span>
+                    </div>
+                    <div className="overview-row-actions">
+                      <IconButton
+                        size="sm"
+                        label="Try again now"
+                        onClick={() => void retryScheduled(post, false)}
+                      >
+                        <RotateCw size={15} aria-hidden />
+                      </IconButton>
+                      {(post.media?.length ?? 0) > 0 && (
+                        <IconButton
+                          size="sm"
+                          label="Post it now without the picture"
+                          onClick={() => void retryScheduled(post, true)}
+                        >
+                          <ImageOff size={15} aria-hidden />
+                        </IconButton>
+                      )}
+                      <IconButton
+                        size="sm"
+                        label="Dismiss"
+                        onClick={() => void cancelScheduled(post)}
+                      >
+                        <X size={15} aria-hidden />
+                      </IconButton>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+          {upcoming.length > 0 && (
             <>
               <h4 className="overview-review-heading">Scheduled</h4>
               <ul className="overview-rows" aria-label="Scheduled posts">
-                {scheduled.map((post) => (
+                {upcoming.map((post) => (
                   <li
                     key={post.id}
                     className="overview-row overview-row-approval"

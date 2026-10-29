@@ -2053,6 +2053,25 @@ def n7_accounts(x_fixture_token: str = Header(default="")) -> dict:
     return {"accounts": [account.handle for account in x_accounts.listed()]}
 
 
+@app.post("/__n7_fixture/failed-post")
+def n7_failed_post(x_fixture_token: str = Header(default="")) -> dict:
+    """29 Oct's case: @rowbot_ai was connected before Row-Bot asked for media.write, and its post with a picture
+    reached its time: it didn't go out, and stays in Home's Review with why."""
+    predecessor._authorize(x_fixture_token)
+    from datetime import datetime, timedelta
+
+    from row_bot import account_tokens, x_accounts
+    from row_bot.tools import x_posting
+    from tests.helpers.fake_x_api import OLD_SCOPE, ROWBOT
+
+    account = x_accounts.add(_N7["api"].sign_in(*ROWBOT, access="access-rowbot-old", scope=OLD_SCOPE))
+    account_tokens._CHECKS[account.slot] = (account_tokens.digest(account.slot), True)
+    when = (datetime.now() - timedelta(minutes=2)).replace(second=0, microsecond=0)
+    x_posting.schedule(account, "post", "Row-Bot can keep a project lead's update format between conversations.",
+                       "", x_posting.media_facts([str(_N7["folder"] / "launch-card.png")]), when)
+    return {"sent": x_posting.send_due()}
+
+
 @app.post("/__n7_fixture/reset")
 def n7_reset(x_fixture_token: str = Header(default="")) -> dict:
     """Remove the accounts, the fake X API and the X app's switch."""

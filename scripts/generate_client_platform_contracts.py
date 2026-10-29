@@ -56,7 +56,7 @@ MODELS = {name: getattr(schemas, name) for name in (
     "McpPolicyPage", "McpPolicyRequest", "McpPolicyReview",
     "McpChatState", "McpChatReviewRequest", "McpChatReview", "McpChatOutcome",
     "AttentionProblem", "AttentionUpdate", "AttentionSnapshot", "PendingApproval", "PendingApprovalPage",
-    "ScheduledPost", "ScheduledPostPage", "ScheduledPostCancelled",
+    "ScheduledPost", "ScheduledPostPage", "ScheduledPostCancelled", "ScheduledPostRetry", "ScheduledPostRetried",
     "RuntimeInstallationSnapshot", "RuntimeInstallationReviewRequest", "RuntimeInstallationReview", "RuntimeInstallationReceipt",
     "DocumentQueuePage", "DocumentControlReviewRequest", "DocumentControlReview", "DocumentControlReceipt",
     "DocumentUploadReviewRequest", "DocumentUploadReview", "DocumentUploadReceipt",
@@ -253,6 +253,7 @@ OPERATIONS = (
     ("get", "/monitor/approvals", None, "PendingApprovalPage"),
     ("get", "/monitor/scheduled-posts", None, "ScheduledPostPage"),
     ("delete", "/monitor/scheduled-posts/{post_id}", None, "ScheduledPostCancelled"),
+    ("post", "/monitor/scheduled-posts/{post_id}/retry", "ScheduledPostRetry", "ScheduledPostRetried"),
     ("get", "/monitor/logs", None, "MonitorLogs"),
     ("post", "/monitor/diagnosis", None, "SystemDiagnosis"),
     ("get", "/monitor/diagnosis", None, "SystemDiagnosis"),
@@ -907,6 +908,8 @@ export const getScheduledPosts = (base: string, proof: SessionProof, signal?: Ab
   jsonRequest(base, '/monitor/scheduled-posts', 'ScheduledPostPage', proof, 'GET', undefined, undefined, signal);
 export const cancelScheduledPost = (base: string, proof: SessionProof, post: string, signal?: AbortSignal): Promise<ScheduledPostCancelled> =>
   jsonRequest(base, `/monitor/scheduled-posts/${id(post)}`, 'ScheduledPostCancelled', proof, 'DELETE', undefined, undefined, signal);
+export const retryScheduledPost = (base: string, proof: SessionProof, post: string, body: ScheduledPostRetry, signal?: AbortSignal): Promise<ScheduledPostRetried> =>
+  jsonRequest(base, `/monitor/scheduled-posts/${id(post)}/retry`, 'ScheduledPostRetried', proof, 'POST', validateWire<ScheduledPostRetry>('ScheduledPostRetry', body), undefined, signal);
 export const getMonitorLogs = (base: string, proof: SessionProof, limit = 200, signal?: AbortSignal): Promise<MonitorLogs> =>
   jsonRequest(base, '/monitor/logs' + query({limit}), 'MonitorLogs', proof, 'GET', undefined, undefined, signal);
 export const runSystemDiagnosis = (base: string, proof: SessionProof, signal?: AbortSignal): Promise<SystemDiagnosis> =>

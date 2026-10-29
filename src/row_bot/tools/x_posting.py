@@ -26,6 +26,7 @@ import mimetypes
 import os
 import re
 import threading
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -39,7 +40,10 @@ from row_bot.x_accounts import XAccount
 logger = logging.getLogger(__name__)
 
 ACTIONS = ("post", "reply", "quote", "delete")
-MEDIA_UPLOAD_URL = "https://upload.twitter.com/1.1/media/upload.json"
+# X API v2's chunked upload (initialize, append, finalize): it takes the OAuth 2.0 sign-in with media.write. The
+# v1.1 upload.twitter.com endpoint refuses OAuth 2.0 sign-ins, so every picture post failed there (29 Oct 2026).
+MEDIA_UPLOAD_URL = f"{x_accounts.API_BASE}/media/upload"
+_PROCESSING_WAIT = 600.0  # How long a video may take X to process (a long one takes minutes) before the post gives up.
 _CHUNK = 5 * 1024 * 1024
 _MAX_IMAGES = 4
 _MAX_TEXT = 25_000  # X's longest post (with a subscription).
@@ -323,13 +327,21 @@ def schedule(account: XAccount, action: str, text: str, target: str, media: list
     return item
 
 
+# A scheduled post that didn't go out stays in Home's Review with why, until the person tries it again or dismisses it.
+_NOT_SENT = ("failed", "missed", "unknown")
+
+
 def scheduled_posts() -> list[dict[str, Any]]:
-    """The posts waiting for their time, soonest first, as Home's Review shows them (never a path or a token)."""
+    """Home's Review: the posts that didn't go out (with why), then those waiting for their time, soonest first
+    (never a path or a token)."""
     accounts = {account.id: account for account in x_accounts.listed()}
     shown = []
     with _SCHEDULE_LOCK:
-        waiting = sorted((item for item in _scheduled() if item.get("status") == "scheduled"),
-                         key=lambda item: str(item.get("post_at")))
+        items = _scheduled()
+    waiting = [*sorted((item for item in items if item.get("status") in _NOT_SENT),
+                       key=lambda item: str(item.get("settled_at")), reverse=True),
+               *sorted((item for item in items if item.get("status") == "scheduled"),
+                       key=lambda item: str(item.get("post_at")))]
     for item in waiting:
         account = accounts.get(str(item.get("account_id")))
         files = []
@@ -345,20 +357,43 @@ def scheduled_posts() -> list[dict[str, Any]]:
         shown.append({"id": item["id"], "account_id": str(item.get("account_id") or ""),
                       "username": account.username if account else "", "action": str(item.get("action") or "post"),
                       "text": str(item.get("text") or ""), "target_url": target_url(str(item.get("target") or "")),
-                      "post_at": str(item.get("post_at") or ""), "media": files})
+                      "post_at": str(item.get("post_at") or ""), "media": files,
+                      "status": str(item.get("status")), "reason": str(item.get("result") or "")[:2000]
+                      if item.get("status") in _NOT_SENT else ""})
     return shown
 
 
 def cancel_scheduled(item_id: str) -> bool:
-    """Cancel a post still waiting for its time; False when there is none (it went, or was cancelled)."""
+    """Cancel a post still waiting for its time, or dismiss one that didn't go out; False when there is none."""
     with _SCHEDULE_LOCK:
         items = _scheduled()
         for item in items:
-            if item.get("id") == item_id and item.get("status") == "scheduled":
-                item.update(status="cancelled", settled_at=_stamp(_now()))
+            if item.get("id") == item_id and item.get("status") in ("scheduled", *_NOT_SENT):
+                item.update(status="cancelled" if item.get("status") == "scheduled" else "dismissed",
+                            settled_at=_stamp(_now()))
                 _save_scheduled(items)
                 return True
     return False
+
+
+def retry_scheduled(item_id: str, *, without_media: bool = False) -> bool:
+    """The person's Try again (or Post without the picture) on a post that didn't go out: due now (the next
+    ``send_due`` sends it).
+
+    The person approved this post; pressing it is their go-ahead to send it now, as it was or without its media.
+    Sending checks X first for an earlier attempt that may have gone out, so nothing is posted twice.
+    """
+    with _SCHEDULE_LOCK:
+        items = _scheduled()
+        item = next((entry for entry in items if entry.get("id") == item_id and entry.get("status") in _NOT_SENT),
+                    None)
+        if item is None:
+            return False
+        item.update(status="scheduled", post_at=datetime.now().isoformat(timespec="minutes"),  # Local, as slots are.
+                    result="", url="", settled_at="",
+                    media=[] if without_media else item.get("media") or [])
+        _save_scheduled(items)
+    return True
 
 
 def _settle_scheduled(item: dict[str, Any], status: str, result: str, url: str = "") -> None:
@@ -411,7 +446,8 @@ def send_due(now: datetime | None = None) -> list[dict[str, Any]]:
         if status == "posted":
             notify(title=f"Posted on X as {handle}", message=url or result, source="x", requested=True)
         else:
-            notify(title=f"A scheduled post as {handle} didn't go out", message=result, toast_type="warning",
+            notify(title=f"A scheduled post as {handle} didn't go out",
+                   message=f"{result} It's in Home › Review, where you can try it again.", toast_type="warning",
                    source="x")
     return done
 
@@ -500,20 +536,26 @@ def _refusal(response: Any, account: XAccount) -> str:
     return f"X refused it ({response.status_code}){': ' + detail if detail else ''}."
 
 
-def _upload(media: list[Media], token: dict) -> list[str]:
+def _category(mime: str) -> str:
+    return "tweet_video" if mime.startswith("video/") else "tweet_gif" if mime == "image/gif" else "tweet_image"
+
+
+def _upload(account: XAccount, media: list[Media], token: dict) -> list[str]:
     """Upload each file in chunks, checking its bytes are the ones approved; raises XPostError (nothing posted)."""
     ids: list[str] = []
     headers = x_accounts.bearer(token)
     for item in media:
-        def fail(step: str) -> XPostError:
-            return XPostError(f"Uploading {item.name} to X failed ({step}), so nothing was posted. "
+        def fail(step: str, response: Any = None) -> XPostError:
+            reason = f" {_refusal(response, account)}" if response is not None else ""
+            return XPostError(f"Uploading {item.name} to X failed ({step}), so nothing was posted.{reason} "
                               "Uploaded media may stay on X unused.")
         try:
-            started = x_accounts.send("POST", MEDIA_UPLOAD_URL, headers=headers, timeout=30, data={
-                "command": "INIT", "total_bytes": str(item.size), "media_type": item.mime})
+            started = x_accounts.send("POST", f"{MEDIA_UPLOAD_URL}/initialize", headers=headers, timeout=30,
+                                      json={"media_type": item.mime, "total_bytes": item.size,
+                                            "media_category": _category(item.mime)})
             if started.status_code not in (200, 201, 202):
-                raise fail("start")
-            media_id = str(started.json().get("media_id_string") or "")
+                raise fail("start", started)
+            media_id = str((started.json().get("data") or {}).get("id") or "")
             if not media_id:
                 raise fail("start")
             digest, sent = hashlib.sha256(), 0
@@ -522,19 +564,19 @@ def _upload(media: list[Media], token: dict) -> list[str]:
                 while chunk := handle.read(_CHUNK):
                     digest.update(chunk)
                     sent += len(chunk)
-                    appended = x_accounts.send("POST", MEDIA_UPLOAD_URL, headers=headers, timeout=60,
-                                               data={"command": "APPEND", "media_id": media_id,
-                                                     "segment_index": str(segment)},
-                                               files={"media_data": chunk})
+                    appended = x_accounts.send("POST", f"{MEDIA_UPLOAD_URL}/{media_id}/append", headers=headers,
+                                               timeout=60, data={"segment_index": str(segment)},
+                                               files={"media": chunk})
                     if appended.status_code not in (200, 202, 204):
-                        raise fail("sending")
+                        raise fail("sending", appended)
                     segment += 1
             if digest.hexdigest() != item.sha256 or sent != item.size:
                 raise XPostError(f"{item.name} changed after it was approved, so nothing was posted.")
-            finished = x_accounts.send("POST", MEDIA_UPLOAD_URL, headers=headers, timeout=30,
-                                       data={"command": "FINALIZE", "media_id": media_id})
+            finished = x_accounts.send("POST", f"{MEDIA_UPLOAD_URL}/{media_id}/finalize", headers=headers,
+                                       timeout=30)
             if finished.status_code not in (200, 201):
-                raise fail("finishing")
+                raise fail("finishing", finished)
+            _processed(media_id, (finished.json().get("data") or {}).get("processing_info"), headers, fail)
         except XPostError:
             raise
         except (OSError, ValueError) as exc:
@@ -545,6 +587,22 @@ def _upload(media: list[Media], token: dict) -> list[str]:
             raise fail("connection") from None
         ids.append(media_id)
     return ids
+
+
+def _processed(media_id: str, info: Any, headers: dict, fail: Any) -> None:
+    """Wait while X processes a video or GIF (a picture is ready at once); raises when X can't use it."""
+    deadline = time.monotonic() + _PROCESSING_WAIT
+    while isinstance(info, dict) and info.get("state") in {"pending", "in_progress"}:
+        if time.monotonic() >= deadline:
+            raise fail("processing")
+        time.sleep(min(max(float(info.get("check_after_secs") or 1), 0.0), 10.0))
+        checked = x_accounts.send("GET", MEDIA_UPLOAD_URL, headers=headers, timeout=30,
+                                  params={"command": "STATUS", "media_id": media_id})
+        if checked.status_code != 200:
+            raise fail("processing", checked)
+        info = (checked.json().get("data") or {}).get("processing_info")
+    if isinstance(info, dict) and info.get("state") == "failed":
+        raise fail("processing")
 
 
 def _create(account: XAccount, token: dict, body: dict[str, Any]) -> Outcome:
@@ -669,6 +727,8 @@ def _send_once(account: XAccount, action: str, text: str, target: str, media: li
     if token is None:
         return Sent("failed", f"Nothing was sent: the sign-in of {account.handle} has run out or was removed. The "
                               "person can reconnect it in Settings › Apps › X.")
+    if media and not x_accounts.can_post_media(account):
+        return Sent("failed", f"Nothing was sent: {x_accounts.media_reconnect(account)}")
     digest = payload_hash(account, action, text, target, media)
     earlier = _unsettled(account, digest)
     if earlier is not None:
@@ -693,7 +753,7 @@ def _send_once(account: XAccount, action: str, text: str, target: str, media: li
             elif action == "quote":
                 body["quote_tweet_id"] = target
             if media:
-                body["media"] = {"media_ids": _upload(media, token)}
+                body["media"] = {"media_ids": _upload(account, media, token)}
             outcome = _create(account, token, body)
     except XPostError as exc:
         _settle(operation, "failed")
