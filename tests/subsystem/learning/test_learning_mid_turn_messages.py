@@ -185,7 +185,7 @@ def test_steps_a_mid_turn_correction_interrupted_are_never_trained_and_the_redo_
     store = LearningStore(learning_on, clock=clock)
     clock.advance(HOUR)
 
-    compiled = dataset.compile_dataset(store, recipes.load("8gb"), lookup=chats, refresh_vault=False,
+    compiled = dataset.compile_dataset(store, recipes.load("16gb"), lookup=chats, refresh_vault=False,
                                        shape="captured")
 
     assert compiled.left_out.get("corrected_or_stopped") == 1
@@ -198,7 +198,7 @@ def test_steps_before_a_mid_turn_message_that_corrects_nothing_still_train(write
     store = LearningStore(learning_on, clock=clock)
     clock.advance(HOUR)
 
-    compiled = dataset.compile_dataset(store, recipes.load("8gb"), lookup=chats, refresh_vault=False,
+    compiled = dataset.compile_dataset(store, recipes.load("16gb"), lookup=chats, refresh_vault=False,
                                        shape="captured")
 
     targets = [target for row in _targets(compiled) for target in row]
