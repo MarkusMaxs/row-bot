@@ -1939,11 +1939,11 @@ export default function Conversation({
           setSteeringClaim(null);
           setMissingReceipt(null);
           setError('');
-          overlay.notify(
-            checking
-              ? 'Your waiting message went through. Your current draft is kept.'
-              : 'Message waiting: Row-Bot reads it at its next step.',
-          );
+          // The waiting list above the composer shows it; only a checked one says so.
+          if (checking)
+            overlay.notify(
+              'Your waiting message went through. Your current draft is kept.',
+            );
           waiting.reload();
         }
       } else if (current()) {
