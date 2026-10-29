@@ -230,6 +230,18 @@ test('Home › Review shows the waiting post in full with its time; approving sc
   ).toBeEnabled();
   await everywhere(page, info, 'review-queue', card);
 
+  info.annotations.push({
+    type: 'expected-console-error',
+    description: JSON.stringify({
+      signature:
+        'Failed to load resource: the server responded with a status of 409 (Conflict)',
+      count: 1,
+      upTo: true,
+      owner: 'x-accounts later-post fixture',
+      fixture:
+        'The chat that asked stays open behind Home with its own card: approving here moves its turn on, and a card it shows again reads the answered approval, which answers 409 and says it was answered',
+    }),
+  });
   await card
     .getByRole('button', { name: 'Approve for then', exact: true })
     .click();
