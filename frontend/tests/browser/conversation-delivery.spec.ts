@@ -97,6 +97,16 @@ test('sending to your devices shows the download here and on your phone, with a 
   const conversation = await newConversation(page);
   const { phone, context } = await phoneOf(page, browser);
   try {
+    // The phone, in another chat: "Row-Bot sent you …" with Open. It shows for
+    // six seconds from the send, which can pass before this chat's card is up
+    // (seen on CI): watch for it from the send and hold it there by hovering.
+    const notice = phone
+      .locator('.toast')
+      .filter({ hasText: 'Row-Bot sent you q3-report.pdf' });
+    const held = expect(notice)
+      .toBeVisible({ timeout: 20_000 })
+      .then(() => notice.hover()); // Held while it's looked at.
+    held.catch(() => undefined); // Reported where it is awaited.
     await send(page, 's5 devices fixture');
 
     const transcript = page.getByRole('log', { name: 'Conversation' });
@@ -119,14 +129,7 @@ test('sending to your devices shows the download here and on your phone, with a 
       0,
     );
 
-    // The phone, in another chat: "Row-Bot sent you …" with Open. It shows
-    // for six seconds: look for it now and hold it, before the screenshots
-    // here, which can take longer than that (seen on CI).
-    const notice = phone
-      .locator('.toast')
-      .filter({ hasText: 'Row-Bot sent you q3-report.pdf' });
-    await expect(notice).toBeVisible({ timeout: 15_000 });
-    await notice.hover(); // Held while it's looked at.
+    await held;
     await everywhere(page, info, 'sent-to-devices', () =>
       card.scrollIntoViewIfNeeded(),
     );
