@@ -117,6 +117,35 @@ describe('Buddy shared companion and preferences', () => {
     expect(input.onSettings).toHaveBeenCalledOnce();
   });
 
+  it('hides Buddy from its peek, with an Undo that brings it back', async () => {
+    const input = props();
+    const hidden = {
+      ...snapshot,
+      revision: 'revision-two',
+      preferences: { ...snapshot.preferences, visible: false },
+    };
+    input.save = vi.fn(async () => hidden);
+    render(<BuddyControls {...input} settingsOpen={false} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open Buddy' }));
+    const peek = await screen.findByRole('dialog', { name: 'Buddy' });
+    fireEvent.click(within(peek).getByRole('button', { name: 'Hide' }));
+    await waitFor(() =>
+      expect(input.save).toHaveBeenCalledWith(
+        { visible: false },
+        'revision-one',
+      ),
+    );
+    await notice('Buddy is hidden.');
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+    await waitFor(() =>
+      expect(input.save).toHaveBeenLastCalledWith(
+        { visible: true },
+        'revision-two',
+      ),
+    );
+  });
+
   it('keeps name and compact size in Advanced and shows the looks as a grid of tiles (B258)', () => {
     const input = props();
     render(<BuddyControls {...input} />);

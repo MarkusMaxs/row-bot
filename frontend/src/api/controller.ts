@@ -242,6 +242,8 @@ export class ClientController {
       'conversations',
       () => void this.refreshConversationList(),
     );
+    // "Row-Bot sent you …" shows at once where no conversation stream carries it.
+    this.live.subscribe('notices', () => void this.readNotices());
   }
   getSnapshot = (): ClientState => this.state;
   getSelectionVersion = (): number => this.selectionNumber;

@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import sqlite3
@@ -101,9 +102,12 @@ class AccessStore:
         self.db_path = Path(db_path) if db_path is not None else get_access_db_path()
         self._migration_hook = migration_hook
         self._optional_columns_checked = False
+        # The database file this store last found at the current schema: (device, inode).
+        self._schema_current: tuple[int, int] | None = None
 
     def _connect(self) -> sqlite3.Connection:
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        if self._schema_current is None:  # Once the schema is current, its folder is there.
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
         connection = sqlite3.connect(self.db_path, timeout=30, isolation_level=None)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
@@ -131,8 +135,29 @@ class AccessStore:
         finally:
             connection.close()
 
+    def _file_identity(self) -> tuple[int, int] | None:
+        try:
+            status = os.stat(self.db_path)
+        except OSError:
+            return None
+        return status.st_dev, status.st_ino
+
     def ensure_schema(self) -> None:
-        """Create or migrate the schema under a cross-process write lock."""
+        """Create or migrate the schema under a cross-process write lock.
+
+        Every read calls this. Once the schema is found current it is checked again only when the database
+        file is a different one (removed, restored or replaced): taking the write lock on every read kept an
+        open page's event stream busy, several times a second (5.3.1).
+        """
+        identity = self._file_identity()
+        if identity is not None and identity == self._schema_current:
+            return
+        self._schema_current = None
+        self._check_schema()
+        # Committed: this file is current now, whichever way it got there.
+        self._schema_current = self._file_identity()
+
+    def _check_schema(self) -> None:
         with self._immediate_transaction() as connection:
             current_version = int(
                 connection.execute("PRAGMA user_version").fetchone()[0]

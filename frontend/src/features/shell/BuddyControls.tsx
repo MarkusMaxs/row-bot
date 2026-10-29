@@ -6,7 +6,6 @@ import { useEffect, useRef, type ReactNode } from 'react';
 import {
   Button,
   ErrorState,
-  Hint,
   IconButton,
   Input,
   Segmented,
@@ -14,6 +13,7 @@ import {
   Toggle,
 } from '../../ui/primitives';
 import { useNotify } from '../../ui/overlays';
+import { BuddyCard } from '../buddy/BuddyCard';
 import {
   SettingsAdvanced,
   SettingsGroup,
@@ -21,7 +21,7 @@ import {
   SettingsStatus,
   StatusLine,
 } from '../settings/anatomy';
-import { Check, PictureInPicture2, RefreshCw, Sparkles } from 'lucide-react';
+import { Check, RefreshCw, Sparkles } from 'lucide-react';
 
 export type BuddyPreferences = {
   visible: boolean;
@@ -86,6 +86,8 @@ export type BuddyControlsProps = {
   packs: BuddyPackPage | null;
   currentRunId: string | null;
   renderAvatar?(snapshot: BuddySnapshot): ReactNode;
+  /** Buddy larger, for the sidebar card's peek. */
+  renderPortrait?(snapshot: BuddySnapshot): ReactNode;
   renderPackPreview?(pack: BuddyPack): ReactNode;
   previewUrl?(pack: BuddyPack): string | null;
   onSettings(): void;
@@ -336,6 +338,19 @@ export default function BuddyControls(props: BuddyControlsProps) {
     }
   }
 
+  // Hidden from its card's peek, with an Undo; Settings › Buddy › Show Buddy brings it back too.
+  async function hide(current: BuddySnapshot) {
+    try {
+      const hidden = await props.save({ visible: false }, current.revision);
+      notify('Buddy is hidden.', undefined, {
+        label: 'Undo',
+        onAction: () => void props.save({ visible: true }, hidden.revision),
+      });
+    } catch {
+      notify("Buddy couldn't be hidden. Try again.", 'danger');
+    }
+  }
+
   if (!props.snapshot) return null;
   const snapshot = props.snapshot;
   const conflict = dirty && baseRevision !== snapshot.revision;
@@ -344,48 +359,30 @@ export default function BuddyControls(props: BuddyControlsProps) {
   return (
     <>
       {snapshot.preferences.visible && props.companionVisible !== false && (
-        <aside
-          className="buddy-companion"
-          aria-label="Buddy companion"
-          aria-busy={busy}
+        <BuddyCard
+          snapshot={snapshot}
+          busy={busy}
+          avatar={
+            props.renderAvatar?.(snapshot) ?? <span aria-hidden="true">✦</span>
+          }
+          portrait={
+            props.renderPortrait?.(snapshot) ??
+            props.renderAvatar?.(snapshot) ?? <span aria-hidden="true">✦</span>
+          }
+          showStatus={
+            snapshot.preferences.bubble_verbosity !== 'quiet' &&
+            !snapshot.preferences.collapsed
+          }
+          onSettings={props.onSettings}
+          onUndock={props.onUndock}
+          onHide={() => void hide(snapshot)}
         >
-          {/* The avatar's tooltip carries Buddy's name (B225). */}
-          <Hint label={snapshot.preferences.display_name || 'Buddy'}>
-            <Button
-              aria-label="Buddy settings"
-              variant="ghost"
-              onClick={props.onSettings}
-            >
-              {props.renderAvatar?.(snapshot) ?? (
-                <span aria-hidden="true">✦</span>
-              )}
-            </Button>
-          </Hint>
-          <span className="buddy-companion-text">
-            <span className="buddy-companion-name">
-              {snapshot.preferences.display_name || 'Buddy'}
-            </span>
-            {snapshot.preferences.bubble_verbosity !== 'quiet' &&
-              !snapshot.preferences.collapsed && (
-                <p role="status">{snapshot.status.label}</p>
-              )}
-          </span>
-          {props.onUndock && (
-            <IconButton
-              size="sm"
-              className="buddy-undock"
-              label="Undock Buddy"
-              onClick={props.onUndock}
-            >
-              <PictureInPicture2 size={15} aria-hidden />
-            </IconButton>
-          )}
           {props.currentRunId && (
             <Button disabled={busy} onClick={() => void run('stop')}>
               Stop current run
             </Button>
           )}
-        </aside>
+        </BuddyCard>
       )}
       {props.settingsOpen && draft && (
         <section

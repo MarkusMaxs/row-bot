@@ -398,6 +398,13 @@ _STATUS.update(
         "learning_change_refused": 409,
         "learning_change_busy": 409,
         "learning_method_changed": 409,
+        "learning_hugging_face_unavailable": 409,
+        "learning_hugging_face_unreachable": 503,
+        "learning_hugging_face_refused": 409,
+        "learning_hugging_face_busy": 409,
+        "learning_hugging_face_signed_out": 409,
+        "learning_hugging_face_over_cap": 409,
+        "learning_quote_changed": 409,
         "invalid_plugin_lifecycle_command": 422,
         "plugin_marketplace_unavailable": 409,
         "plugin_marketplace_entry_unavailable": 404,
@@ -1083,6 +1090,9 @@ _STATUS.update(
 )
 
 
+# An MCP Registry listing that changed or went away since the person saw it (B405): a 409 in words, never a 503.
+_STATUS.update(dict.fromkeys(('registry_entry_removed', 'registry_recipe_changed', 'registry_recipe_unsupported',
+                              'registry_identity_missing'), 409))
 _STATUS.update(dict.fromkeys(('plan_changed', 'plan_unsupported', 'plan_not_resumable', 'invalid_access_preset', 'invalid_integration_query', 'invalid_mcp_auth', 'invalid_mcp_target', 'mcp_auth_busy', 'mcp_auth_callback_invalid', 'mcp_auth_callback_unavailable', 'mcp_auth_configuration_changed', 'mcp_auth_connection_unavailable', 'mcp_auth_denied', 'mcp_auth_expired', 'mcp_auth_flow_unavailable', 'mcp_auth_not_completed', 'mcp_auth_state_invalid', 'mcp_oauth_http_required', 'mcp_auth_endpoint_invalid', 'mcp_auth_issuer_mismatch', 'mcp_auth_origin_mismatch', 'mcp_auth_redirect_refused', 'mcp_credentials_endpoint_changed', 'mcp_credentials_too_large', 'mcp_credentials_unavailable', 'invalid_credential_reference', 'mcp_durable_storage_required', 'mcp_sign_in_required', 'mcp_package_recipe_unsupported', 'mcp_package_install_scripts_unsupported', 'mcp_package_locked_dependencies_required', 'mcp_package_integrity_required', 'mcp_package_integrity_changed', 'mcp_package_invalid', 'mcp_package_node_required', 'mcp_package_preparation_required', 'mcp_package_preview_capacity', 'mcp_package_preview_expired', 'mcp_package_source_invalid', 'mcp_package_too_large', 'package_link_or_collision', 'unsafe_package_path', 'hermes_recipe_unsupported', 'package_download_too_large', 'package_preview_changed', 'package_preview_expired', 'package_source_not_supported', 'package_source_removed', 'plugin_child_owned', 'plugin_child_parent_owned', 'plugin_child_source_immutable', 'plugin_mcp_state_unavailable', 'plugin_package_state_unavailable'), 409))
 # An address pasted back to finish a sign-in from another device: not that address, another sign-in's, already
 # used, or its sign-in has ended.
@@ -10928,7 +10938,7 @@ def create_router(
                 if notices_epoch is not None
                 else None
             )
-            heartbeat = started = security.clock()
+            heartbeat = started = checked = security.clock()
             # How it ended, for the log (#568): a dropped window left no trace before.
             ended = "the window went away, or Row-Bot is stopping"
             logger.debug("Event stream opened (session %s)", current.id[:8])
@@ -10937,9 +10947,25 @@ def create_router(
                 # connection need not wait for the periodic heartbeat.
                 yield ": connected\n\n"
                 while sub.streaming and not await request.is_disconnected():
-                    await _context(request)
-                    security.session(await _context(request), current.id, current.csrf)
                     result = await replay(sub, position)
+                    notices = (
+                        app_notices.since(notice_position)
+                        if notice_position is not None
+                        else []
+                    )
+                    # Access is checked before anything is sent, and every half second while nothing
+                    # is: a revoked session's stream still ends well within a second, and an open page
+                    # no longer reads the access store eight times a second (5.3.1).
+                    if (
+                        result["snapshot_required"]
+                        or result["events"]
+                        or notices
+                        or security.clock() - checked >= 0.5
+                    ):
+                        security.session(
+                            await _context(request), current.id, current.csrf
+                        )
+                        checked = security.clock()
                     if result["snapshot_required"]:
                         await _context(request)
                         # A snapshot may exceed one event's limit. Transfer the new
@@ -10962,11 +10988,7 @@ def create_router(
                             )
                     # Background notices ride the same stream as their own
                     # frames; they never move the conversation cursor.
-                    for notice in (
-                        app_notices.since(notice_position)
-                        if notice_position is not None
-                        else ()
-                    ):
+                    for notice in notices:
                         frame = dto.NoticeFrame(
                             notices_epoch=app_notices.epoch, notice=notice.view()
                         )

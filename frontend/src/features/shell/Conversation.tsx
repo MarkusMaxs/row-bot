@@ -556,6 +556,7 @@ export default function Conversation({
   const compactContext = hosted
     ? floatingContext
     : compactPlacement || narrowChat;
+  const detailsShown = hosted ? cardActive : !compactContext;
   useEffect(() => setFloatingOpen(false), [id]);
   // Open details belong to the layout they were opened in (B402). Leaving a
   // phone's layout closes its sheet: the desktop card shows the details, and
@@ -3702,7 +3703,8 @@ export default function Conversation({
               busy={busy || state.status !== 'ready'}
               onAction={waitingAction}
             />
-            <WaitsStrip conversationId={id ?? ''} />
+            {/* Conversation details list the waits while they show. */}
+            {!detailsShown && <WaitsStrip conversationId={id ?? ''} />}
             <div
               className="composer-field"
               ref={composerFieldRef}

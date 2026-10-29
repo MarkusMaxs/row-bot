@@ -5213,17 +5213,28 @@ def l1a_learning(action: str, x_fixture_token: str = Header(default="")) -> dict
         _l1a_saved["check"] = hardware.check
         _l1a_saved["peek"] = hardware.peek
         _l1a_saved["used"] = spending.used_this_month
+        _l1a_saved["gpu_memory"] = hardware.gpu_memory
+        _l1a_saved["memory_free"] = hardware.memory_free_for_training
     if action == "preview":
         learning._PREVIEW = True  # the start-up flag, as if launched with ROW_BOT_LEARNING_PREVIEW=1
         learning.invalidate()
         # The personal model's download (L2b): a stand-in whose states the specs set; never a real one.
         from row_bot.learning.training import downloads as _downloads
         _downloads._downloads = _FixtureDownloads()
-    elif action in {"gpu", "no-gpu"}:
-        found = (hardware.classify([hardware.Gpu("NVIDIA GeForce RTX 5070 Laptop GPU", 8151, "596.08")])
-                 if action == "gpu" else hardware.HardwareCheck("no_gpu"))
+    elif action in {"gpu", "small-gpu", "no-gpu"}:
+        # A 16 GB laptop card (the 9B's smallest tier, O124) on a computer with memory to spare: the fake
+        # card's memory and this computer's, never the real ones (a busy card or a computer short of
+        # memory would make training wait in the spec).
+        # small-gpu: an 8 GB card, which runs a personal model trained on Hugging Face but can't train one.
+        memory = hardware.SystemMemory(limit_mib=65_536, free_mib=40_960)
+        card = {"gpu": hardware.Gpu("NVIDIA GeForce RTX 5080 Laptop GPU", 16_303, "596.08"),
+                "small-gpu": hardware.Gpu("NVIDIA GeForce RTX 5070 Laptop GPU", 8_151, "596.08")}.get(action)
+        found = hardware.classify([card], memory) if card else hardware.HardwareCheck("no_gpu")
         hardware.check = lambda *, refresh=False, detector=None: found
         hardware.peek = lambda: found  # what reads that mustn't wait see (Runs in, the recipe's need)
+        hardware.gpu_memory = lambda **kwargs: (600, card.memory_mib) if card else None
+        memory_free = _l1a_saved["memory_free"]
+        hardware.memory_free_for_training = lambda *, reader=None: memory_free(reader=reader or (lambda: memory))
     elif action == "paused":
         from row_bot.application.settings_commands import write_learning_settings
         write_learning_settings({"paused": True})
@@ -5263,6 +5274,8 @@ def l1a_learning(action: str, x_fixture_token: str = Header(default="")) -> dict
         hardware.check = _l1a_saved["check"]
         hardware.peek = _l1a_saved["peek"]
         spending.used_this_month = _l1a_saved["used"]
+        hardware.gpu_memory = _l1a_saved["gpu_memory"]
+        hardware.memory_free_for_training = _l1a_saved["memory_free"]
         past = sys.modules.get("row_bot.learning.past_chats")
         if past is not None:
             past.stop_background(10)
@@ -5611,25 +5624,25 @@ class _FixtureDownloads:
         self.reset()
         if name == "installed":
             self.engine_state, self.engine_bytes = "installed", 4_033_251_988
-            self.model_state, self.model_bytes = "downloaded", 4_571_279_000
+            self.model_state, self.model_bytes = "downloaded", 19_331_993_000
         elif name == "damaged":
             self.engine_state, self.engine_bytes = "damaged", 0
-            self.model_state, self.model_bytes = "downloaded", 4_571_279_000
+            self.model_state, self.model_bytes = "downloaded", 19_331_993_000
         elif name in ("downloading", "model", "installing"):
             self.state = "downloading"
             self.phase = {"downloading": "engine", "model": "model", "installing": "installing"}[name]
-            self.done = {"engine": 1_190_000_000, "model": 4_930_000_000, "installing": 2_218_000_000}[self.phase]
-            self.total = 6_789_270_885
+            self.done = {"engine": 1_190_000_000, "model": 12_930_000_000, "installing": 21_549_991_432}[self.phase]
+            self.total = 21_549_991_432
         elif name == "paused":
-            self.state, self.done, self.total = "paused", 3_120_000_000, 6_789_270_885
+            self.state, self.done, self.total = "paused", 3_120_000_000, 21_549_991_432
         elif name == "disk":
-            self.state, self.needs, self.free = "not_enough_disk", 9_420_000_000, 6_030_000_000
-            self.total = 6_789_270_885
+            self.state, self.needs, self.free = "not_enough_disk", 24_180_000_000, 6_030_000_000
+            self.total = 21_549_991_432
         elif name == "failed":
-            self.state, self.failure, self.done, self.total = "failed", "network", 2_480_000_000, 6_789_270_885
+            self.state, self.failure, self.done, self.total = "failed", "network", 2_480_000_000, 21_549_991_432
         elif name == "server":  # L2x: an engine from before Row-Bot's own model server, only that missing
             self.engine_state, self.engine_bytes = "installed", 4_033_251_988
-            self.model_state, self.model_bytes = "downloaded", 4_571_279_000
+            self.model_state, self.model_bytes = "downloaded", 19_331_993_000
             self.state, self.total = "ready", 578_117_583
         elif name != "ready":
             raise HTTPException(404, "Unknown download state")
@@ -5699,7 +5712,7 @@ def l2b_learning(action: str, name: str = "", x_fixture_token: str = Header(defa
             raise HTTPException(409, "Turn on the preview first")
         current.set(name)
     elif action == "old-driver":
-        found = hardware.classify([hardware.Gpu("NVIDIA GeForce RTX 3080 Laptop GPU", 8192, "560.94")])
+        found = hardware.classify([hardware.Gpu("NVIDIA GeForce RTX 4090 Laptop GPU", 16_376, "560.94")])
         hardware.check = lambda *, refresh=False, detector=None: found
     else:
         raise HTTPException(404, "Unknown Learning fixture action")
@@ -5709,6 +5722,126 @@ def l2b_learning(action: str, name: str = "", x_fixture_token: str = Header(defa
 # ── Learning (preview), L2x: Row-Bot's own model server, "Runs in" and the larger tiers ──
 
 _l2x: dict[str, object] = {}
+_l2x_models: list[tuple[object, str, object]] = []  # what two-models replaced, put back by restore
+
+
+_c1: dict[str, object] = {}
+
+
+@app.post("/__c1_fixture/learning/{action}")
+def c1_learning(action: str, name: str = "", x_fixture_token: str = Header(default="")) -> dict:
+    """Training on Hugging Face for the C1 spec: a fake Hub and sign-in (in memory) in place of Hugging Face,
+    and a Hugging Face run at each of its states. Nothing reaches the network, a GPU or a real account."""
+    predecessor._authorize(x_fixture_token)
+    import json as _json
+
+    from row_bot.application.settings_commands import write_learning_settings
+    from row_bot.learning import runner as runner_module
+    from row_bot.learning.remote import hub as hub_module
+    from row_bot.learning.remote import training as remote_training
+    from row_bot.learning.training import jobs as jobs_module
+    from row_bot.learning.training import recipes
+    from tests.fixtures.hugging_face import FakeFetcher, FakeHub, FakeSignIn
+    from tests.fixtures.learning import FakeDataset
+
+    runner = runner_module.get()
+    if action in ("restore", "hugging-face"):
+        remote_training.spend_path().unlink(missing_ok=True)  # each spec starts with no spending this month
+    if action == "restore":
+        if "remote" in _c1:
+            runner.remote = _c1.pop("remote")
+        remote_training.configure(None)
+        _c1.clear()
+        return {"action": action}
+    if action == "hugging-face":  # name: signed_out, signing_in, signed_in, small (signed in, a 12 GB card)
+        hub = FakeHub()
+        sign_in = FakeSignIn(signed_in=name in ("signed_in", "small"))
+        sign_in.signing_in = name == "signing_in"
+        card = 12_288 if name == "small" else 32_607
+        trainer = remote_training.RemoteTrainer(
+            jobs=runner.supervisor.jobs, hub=hub, sign_in=sign_in, fetcher=FakeFetcher(hub),
+            card_mib=lambda: card, start_threads=False,
+            flavors=lambda: [hub_module.Flavor("a100-large", "Nvidia A100", 80, 2.5 / 60),
+                             hub_module.Flavor("l40sx1", "Nvidia L40S", 48, 0.03)])
+        trainer.dataset = runner.remote.dataset if runner.remote is not None else None
+        _c1.setdefault("remote", runner.remote)
+        _c1.update(hub=hub, sign_in=sign_in, trainer=trainer)
+        runner.remote = trainer
+        remote_training.configure(trainer)
+        write_learning_settings({"train_where": "hugging_face", "hugging_face.model": ""})
+        return {"action": action}
+    trainer = _c1.get("trainer")
+    if trainer is None:
+        raise HTTPException(409, "Set up the fake Hugging Face first")
+    hub, sign_in = _c1["hub"], _c1["sign_in"]
+    if action == "authorize":
+        sign_in.authorize()
+        return {"action": action}
+    if action == "run":
+        # name: first (planned, never confirmed), planned, over-cap, uploading, setting-up, training, exporting,
+        # downloading, lost, no-credit, done (the version made ready and the uploads deleted)
+        jobs = runner.supervisor.jobs
+        recipe = recipes.load("hf-27b")
+        steps = recipe.steps_for(412)
+        job = jobs.plan(steps_total=steps, checkpoint_every=10, recipe=recipe.spec(None), backend="hugging_face")
+        data = jobs_module.run_dir(job.id) / "data"
+        data.mkdir(parents=True, exist_ok=True)
+        FakeDataset(examples=412).prepare(job, data)
+        confirmed = name != "first"
+        write_learning_settings({"hugging_face.runs_confirmed": confirmed,
+                                 "hugging_face.monthly_cap_usd": 20 if confirmed else 0})
+        if name == "over-cap":
+            remote_training.record_spend("job_earlier", cost_usd=18.4, seconds=36_000, flavor="l40sx1",
+                                         at=trainer.clock(), final=True)
+        if name in ("first", "planned", "over-cap"):
+            return {"action": action, "job_id": job.id}
+        trainer.start(job, "train_now", confirmed=True)
+        moved = jobs.get(job.id)
+        remote = hub.jobs[moved.remote_request_id] if moved.remote_request_id else None
+        record = remote_training.read_record(job.id)
+        if name == "uploading":
+            jobs.move(job.id, "stopped", reason="you")
+            new = jobs.plan(steps_total=steps, checkpoint_every=10, recipe=recipe.spec(None), backend="hugging_face")
+            jobs.move(new.id, "preparing", reason="train_now")
+            folder = jobs_module.run_dir(new.id)
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / remote_training.REMOTE_FILE).write_text(_json.dumps(
+                {**record.to_dict(), "job_id": new.id, "phase": "uploading", "remote_id": None}), encoding="utf-8")
+            return {"action": action}
+        stage = {"setting-up": "setting_up", "training": "training", "exporting": "exporting",
+                 "lost": "training", "no-credit": "setting_up"}.get(name)
+        if stage:
+            remote.stage, remote.running_seconds = "RUNNING", {"setting_up": 240, "training": 2_520,
+                                                               "exporting": 5_100}.get(stage, 240)
+            hub.say(remote.id, "stage", stage=stage, steps_total=steps)
+            if stage in ("training", "exporting"):
+                hub.say(remote.id, "progress", step=118 if stage == "training" else steps, steps_total=steps,
+                        loss=0.31, seconds_per_step=41.0)
+            trainer.tick()
+        if name == "queued":  # Hugging Face has no free card of the kind yet (SCHEDULING)
+            trainer.tick()
+        if name == "lost":
+            hub.fail["job"] = hub_module.HubError("network")
+            trainer.tick()
+        if name == "no-credit":
+            remote.stage = "ERROR"
+            hub.say(remote.id, "error", reason="no_credit", stage="setting_up")
+            trainer.tick()
+        if name in ("downloading", "done"):
+            hub.finish(remote.id, output_repo=record.output_repo, running_seconds=6_120)
+            if name == "downloading":
+                remote_training.write_record(remote_training.RunRecord(**{
+                    **record.to_dict(), "outputs": tuple(record.outputs), "phase": "downloading",
+                    "stage": "done", "running_seconds": 6_120, "cost_usd": remote_training.cost(6_120, 1.8)}))
+            else:
+                trainer.tick()  # downloaded, evaluating
+                current = remote_training.read_record(job.id)
+                jobs.move(job.id, "ready", reason="made_ready")
+                remote_training.write_record(remote_training.RunRecord(**{
+                    **current.to_dict(), "outputs": tuple(current.outputs)}))
+                trainer.tick()  # settled: the uploads go
+        return {"action": action, "job_id": job.id}
+    raise HTTPException(404, "Unknown Learning fixture action")
 
 
 @app.post("/__l2x_fixture/learning/{action}")
@@ -5730,6 +5863,9 @@ def l2x_learning(action: str, name: str = "", x_fixture_token: str = Header(defa
             if original is not None:
                 setattr(owner, attribute, original)
         _l2x.clear()
+        while _l2x_models:
+            owner, attribute, original = _l2x_models.pop()
+            setattr(owner, attribute, original)
         hardware.forget_memory_reading()
         from row_bot.learning import runner as runner_module
         from row_bot.learning import versions as learning_versions
@@ -5739,19 +5875,29 @@ def l2x_learning(action: str, name: str = "", x_fixture_token: str = Header(defa
         return {"action": action}
     for module, attribute, owner in patched:
         _l2x.setdefault(f"{module}.{attribute}", getattr(owner, attribute))
+    if action == "two-models":  # O112, O124: a stand-in smaller model beside the 9B (before "card")
+        from row_bot.learning.training import weights
+        from tests.fixtures.learning import stand_in_small_model
+
+        def patch(owner: object, attribute: str, value: object) -> None:
+            _l2x_models.append((owner, attribute, getattr(owner, attribute)))
+            setattr(owner, attribute, value)
+
+        stand_in_small_model(patch, weights.QWEN35_2B.files)  # the download is the fixture's stand-in
+        return {"action": action}
     if action == "card":
         # name: 5090 (the 32 GB tier, with 128 GB of RAM and virtual memory), 5090-short (memory that can't
-        # hold its largest certified tier, O105), 4060-low (an 8 GB card on a computer whose memory can't
-        # hold even the 8 GB tier), 4080-busy (a 16 GB card whose display and apps hold 6.5 GB: Row-Bot
-        # recommends the 2B, O112) or none (no NVIDIA card: not on this computer)
+        # hold its largest certified tier, O105; with two-models), 5090-busy (its display and apps hold
+        # 22.5 GB: with two-models Row-Bot recommends the smaller model, O112), 4080-low (a 16 GB card on a
+        # computer whose memory can't hold even its tier) or none (no NVIDIA card: not on this computer)
         needs = sorted(tier.system_memory_mib for tier in hardware.TIERS if tier.certified and tier.system_memory_mib)
         # 5090-short: room for the smallest tier only (the next one would offer a larger model).
         # Looked up only for the cards that need it: an OS with fewer measured tiers has fewer needs.
-        limit = needs[1] - 1024 if name == "5090-short" else needs[0] - 3072 if name == "4060-low" else 131_072
+        limit = needs[1] - 1024 if name == "5090-short" else needs[0] - 3072 if name == "4080-low" else 131_072
         memory = hardware.SystemMemory(limit_mib=limit, free_mib=min(limit, 90_000) // 2)
-        gpus = ([] if name == "none" else [hardware.Gpu("NVIDIA GeForce RTX 4060", 8_188, "596.08", 300)]
-                if name == "4060-low" else [hardware.Gpu("NVIDIA GeForce RTX 4080", 16_376, "596.08", 6_600)]
-                if name == "4080-busy" else [hardware.Gpu("NVIDIA GeForce RTX 5090", 32_607, "610.60", 2_400)])
+        gpus = ([] if name == "none" else [hardware.Gpu("NVIDIA GeForce RTX 4080", 16_376, "596.08", 300)]
+                if name == "4080-low" else [hardware.Gpu("NVIDIA GeForce RTX 5090", 32_607, "596.08", 23_000)]
+                if name == "5090-busy" else [hardware.Gpu("NVIDIA GeForce RTX 5090", 32_607, "610.60", 2_400)])
         found = hardware.classify(gpus, memory)
         hardware.check = lambda *, refresh=False, detector=None: found
         hardware.peek = lambda: found

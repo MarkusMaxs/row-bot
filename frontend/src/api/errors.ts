@@ -59,6 +59,26 @@ const TUNNEL = open('access', 'Tunnel', 'tunnel');
 const REMOTE_ACCESS = open('access', 'Devices & remote access');
 
 const CATALOG: Record<string, Entry> = {
+  registry_entry_removed: [
+    "This app is no longer listed in the MCP Registry, so Row-Bot can't set it up from there.",
+    'none',
+    MCP,
+  ],
+  registry_recipe_changed: [
+    'Its MCP Registry listing changed since you opened it. Open it again to see it as it is now.',
+    'review',
+    MCP,
+  ],
+  registry_recipe_unsupported: [
+    "Its MCP Registry listing asks for setup Row-Bot can't do safely.",
+    'none',
+    MCP,
+  ],
+  registry_identity_missing: [
+    "Its MCP Registry listing doesn't say which server it is.",
+    'none',
+    MCP,
+  ],
   plan_changed: [
     'Something changed since you agreed. Review it again before continuing.',
     'review',
@@ -2817,6 +2837,36 @@ const CATALOG: Record<string, Entry> = {
   ],
   learning_download_busy: [
     'Something is downloading or training right now. Stop it first, then try again.',
+    'review',
+  ],
+  learning_hugging_face_unavailable: [
+    'Training on Hugging Face isn’t available in this Row-Bot.',
+    'none',
+  ],
+  learning_hugging_face_unreachable: [
+    'Row-Bot couldn’t reach Hugging Face. Check your connection, then try again.',
+    'retry',
+    RETRY,
+  ],
+  learning_hugging_face_refused: [
+    'Hugging Face didn’t accept the request. Try again, or sign in again if it keeps happening.',
+    'retry',
+    RETRY,
+  ],
+  learning_hugging_face_signed_out: [
+    'Sign in to Hugging Face again to continue.',
+    'review',
+  ],
+  learning_hugging_face_over_cap: [
+    'This run doesn’t fit this month’s Hugging Face spending cap. Raise the cap or wait for next month.',
+    'review',
+  ],
+  learning_hugging_face_busy: [
+    'A run on Hugging Face is in progress. Cancel it or let it finish first.',
+    'review',
+  ],
+  learning_quote_changed: [
+    'The price changed since you looked. Check the new quote, then start again.',
     'review',
   ],
   learning_download_changed: [

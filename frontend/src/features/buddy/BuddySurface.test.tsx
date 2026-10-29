@@ -136,7 +136,7 @@ it('renders passive global Buddy state without selecting a conversation', async 
   expect(view.getByRole('status')).toHaveTextContent('Ready');
 });
 
-it('names the sidebar Buddy in its avatar tooltip, keeping the name for assistive tech (B225)', async () => {
+it('shows the sidebar Buddy with a quiet Ready, its name in the tooltip and peek, and opens a peek with its actions', async () => {
   surface.state.selectedConversationId = null;
   surface.globalBuddy.mockResolvedValue({
     ...snapshot,
@@ -147,22 +147,29 @@ it('names the sidebar Buddy in its avatar tooltip, keeping the name for assistiv
   surface.globalBuddyPack.mockResolvedValue(pack);
   const user = userEvent.setup();
   render(<BuddySurface />);
-  const avatar = await screen.findByRole('button', { name: 'Buddy settings' });
-  expect(screen.queryByRole('tooltip')).toBeNull();
-  // Keyboard focus shows the name as well as hover.
+  const avatar = await screen.findByRole('button', { name: 'Open Pip' });
+  const card = screen.getByRole('complementary', { name: 'Buddy companion' });
+  // What it is doing beside the avatar, never "Idle"; the name stays for screen readers.
+  expect(within(card).getByText('Pip')).toHaveClass('visually-hidden');
+  expect(within(card).getByRole('status')).toHaveTextContent('Ready');
+  expect(card).not.toHaveTextContent('Idle');
+  // Keyboard focus and hover show both in the avatar's tooltip.
   act(() => avatar.focus());
-  expect(await screen.findByRole('tooltip')).toHaveTextContent('Pip');
+  expect(await screen.findByRole('tooltip')).toHaveTextContent('Pip · Ready');
   act(() => avatar.blur());
   await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull());
   await user.hover(avatar);
-  expect(await screen.findByRole('tooltip')).toHaveTextContent('Pip');
-  // The companion still carries the custom name for screen readers.
+  expect(await screen.findByRole('tooltip')).toHaveTextContent('Pip · Ready');
+  // Settings sits on the card's edge, and in the peek the avatar opens.
   expect(
-    within(
-      screen.getByRole('complementary', { name: 'Buddy companion' }),
-    ).getByText('Pip'),
+    within(card).getByRole('button', { name: 'Buddy settings' }),
   ).toBeInTheDocument();
-  expect(screen.getByRole('status')).toHaveTextContent('Ready');
+  await user.click(avatar);
+  const peek = await screen.findByRole('dialog', { name: 'Pip' });
+  expect(peek).toHaveTextContent('PipReady');
+  expect(
+    within(peek).getByRole('button', { name: 'Settings' }),
+  ).toBeInTheDocument();
 });
 
 it('hides the duplicate docked Buddy while native overlay is out and restores it on Dock', async () => {
@@ -212,7 +219,7 @@ it('offers native Undock through the placement bridge', async () => {
       value: { placement: 'desktop', visible: true },
     });
   render(<BuddySurface />);
-  const undock = await screen.findByRole('button', { name: 'Undock Buddy' });
+  const undock = await screen.findByRole('button', { name: 'Pop out Buddy' });
   fireEvent.click(undock);
   await waitFor(() =>
     expect(screen.getByRole('button', { name: 'Dock Buddy' })).toBeVisible(),
