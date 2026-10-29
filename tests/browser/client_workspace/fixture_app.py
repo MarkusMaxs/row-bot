@@ -5754,6 +5754,9 @@ def c1_learning(action: str, name: str = "", x_fixture_token: str = Header(defau
         _c1.clear()
         return {"action": action}
     if action == "hugging-face":  # name: signed_out, signing_in, signed_in, small (signed in, a 12 GB card)
+        # The spec moves its runs with trainer.tick(); the runner's minute loop ticking the same trainer would
+        # move one too (a "downloading" run made a version mid-spec, which outlived it).
+        runner_module.stop_background(10)
         hub = FakeHub()
         sign_in = FakeSignIn(signed_in=name in ("signed_in", "small"))
         sign_in.signing_in = name == "signing_in"
