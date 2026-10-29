@@ -324,14 +324,28 @@ test('reduced motion and forced colours preserve a usable single conversation', 
       upTo: true,
       owner: 'unified-quality offline step',
       fixture:
-        'The browser context goes offline: a read in flight then fails and the client reconnects once it is back online',
+        'The browser context goes offline for a moment: a read the page makes then fails, as any request would',
     }),
   });
+  // A Wi-Fi drop makes the browser report offline, but Row-Bot on this
+  // computer is still there: the page stays connected, with its draft (#568).
+  const wentOffline = page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        addEventListener('offline', () => setTimeout(resolve, 250), {
+          once: true,
+        }),
+      ),
+  );
   await context.setOffline(true);
-  await expect(
-    page.getByRole('status').filter({ hasText: /^Connected$/ }),
-  ).toHaveCount(0);
-  await context.setOffline(false);
+  try {
+    await wentOffline;
+    await expect(
+      page.getByRole('status').filter({ hasText: /^Connected$/ }),
+    ).toBeVisible();
+  } finally {
+    await context.setOffline(false);
+  }
   await expect(
     page.getByRole('status').filter({ hasText: /^Connected$/ }),
   ).toBeVisible();
