@@ -91,6 +91,48 @@ def test_every_change_is_a_new_version_that_keeps_voices_whose_lines_stayed_and_
     assert [item.number for item in video_projects.get(project.project_id).versions] == [1, 2, 3]
 
 
+def test_a_change_saved_while_the_panel_reads_the_project_waits_for_the_read_and_is_kept(studio, monkeypatch):
+    """On Windows a file open for reading refuses a save's replace (seen on CI): the save waits, then lands."""
+    import pathlib
+    import threading
+
+    from row_bot import video_projects
+
+    project = video_projects.create("conversation-a", "Launch demo", SCENES, note="First cut")
+    reading, release = threading.Event(), threading.Event()
+    read_text = pathlib.Path.read_text
+
+    def slow_read(self, *args, **kwargs):
+        if self.name == f"{project.project_id}.json" and threading.current_thread() is reader:
+            with open(self, encoding="utf-8"):  # The file is open, as a reader holds it.
+                reading.set()
+                release.wait(5)
+        return read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "read_text", slow_read)
+    reader = threading.Thread(target=video_projects.get, args=(project.project_id,))
+    reader.start()
+    assert reading.wait(5)
+    saved = threading.Event()
+    errors: list[BaseException] = []
+
+    def save():
+        try:
+            video_projects.change(project, by="you", base=1, title="Launch demo, shorter")
+        except BaseException as error:  # noqa: BLE001 - reported below
+            errors.append(error)
+        saved.set()
+
+    writer = threading.Thread(target=save)
+    writer.start()
+    assert not saved.wait(0.2), "the save waits while the project is being read"
+    release.set()
+    reader.join(5)
+    writer.join(5)
+    assert errors == []
+    assert video_projects.get(project.project_id).latest.number == 2
+
+
 def test_making_a_version_renders_its_scenes_in_one_edit_with_its_voices_music_and_checks(studio):
     from row_bot import video_projects
     from row_bot.application.attachments import register_attachment

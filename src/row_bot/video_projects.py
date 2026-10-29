@@ -144,7 +144,9 @@ def _scene_from(data: dict[str, Any]) -> Scene:
 
 def _load(path: Path) -> Project | None:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        # Read under the lock saves take: on Windows a file open for reading refuses the save's replace.
+        with _LOCK:
+            data = json.loads(path.read_text(encoding="utf-8"))
         if not PROJECT_ID.fullmatch(str(data.get("project_id") or "")):
             return None
         versions = []
