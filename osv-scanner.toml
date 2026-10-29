@@ -8,24 +8,24 @@ name = "setuptools"
 version = "81.0.0"
 ecosystem = "PyPI"
 vulnerability.ignore = true
-effectiveUntil = 2026-10-29
-reason = "Fixed in 83.0.0, but Torch 2.11 requires setuptools<82 (re-checked 2026-09-29); it moves with Torch once a matching Torchaudio CPU release exists."
+effectiveUntil = 2026-11-30
+reason = "Fixed in 83.0.0, but Torch 2.11 requires setuptools<82 (re-checked 2026-10-29); it moves with Torch once a matching Torchaudio CPU release exists."
 
 [[PackageOverrides]]
 name = "torch"
 version = "2.11.0"
 ecosystem = "PyPI"
 vulnerability.ignore = true
-effectiveUntil = 2026-10-29
-reason = "Fixed in 2.13.0, but Torchaudio has no release after 2.11.0 on PyPI or the CPU index (re-checked 2026-09-29), and the two are pinned as a pair; 2.11 is the newest matching pair."
+effectiveUntil = 2026-11-30
+reason = "Fixed in 2.13.0, but Torchaudio has no release after 2.11.1 on PyPI or the CPU index (re-checked 2026-10-29) and FunASR needs it, so the two stay pinned as a pair. The advisory is torch.jit.script memory corruption with local access; Row-Bot never scripts untrusted code."
 
 [[PackageOverrides]]
 name = "torch"
 version = "2.11.0+cpu"
 ecosystem = "PyPI"
 vulnerability.ignore = true
-effectiveUntil = 2026-10-29
-reason = "Fixed in 2.13.0, but Torchaudio has no release after 2.11.0 on PyPI or the CPU index (re-checked 2026-09-29), and the two are pinned as a pair; 2.11 is the newest matching pair."
+effectiveUntil = 2026-11-30
+reason = "Fixed in 2.13.0, but Torchaudio has no release after 2.11.1 on PyPI or the CPU index (re-checked 2026-10-29) and FunASR needs it, so the two stay pinned as a pair. The advisory is torch.jit.script memory corruption with local access; Row-Bot never scripts untrusted code."
 
 [[PackageOverrides]]
 name = "braces"
