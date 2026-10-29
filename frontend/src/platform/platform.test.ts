@@ -242,9 +242,9 @@ describe('browser capabilities', () => {
       value: command,
     });
     const adapter = createBrowserPlatform(media());
-    expect((await adapter.discover()).value?.capabilities).toContain(
-      'clipboard_write',
-    );
+    expect(await adapter.discover()).toMatchObject({
+      value: { capabilities: expect.arrayContaining(['clipboard_write']) },
+    });
     expect(await adapter.writeClipboard('fixture answer')).toEqual({
       status: 'ok',
       value: null,
