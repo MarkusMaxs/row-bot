@@ -1461,3 +1461,68 @@ it('Review shows each post or email waiting to go out in full, sets one aside, a
   expect(cancel).toHaveBeenCalledWith('xs-0123456789ab');
   expect(screen.queryByRole('list', { name: 'Scheduled posts' })).toBeNull();
 });
+
+it('keeps a scheduled post that didn’t go out in Review, with why, Try again, without the picture and Dismiss', async () => {
+  const retry = vi.fn().mockResolvedValue({ retried: true });
+  const dismiss = vi.fn().mockResolvedValue({ cancelled: true });
+  const failed = {
+    id: 'xs-0123456789ab',
+    account_id: '111',
+    username: 'rowbot_ai',
+    action: 'post' as const,
+    text: 'Row-Bot can keep a project lead’s update format.',
+    post_at: '2026-09-26T12:00',
+    media: [
+      {
+        name: 'memory.png',
+        size: 57246,
+        sha256: 'c89670e22e36',
+        kind: 'image' as const,
+      },
+    ],
+    status: 'failed' as const,
+    reason:
+      'Uploading memory.png to X failed (start), so nothing was posted. X refused it (403): Missing required scope.',
+  };
+  show({
+    loadScheduledPosts: vi.fn().mockResolvedValue({
+      schema_version: 1,
+      items: [failed, { ...failed, id: 'xs-ba9876543210', media: [] }],
+    }),
+    onRetryScheduledPost: retry,
+    onCancelScheduledPost: dismiss,
+  });
+  const rows = await screen.findByRole('list', {
+    name: "Posts that didn't go out",
+  });
+  const [withPicture, textOnly] = within(rows).getAllByRole('listitem');
+  expect(withPicture).toHaveTextContent(/· @rowbot_ai/);
+  expect(withPicture).toHaveTextContent(
+    'X refused it (403): Missing required scope.',
+  );
+  expect(screen.queryByRole('list', { name: 'Scheduled posts' })).toBeNull();
+  // Without the picture is offered only where there is one.
+  expect(
+    within(textOnly).queryByRole('button', {
+      name: 'Post it now without the picture',
+    }),
+  ).toBeNull();
+  await act(async () => {
+    fireEvent.click(
+      within(withPicture).getByRole('button', {
+        name: 'Post it now without the picture',
+      }),
+    );
+  });
+  expect(retry).toHaveBeenCalledWith('xs-0123456789ab', true);
+  await act(async () => {
+    fireEvent.click(
+      within(textOnly).getByRole('button', { name: 'Try again now' }),
+    );
+  });
+  expect(retry).toHaveBeenCalledWith('xs-ba9876543210', false);
+  expect(
+    screen.queryByRole('list', { name: "Posts that didn't go out" }),
+  ).toBeNull();
+  expect(dismiss).not.toHaveBeenCalled();
+});

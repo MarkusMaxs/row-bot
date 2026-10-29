@@ -257,3 +257,35 @@ def test_review_lists_what_goes_out_and_the_scheduled_posts_and_cancel_stops_one
     assert cancelled.json() == {"cancelled": True}
     assert (again.status_code, again.json()["code"]) == (404, "scheduled_post_unavailable")
     assert after["items"] == [] and fake.posts == []
+
+
+def test_a_post_that_didnt_go_out_is_listed_with_why_and_try_again_sends_it(service, tmp_path, monkeypatch):  # noqa: F811
+    from datetime import datetime, timedelta
+
+    from row_bot import x_accounts
+    from row_bot.api.v1.routes import create_client_platform_app
+    from row_bot.tools import x_posting
+
+    monkeypatch.setenv("ROW_BOT_DATA_DIR", str(tmp_path / "profile"))
+    install(monkeypatch, FakeXApi(), ROWBOT)
+    account = x_accounts.resolve("@rowbot_ai", required=True)
+    when = (datetime.now() - timedelta(hours=13)).replace(second=0, microsecond=0)
+    kept = x_posting.schedule(account, "post", "Missed while closed", "", [], when)
+    x_posting.send_due()  # Row-Bot was closed at its time: missed.
+    sent: list[bool] = []
+    monkeypatch.setattr(x_posting, "send_due", lambda: sent.append(True))
+    app = create_client_platform_app(service, choices=lambda: {"models": [], "capabilities": []},
+                                     session_authenticator=person_window)
+    with TestClient(app, base_url="http://localhost", client=("127.0.0.1", 12345)) as client:
+        _, headers = bootstrap(client)
+        [listed] = client.get("/api/v1/monitor/scheduled-posts", headers=headers).json()["items"]
+        retried = client.post(f"/api/v1/monitor/scheduled-posts/{kept['id']}/retry", headers=headers,
+                              json={"without_media": False})
+        again = client.post(f"/api/v1/monitor/scheduled-posts/{kept['id']}/retry", headers=headers, json={})
+        [waiting] = client.get("/api/v1/monitor/scheduled-posts", headers=headers).json()["items"]
+
+    assert (listed["status"], listed["text"]) == ("missed", "Missed while closed")
+    assert "wasn't posted. Approve it again to post it." in listed["reason"]
+    assert retried.json() == {"retried": True} and sent, "Try again sends it at once"
+    assert (again.status_code, again.json()["code"]) == (404, "scheduled_post_unavailable")
+    assert (waiting["status"], waiting["reason"]) == ("scheduled", "")

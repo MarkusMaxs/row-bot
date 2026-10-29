@@ -5282,6 +5282,19 @@ def create_router(
             raise ProtocolError("scheduled_post_unavailable", 404)
         return await respond(request, dto.ScheduledPostCancelled, {"cancelled": True})
 
+    @router.post("/monitor/scheduled-posts/{post_id}/retry")
+    async def monitor_retry_scheduled_post(post_id: str, request: Request) -> JSONResponse:
+        # The person's Try again on a post that didn't go out (5.3.1): it goes now, as approved or without media.
+        await session(request, lane="mutation")
+        body = await _body(request, dto.ScheduledPostRetry, 1024)
+        from row_bot.tools import x_posting
+
+        if not await call(x_posting.retry_scheduled, post_id, without_media=body.without_media):
+            raise ProtocolError("scheduled_post_unavailable", 404)
+        # It goes now, not at the scheduler's next minute; X's answer can take a while, so not on this request.
+        threading.Thread(target=x_posting.send_due, name="x-post-retry", daemon=True).start()
+        return await respond(request, dto.ScheduledPostRetried, {"retried": True})
+
     @router.get("/monitor/logs")
     async def monitor_logs(request: Request, limit: int = 200) -> JSONResponse:
         await session(request)

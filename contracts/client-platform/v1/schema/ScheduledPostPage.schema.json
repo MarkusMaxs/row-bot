@@ -2,7 +2,7 @@
   "$defs": {
     "ScheduledPost": {
       "additionalProperties": false,
-      "description": "A post approved for a time slot, waiting for it (G3); Cancel stops it.",
+      "description": "A post approved for a time slot, waiting for it (G3); Cancel stops it. One that didn't go out stays, with why,\nuntil the person tries it again or dismisses it.",
       "properties": {
         "account_id": {
           "pattern": "^[0-9]{1,20}$",
@@ -34,6 +34,23 @@
         "post_at": {
           "pattern": "^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d$",
           "title": "Post At",
+          "type": "string"
+        },
+        "reason": {
+          "default": "",
+          "maxLength": 2000,
+          "title": "Reason",
+          "type": "string"
+        },
+        "status": {
+          "default": "scheduled",
+          "enum": [
+            "scheduled",
+            "failed",
+            "missed",
+            "unknown"
+          ],
+          "title": "Status",
           "type": "string"
         },
         "target_url": {
