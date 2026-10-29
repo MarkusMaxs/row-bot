@@ -53,6 +53,8 @@ it('says Ready at rest, never Idle, and gives each activity its tone', () => {
   expect(buddyStatus(at('approval', 'Needs approval')).tone).toBe('warning');
   expect(buddyStatus(at('error', 'Error')).tone).toBe('danger');
   expect(buddyStatus(at('completed', 'Done')).tone).toBe('success');
+  // A finished turn whose label went back to Idle still reads Ready.
+  expect(buddyStatus(at('completed', 'Idle')).text).toBe('Ready');
   // Work beside a conversation's own (a workflow, Learning) is live too.
   expect(buddyStatus(at('idle', 'Workflow running'))).toEqual({
     text: 'Workflow running',

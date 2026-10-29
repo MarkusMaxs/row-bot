@@ -20,9 +20,10 @@ export function buddyStatus(snapshot: BuddySnapshot): {
 } {
   const activity = snapshot.activity ?? 'idle';
   const label = snapshot.status.label.trim();
-  const resting =
-    activity === 'idle' && (!label || /^(idle|ready)$/i.test(label));
-  const text = resting || !label ? 'Ready' : label;
+  // After a finished turn the label goes back to Idle while the activity still says completed.
+  const quiet = !label || /^(idle|ready)$/i.test(label);
+  const resting = activity === 'idle' && quiet;
+  const text = quiet ? 'Ready' : label;
   if (['thinking', 'streaming', 'tool'].includes(activity))
     return { text, tone: 'accent', pulse: true };
   if (activity === 'approval' || activity === 'stopping')
