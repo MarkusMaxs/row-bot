@@ -32,6 +32,7 @@ import {
   StatusDot,
 } from '../../ui/primitives';
 import { useNotify, useOverlay } from '../../ui/overlays';
+import { writeClipboardText } from '../../platform/clipboard';
 import { LocalAddresses } from './LocalAddresses';
 import {
   answerQuestion,
@@ -197,12 +198,13 @@ export default function BrowserPane({
         { type: 'copy' },
       ]);
       if (!result.copied) return;
-      await navigator.clipboard.writeText(result.copied);
-      notify('Copied');
+      if (await writeClipboardText(result.copied, platform.writeClipboard))
+        notify('Copied');
+      else notify("Couldn't copy: the clipboard isn't available.", 'warning');
     } catch (cause) {
       notify(clientError(cause).message, 'warning');
     }
-  }, [controller, conversationId, notify]);
+  }, [controller, conversationId, notify, platform]);
   const answer = useCallback(
     async (question: WaitingQuestion, choice: number) => {
       setBusy(true);
