@@ -223,10 +223,14 @@ test('the reviewer’s decisions are visible but quiet', async ({
     }),
   ).toBeVisible();
   const steps = transcript.getByText('Used 2 tools', { exact: true }).last();
-  await steps.click();
   const reviewed = transcript.getByText('Reviewer approved', { exact: true });
   const full = transcript.getByText('Hands-off', { exact: true }).last();
-  await expect(reviewed).toBeVisible();
+  // The live steps settle into the saved ones as the turn ends (collapsed
+  // again, seen on CI): open them, and again if they were replaced.
+  await expect(async () => {
+    if (!(await reviewed.isVisible())) await steps.click();
+    await expect(reviewed).toBeVisible({ timeout: 1_000 });
+  }).toPass({ timeout: 15_000 });
   await expect(full).toBeVisible();
   await reviewed.click();
   await expect(

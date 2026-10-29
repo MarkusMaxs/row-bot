@@ -3,6 +3,7 @@ import {
   listConversations,
   getConversation,
   getApproval,
+  getDelivery,
   saveDraft,
   sendConversationCommand,
   cancelUpload,
@@ -193,6 +194,39 @@ it('sends typed terminal keys and the reads that echo them on their own budget (
     ),
   );
   expect(fetcher).toHaveBeenCalledTimes(128);
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+it('loads a sent-files card at once while background reads wait', async () => {
+  vi.useFakeTimers();
+  const fetcher = vi.fn(async () => ({
+    ok: false,
+    json: async () => ({
+      type: 'urn:row-bot:error:not_found',
+      title: 'not found',
+      status: 404,
+      code: 'not_found',
+      request_id: crypto.randomUUID(),
+      retryable: false,
+      recovery: 'none',
+    }),
+  }));
+  vi.stubGlobal('fetch', fetcher);
+  const proof: SessionProof = {
+    client_session_id: crypto.randomUUID(),
+    csrf_token: 'synthetic'.repeat(8),
+  };
+  const abort = new AbortController();
+  const queries = Promise.allSettled(
+    Array.from({ length: 25 }, () =>
+      listConversations('', proof, 50, undefined, abort.signal),
+    ),
+  );
+  await getDelivery('', proof, 'delivery-a').catch(() => undefined);
+  expect(fetcher).toHaveBeenCalledTimes(21);
+  abort.abort();
+  await vi.runAllTimersAsync();
+  await queries;
   expect(vi.getTimerCount()).toBe(0);
 });
 

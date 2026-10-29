@@ -840,6 +840,21 @@ def test_the_card_reads_its_approval_after_background_reads_use_up_their_budget(
         assert response.json()["nonce"]
 
 
+def test_a_sent_files_card_reads_after_background_reads_use_up_their_budget():
+    """The card the person is looking at is a view, not a background read (5.3.1)."""
+    service = Service()
+    security = ClientSecurity("fixture-instance", clock=lambda: 10)
+    app = create_client_platform_app(service, security=security, choices=lambda: {"models": [], "capabilities": []}, session_authenticator=person_window)
+    with TestClient(app, base_url="http://localhost", client=("127.0.0.1", 1234)) as client:
+        handshake, headers = bootstrap(client)
+        current = security._sessions[handshake["client_session_id"]]
+        with pytest.raises(ProtocolError, match="rate_limited"):
+            for _ in range(31):
+                security.rate(current, "query")
+        response = client.get("/api/v1/deliveries/fixture-delivery", headers=headers)
+        assert response.status_code != 429, response.text
+
+
 def test_nonce_current_policy_fingerprint_revokes_same_action_without_leaking_policy():
     private_policy = {"enabled": True, "registration": 1, "private_key": "PRIVATE_SENTINEL"}
     security = ClientSecurity("fixture", policy=lambda: private_policy)

@@ -5710,7 +5710,8 @@ def create_router(
 
     @router.get("/deliveries/{delivery_id}")
     async def delivery(request: Request, delivery_id: str) -> JSONResponse:
-        await session(request)
+        # The sent-files card in the transcript, like an approval card: the view lane.
+        await session(request, lane="view")
         from row_bot.application.delivery_views import read_delivery
 
         result = await call(read_delivery, _delivery(delivery_id)[0])
