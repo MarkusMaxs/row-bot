@@ -773,6 +773,37 @@ def test_builtin_read_only_profile_sees_the_chats_tools_and_is_refused_their_act
     assert dispatch_refusal(run["profile_snapshot_json"], "send_email", {}, source="core", parent="gmail")
 
 
+def test_the_default_profile_workflows_run_under_hands_work_to_helpers_and_a_specialist_does_not(
+        tmp_path, monkeypatch, reload_for_data_dir):
+    agent_runner, _agent_runs, profiles, _context, threads = _fresh_agent_runner_modules(
+        tmp_path,
+        monkeypatch,
+        reload_for_data_dir,
+    )
+    from row_bot.tools.profile_policy import dispatch_refusal
+
+    default = profiles.get_agent_profile("builtin:row_bot_default")
+    assert dispatch_refusal(default, "delegate_work", {}, source="core", parent="agents") is None
+    research = profiles.get_agent_profile("builtin:research")
+    assert dispatch_refusal(research, "delegate_work", {}, source="core", parent="agents")
+
+    captured = {}
+
+    def fake_invoke(prompt, enabled_tool_names, config, *, stop_event):
+        captured["tools"] = enabled_tool_names
+        return "done"
+
+    monkeypatch.setattr(agent_runner, "_invoke_agent", fake_invoke)
+    agent_runner.spawn_agent_run(
+        "Plan it.",
+        parent_thread_id=threads.create_thread("Parent"),
+        profile="row_bot_default",
+        enabled_tool_names=["filesystem", "agents"],
+        wait=True,
+    )
+    assert captured["tools"] == ["filesystem", "agents"]
+
+
 def test_spawn_agent_run_records_interrupt_resume_state(tmp_path, monkeypatch, reload_for_data_dir):
     agent_runner, agent_runs, _profiles, _context, threads = _fresh_agent_runner_modules(
         tmp_path,
