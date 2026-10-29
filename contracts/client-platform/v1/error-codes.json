@@ -562,6 +562,7 @@
     "sandbox_process_unavailable": 409,
     "sandbox_runtime_unavailable": 409,
     "sandbox_unavailable": 404,
+    "scheduled_post_invalid": 422,
     "scheduled_post_unavailable": 404,
     "sensevoice_unavailable": 409,
     "sent_file_expired": 410,

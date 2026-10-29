@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Clock, Film, X } from 'lucide-react';
+import { Clock, Film, ImageIcon, X } from 'lucide-react';
 import type { XPostApproval, XPostEdit } from '../../api/types';
 import { Button, IconButton } from '../../ui/primitives';
 import { formatBytes } from './MediaPreview';
@@ -99,7 +99,11 @@ function MediaList({
             />
           ) : (
             <span className="x-post-media-icon" aria-hidden>
-              <Film size={18} />
+              {item.kind === 'video' ? (
+                <Film size={18} />
+              ) : (
+                <ImageIcon size={18} />
+              )}
             </span>
           )}
           <span className="x-post-media-facts">

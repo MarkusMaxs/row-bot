@@ -19,6 +19,7 @@ import {
   HeartPulse,
   Hourglass,
   ImageOff,
+  Pencil,
   MessageSquare,
   Palette,
   Paperclip,
@@ -41,10 +42,12 @@ import type {
   SystemDiagnosis,
   TaskSummary,
   TaskSummaryPage,
+  XPostEdit,
 } from '../../api/types';
 import { clientError } from '../../api/errors';
 import { Hint, IconButton } from '../../ui/primitives';
 import ApprovalCard from '../shell/ApprovalCard';
+import { XPostEditor } from '../shell/XPostDetails';
 import { fallbackDue } from '../../api/live-updates';
 import { useLive, useLiveUpdate } from '../../live';
 import { parseTimestamp, relativeTime } from '../../ui/format';
@@ -89,6 +92,8 @@ export type OverviewHomeProps = {
     id: string,
     withoutMedia: boolean,
   ) => Promise<unknown>;
+  /** The person's edit of a post waiting for its time: its text and which files go. */
+  onEditScheduledPost?: (id: string, edit: XPostEdit) => Promise<unknown>;
   /** Buddy's live avatar beside the greeting. */
   buddy?: ReactNode;
   /**
@@ -378,6 +383,7 @@ export default function OverviewHome({
   loadScheduledPosts,
   onCancelScheduledPost,
   onRetryScheduledPost,
+  onEditScheduledPost,
 }: OverviewHomeProps) {
   const navigate = useNavigate();
   const [tasks, setTasks] = useState<readonly TaskSummary[] | null>(null);
@@ -396,6 +402,9 @@ export default function OverviewHome({
   const [later, setLater] = useState<ReadonlySet<string>>(() => new Set());
   const [scheduled, setScheduled] = useState<readonly ScheduledPost[]>([]);
   const [scheduleError, setScheduleError] = useState('');
+  // The post being edited in place (its id), and whether its edit is being saved.
+  const [editingPost, setEditingPost] = useState('');
+  const [savingEdit, setSavingEdit] = useState(false);
   const reviewKey = (approvalsFeed.page?.items ?? [])
     .filter((item) => item.goes_out)
     .map((item) => item.id)
@@ -419,6 +428,33 @@ export default function OverviewHome({
       setScheduled((items) => items.filter((item) => item.id !== post.id));
     } catch (cause) {
       setScheduleError(clientError(cause).message);
+    }
+  }
+  async function editScheduled(post: ScheduledPost, change: XPostEdit) {
+    if (!onEditScheduledPost) return;
+    setScheduleError('');
+    setSavingEdit(true);
+    try {
+      await onEditScheduledPost(post.id, change);
+      const kept = new Set(change.media ?? []);
+      setScheduled((items) =>
+        items.map((item) =>
+          item.id === post.id
+            ? {
+                ...item,
+                text: change.text,
+                media: (item.media ?? []).filter((file) =>
+                  kept.has(file.sha256),
+                ),
+              }
+            : item,
+        ),
+      );
+      setEditingPost('');
+    } catch (cause) {
+      setScheduleError(clientError(cause).message);
+    } finally {
+      setSavingEdit(false);
     }
   }
   async function retryScheduled(post: ScheduledPost, withoutMedia: boolean) {
@@ -1085,36 +1121,62 @@ export default function OverviewHome({
             <>
               <h4 className="overview-review-heading">Scheduled</h4>
               <ul className="overview-rows" aria-label="Scheduled posts">
-                {upcoming.map((post) => (
-                  <li
-                    key={post.id}
-                    className="overview-row overview-row-approval"
-                  >
-                    <div className="overview-row-body">
-                      <Tile tone="4">
-                        <CalendarClock size={16} />
-                      </Tile>
-                      <span className="overview-row-text">
-                        <strong className="overview-row-title">
-                          {slotWords(post.post_at, now)}
-                          {post.username && ` · @${post.username}`}
-                        </strong>
-                        <span className="overview-row-meta overview-review-text">
-                          {post.text}
+                {upcoming.map((post) =>
+                  editingPost === post.id ? (
+                    <li key={post.id} className="overview-row-edit">
+                      <XPostEditor
+                        post={{
+                          ...post,
+                          username: post.username ?? '',
+                        }}
+                        busy={savingEdit}
+                        onSave={(change) => void editScheduled(post, change)}
+                        onCancel={() => setEditingPost('')}
+                      />
+                    </li>
+                  ) : (
+                    <li
+                      key={post.id}
+                      className="overview-row overview-row-approval"
+                    >
+                      <div className="overview-row-body">
+                        <Tile tone="4">
+                          <CalendarClock size={16} />
+                        </Tile>
+                        <span className="overview-row-text">
+                          <strong className="overview-row-title">
+                            {slotWords(post.post_at, now)}
+                            {post.username && ` · @${post.username}`}
+                          </strong>
+                          <span className="overview-row-meta overview-review-text">
+                            {post.text}
+                          </span>
                         </span>
-                      </span>
-                    </div>
-                    <div className="overview-row-actions">
-                      <IconButton
-                        size="sm"
-                        label="Cancel this post"
-                        onClick={() => void cancelScheduled(post)}
-                      >
-                        <X size={15} aria-hidden />
-                      </IconButton>
-                    </div>
-                  </li>
-                ))}
+                      </div>
+                      <div className="overview-row-actions">
+                        {onEditScheduledPost && (
+                          <IconButton
+                            size="sm"
+                            label="Edit this post"
+                            onClick={() => {
+                              setScheduleError('');
+                              setEditingPost(post.id);
+                            }}
+                          >
+                            <Pencil size={15} aria-hidden />
+                          </IconButton>
+                        )}
+                        <IconButton
+                          size="sm"
+                          label="Cancel this post"
+                          onClick={() => void cancelScheduled(post)}
+                        >
+                          <X size={15} aria-hidden />
+                        </IconButton>
+                      </div>
+                    </li>
+                  ),
+                )}
               </ul>
             </>
           )}

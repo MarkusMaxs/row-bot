@@ -504,6 +504,9 @@ export class HttpTransport implements ClientTransport {
   cancelScheduledPost(id: string) {
     return wire.cancelScheduledPost(this.base, this.session(), id);
   }
+  editScheduledPost(id: string, edit: wire.XPostEdit) {
+    return wire.editScheduledPost(this.base, this.session(), id, edit);
+  }
   retryScheduledPost(id: string, withoutMedia: boolean) {
     return wire.retryScheduledPost(this.base, this.session(), id, {
       without_media: withoutMedia,

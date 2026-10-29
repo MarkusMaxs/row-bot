@@ -376,7 +376,10 @@ def scheduled_posts() -> list[dict[str, Any]]:
             files.append({"name": name[:256], "size": size, "sha256": str(entry.get("sha256") or "")[:12],
                           "kind": "video" if mime.startswith("video/") else "gif" if mime == "image/gif" else "image"})
         shown.append({"id": item["id"], "account_id": str(item.get("account_id") or ""),
-                      "username": account.username if account else "", "action": str(item.get("action") or "post"),
+                      "username": account.username if account else "", "name": account.name[:80] if account else "",
+                      # The editor's count: the limit X already said for the account, never a call to X here.
+                      "limit": (_LIMITS.get(account.id) or 0) if account else 0,
+                      "action": str(item.get("action") or "post"),
                       "text": str(item.get("text") or ""), "target_url": target_url(str(item.get("target") or "")),
                       "post_at": str(item.get("post_at") or ""), "media": files,
                       "status": str(item.get("status")), "reason": str(item.get("result") or "")[:2000]
@@ -392,6 +395,35 @@ def cancel_scheduled(item_id: str) -> bool:
             if item.get("id") == item_id and item.get("status") in ("scheduled", *_NOT_SENT):
                 item.update(status="cancelled" if item.get("status") == "scheduled" else "dismissed",
                             settled_at=_stamp(_now()))
+                _save_scheduled(items)
+                return True
+    return False
+
+
+def edit_scheduled(item_id: str, text: str, kept: list[str]) -> bool:
+    """The person's edit of a post waiting for its time (Home › Review): its text, and which of its files still go
+    (by their SHA-256 start). False when no post waits under that id.
+
+    The person approved this post; the edit is their own, so it keeps its time and goes out as edited. Raises
+    XPostError when the edit can't go out: no text, or longer than the account may post.
+    """
+    with _SCHEDULE_LOCK:
+        item = next((entry for entry in _scheduled() if entry.get("id") == item_id
+                     and entry.get("status") == "scheduled"), None)
+    if item is None:
+        return False
+    account = next((entry for entry in x_accounts.listed() if entry.id == str(item.get("account_id"))), None)
+    if account is None:
+        return False
+    action = str(item.get("action") or "post")
+    words, _ = check_text(action, text, str(item.get("target") or "") or None)
+    check_length(account, action, words)  # May ask X the account's limit: outside the lock.
+    with _SCHEDULE_LOCK:
+        items = _scheduled()
+        for entry in items:
+            if entry.get("id") == item_id and entry.get("status") == "scheduled":
+                entry.update(text=words, media=[file for file in entry.get("media") or []
+                                                if str(file.get("sha256") or "")[:12] in kept])
                 _save_scheduled(items)
                 return True
     return False

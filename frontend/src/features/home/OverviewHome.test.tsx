@@ -1462,6 +1462,77 @@ it('Review shows each post or email waiting to go out in full, sets one aside, a
   expect(screen.queryByRole('list', { name: 'Scheduled posts' })).toBeNull();
 });
 
+it('edits a scheduled post in place: its text and which pictures go, at the same time', async () => {
+  const edit = vi.fn().mockResolvedValue({ edited: true });
+  const waiting = {
+    id: 'xs-0123456789ab',
+    account_id: '111',
+    username: 'rowbot_ai',
+    name: 'Row-Bot',
+    limit: 280,
+    action: 'post' as const,
+    text: 'Tonight’s chart',
+    post_at: '2026-09-26T21:00',
+    media: [
+      {
+        name: 'chart.png',
+        size: 4096,
+        sha256: 'c89670e22e36',
+        kind: 'image' as const,
+      },
+      {
+        name: 'photo.png',
+        size: 2048,
+        sha256: 'ab12cd34ef56',
+        kind: 'image' as const,
+      },
+    ],
+    status: 'scheduled' as const,
+  };
+  show({
+    loadScheduledPosts: vi.fn().mockResolvedValue({
+      schema_version: 1,
+      items: [waiting],
+    }),
+    onEditScheduledPost: edit,
+  });
+  const scheduled = await screen.findByRole('list', {
+    name: 'Scheduled posts',
+  });
+  fireEvent.click(
+    within(scheduled).getByRole('button', { name: 'Edit this post' }),
+  );
+  const box = within(scheduled).getByRole('textbox', {
+    name: 'Edit the post as @rowbot_ai',
+  });
+  expect(within(scheduled).getByText('15 of 280')).toBeVisible();
+  fireEvent.change(box, { target: { value: 'x'.repeat(281) } });
+  expect(
+    within(scheduled).getByRole('button', { name: 'Save edits' }),
+  ).toBeDisabled();
+  fireEvent.change(box, {
+    target: { value: 'Tonight’s chart, with the photo' },
+  });
+  fireEvent.click(
+    within(scheduled).getByRole('button', { name: 'Remove chart.png' }),
+  );
+  await act(async () => {
+    fireEvent.click(
+      within(scheduled).getByRole('button', { name: 'Save edits' }),
+    );
+  });
+
+  expect(edit).toHaveBeenCalledWith('xs-0123456789ab', {
+    text: 'Tonight’s chart, with the photo',
+    media: ['ab12cd34ef56'],
+  });
+  const [row] = within(scheduled).getAllByRole('listitem');
+  expect(row).toHaveTextContent('Tonight’s chart, with the photo');
+  expect(
+    within(scheduled).queryByRole('textbox', { name: /Edit the post/ }),
+  ).toBeNull();
+});
+
 it('keeps a scheduled post that didn’t go out in Review, with why, Try again, without the picture and Dismiss', async () => {
   const retry = vi.fn().mockResolvedValue({ retried: true });
   const dismiss = vi.fn().mockResolvedValue({ cancelled: true });
